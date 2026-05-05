@@ -7,10 +7,12 @@
 
 #if defined(__x86_64__)
 #    include <cpuid.h>
+#endif
 
 namespace silk
 {
 
+#if defined(__x86_64__)
 static uint64_t getTscFrequencyCpuid() noexcept
 {
     uint32_t eax, ebx, ecx, edx;
