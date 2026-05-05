@@ -7,16 +7,15 @@
 #include <atomic>
 #include <cstdint>
 
+namespace silk
+{
+
 /**
  * Monotone counter with fiber-aware ordered waiters.
  *
  * Waiters register a Future at a specific token; increment advances the
  * counter and wakes all futures whose token has been reached, in token order.
  */
-
-namespace silk
-{
-
 class FiberSequencer
 {
 public:

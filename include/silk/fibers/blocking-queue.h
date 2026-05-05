@@ -7,6 +7,9 @@
 #include <cerrno>
 #include <cstdint>
 
+namespace silk
+{
+
 /**
  * Fiber-aware bounded MPMC blocking queue.
  *
@@ -14,10 +17,6 @@
  * empty, respectively, and resume when space or an item becomes available.
  * teardown unblocks all current and future waiters with ECANCELED.
  */
-
-namespace silk
-{
-
 template <typename T>
 class FiberBlockingQueue
 {
