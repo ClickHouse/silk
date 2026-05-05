@@ -1,0 +1,141 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": { "major": 3, "minor": 28, "patch": 0 },
+  "configurePresets": [
+    {
+      "name": "base",
+      "hidden": true,
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "clang-21",
+        "CMAKE_CXX_COMPILER": "clang++-21"
+      }
+    },
+    {
+      "name": "debug",
+      "inherits": "base",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug" }
+    },
+    {
+      "name": "release",
+      "inherits": "base",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Release" }
+    },
+    {
+      "name": "debug-tsan",
+      "inherits": "debug",
+      "cacheVariables": { "SANITIZER": "thread" }
+    },
+    {
+      "name": "release-tsan",
+      "inherits": "release",
+      "cacheVariables": { "SANITIZER": "thread" }
+    },
+    {
+      "name": "debug-asan",
+      "inherits": "debug",
+      "cacheVariables": { "SANITIZER": "address" }
+    },
+    {
+      "name": "release-asan",
+      "inherits": "release",
+      "cacheVariables": { "SANITIZER": "address" }
+    },
+    {
+      "name": "debug-ubsan",
+      "inherits": "debug",
+      "cacheVariables": { "SANITIZER": "undefined" }
+    },
+    {
+      "name": "release-ubsan",
+      "inherits": "release",
+      "cacheVariables": { "SANITIZER": "undefined" }
+    },
+    {
+      "name": "debug-msan",
+      "inherits": "debug",
+      "cacheVariables": { "SANITIZER": "memory" }
+    },
+    {
+      "name": "release-msan",
+      "inherits": "release",
+      "cacheVariables": { "SANITIZER": "memory" }
+    },
+    {
+      "name": "debug-coverage",
+      "inherits": "debug",
+      "cacheVariables": { "COVERAGE": "ON" }
+    }
+  ],
+  "buildPresets": [
+    { "name": "debug",         "configurePreset": "debug" },
+    { "name": "release",       "configurePreset": "release" },
+    { "name": "debug-tsan",    "configurePreset": "debug-tsan" },
+    { "name": "release-tsan",  "configurePreset": "release-tsan" },
+    { "name": "debug-asan",    "configurePreset": "debug-asan" },
+    { "name": "release-asan",  "configurePreset": "release-asan" },
+    { "name": "debug-ubsan",   "configurePreset": "debug-ubsan" },
+    { "name": "release-ubsan", "configurePreset": "release-ubsan" },
+    { "name": "debug-msan",    "configurePreset": "debug-msan" },
+    { "name": "release-msan",  "configurePreset": "release-msan" },
+    { "name": "debug-coverage","configurePreset": "debug-coverage" }
+  ],
+  "testPresets": [
+    {
+      "name": "debug",
+      "configurePreset": "debug",
+      "output": { "outputOnFailure": true }
+    },
+    {
+      "name": "release",
+      "configurePreset": "release",
+      "output": { "outputOnFailure": true }
+    },
+    {
+      "name": "debug-tsan",
+      "configurePreset": "debug-tsan",
+      "output": { "outputOnFailure": true }
+    },
+    {
+      "name": "release-tsan",
+      "configurePreset": "release-tsan",
+      "output": { "outputOnFailure": true }
+    },
+    {
+      "name": "debug-asan",
+      "configurePreset": "debug-asan",
+      "output": { "outputOnFailure": true }
+    },
+    {
+      "name": "release-asan",
+      "configurePreset": "release-asan",
+      "output": { "outputOnFailure": true }
+    },
+    {
+      "name": "debug-ubsan",
+      "configurePreset": "debug-ubsan",
+      "output": { "outputOnFailure": true }
+    },
+    {
+      "name": "release-ubsan",
+      "configurePreset": "release-ubsan",
+      "output": { "outputOnFailure": true }
+    },
+    {
+      "name": "debug-msan",
+      "configurePreset": "debug-msan",
+      "output": { "outputOnFailure": true }
+    },
+    {
+      "name": "release-msan",
+      "configurePreset": "release-msan",
+      "output": { "outputOnFailure": true }
+    },
+    {
+      "name": "debug-coverage",
+      "configurePreset": "debug-coverage",
+      "output": { "outputOnFailure": true }
+    }
+  ]
+}

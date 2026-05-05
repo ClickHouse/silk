@@ -1,0 +1,9 @@
+Diagnostics:
+  ClangTidy:
+    Add: [
+      readability-identifier-naming,
+      bugprone-reserved-identifier,
+    ]
+
+Style:
+  AngledHeaders: [".*"]

@@ -1,0 +1,64 @@
+--- contrib/poco/Net/src/HTTPHeaderStream.cpp	2026-04-20 16:31:19.471964568 +0000
++++ contrib/poco-cmake/patches/HTTPHeaderStream.cpp.new	2026-04-20 16:38:11.845843622 +0000
+@@ -102,7 +102,6 @@
+ //
+ 
+ 
+-Poco::MemoryPool HTTPHeaderInputStream::_pool(sizeof(HTTPHeaderInputStream));
+ 
+ 
+ HTTPHeaderInputStream::HTTPHeaderInputStream(HTTPSession& session):
+@@ -119,20 +118,13 @@
+ 
+ void* HTTPHeaderInputStream::operator new(std::size_t size)
+ {
+-	return _pool.get();
++	return ::operator new(size);
+ }
+ 
+ 
+ void HTTPHeaderInputStream::operator delete(void* ptr)
+ {
+-	try
+-	{
+-		_pool.release(ptr);
+-	}
+-	catch (...)
+-	{
+-		poco_unexpected();
+-	}
++	::operator delete(ptr);
+ }
+ 
+ 
+@@ -141,7 +133,6 @@
+ //
+ 
+ 
+-Poco::MemoryPool HTTPHeaderOutputStream::_pool(sizeof(HTTPHeaderOutputStream));
+ 
+ 
+ HTTPHeaderOutputStream::HTTPHeaderOutputStream(HTTPSession& session):
+@@ -158,20 +149,13 @@
+ 
+ void* HTTPHeaderOutputStream::operator new(std::size_t size)
+ {
+-	return _pool.get();
++	return ::operator new(size);
+ }
+ 
+ 
+ void HTTPHeaderOutputStream::operator delete(void* ptr)
+ {
+-	try
+-	{
+-		_pool.release(ptr);
+-	}
+-	catch (...)
+-	{
+-		poco_unexpected();
+-	}
++	::operator delete(ptr);
+ }
+ 
+ 

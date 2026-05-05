@@ -1,0 +1,38 @@
+/* ELF size: 32 or 64 */
+#define BACKTRACE_ELF_SIZE 64
+
+/* Define to 1 if you have the __atomic functions */
+#define HAVE_ATOMIC_FUNCTIONS 1
+
+/* Define to 1 if you have the __sync functions */
+#define HAVE_SYNC_FUNCTIONS 1
+
+/* Define if _Unwind_GetIPInfo is available. */
+#define HAVE_GETIPINFO 1
+
+/* Define if dl_iterate_phdr is available. */
+#define HAVE_DL_ITERATE_PHDR 1
+
+/* Define to 1 if you have the <link.h> header file. */
+#define HAVE_LINK_H 1
+
+/* Define to 1 if you have the declaration of `strnlen'. */
+#define HAVE_DECL_STRNLEN 1
+
+/* Define to 1 if you have the `lstat' function. */
+#define HAVE_LSTAT 1
+
+/* Define to 1 if you have the `readlink' function. */
+#define HAVE_READLINK 1
+
+/* Define to 1 if you have the declaration of `getpagesize'. */
+#define HAVE_DECL_GETPAGESIZE 1
+
+/* Define to 1 if you have the fcntl function */
+#define HAVE_FCNTL 1
+
+/* Define to 1 if you have the declaration of `_pgmptr'. */
+#define HAVE_DECL__PGMPTR 0
+
+/* Enable GNU extensions. */
+#define _GNU_SOURCE 1

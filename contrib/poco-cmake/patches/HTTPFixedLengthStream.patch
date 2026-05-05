@@ -1,0 +1,64 @@
+--- contrib/poco/Net/src/HTTPFixedLengthStream.cpp	2026-04-20 16:31:19.471964568 +0000
++++ contrib/poco-cmake/patches/HTTPFixedLengthStream.cpp.new	2026-04-20 16:38:11.845717632 +0000
+@@ -105,7 +105,6 @@
+ //
+ 
+ 
+-Poco::MemoryPool HTTPFixedLengthInputStream::_pool(sizeof(HTTPFixedLengthInputStream));
+ 
+ 
+ HTTPFixedLengthInputStream::HTTPFixedLengthInputStream(HTTPSession& session, HTTPFixedLengthStreamBuf::ContentLength length):
+@@ -122,20 +121,13 @@
+ 
+ void* HTTPFixedLengthInputStream::operator new(std::size_t size)
+ {
+-	return _pool.get();
++	return ::operator new(size);
+ }
+ 
+ 
+ void HTTPFixedLengthInputStream::operator delete(void* ptr)
+ {
+-	try
+-	{
+-		_pool.release(ptr);
+-	}
+-	catch (...)
+-	{
+-		poco_unexpected();
+-	}
++	::operator delete(ptr);
+ }
+ 
+ 
+@@ -144,7 +136,6 @@
+ //
+ 
+ 
+-Poco::MemoryPool HTTPFixedLengthOutputStream::_pool(sizeof(HTTPFixedLengthOutputStream));
+ 
+ 
+ HTTPFixedLengthOutputStream::HTTPFixedLengthOutputStream(HTTPSession& session, HTTPFixedLengthStreamBuf::ContentLength length):
+@@ -161,20 +152,13 @@
+ 
+ void* HTTPFixedLengthOutputStream::operator new(std::size_t size)
+ {
+-	return _pool.get();
++	return ::operator new(size);
+ }
+ 
+ 
+ void HTTPFixedLengthOutputStream::operator delete(void* ptr)
+ {
+-	try
+-	{
+-		_pool.release(ptr);
+-	}
+-	catch (...)
+-	{
+-		poco_unexpected();
+-	}
++	::operator delete(ptr);
+ }
+ 
+ 

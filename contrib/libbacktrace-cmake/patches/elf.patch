@@ -1,0 +1,41 @@
+--- /elf.c	2026-04-23 17:46:32.860131948 +0000
++++ /elf.c	2026-04-23 19:33:33.444348278 +0000
+@@ -7439,7 +7439,37 @@
+   pd.found_sym = &found_sym;
+   pd.found_dwarf = &found_dwarf;
+   pd.exe_filename = filename;
+-  pd.exe_descriptor = ret < 0 ? descriptor : -1;
++  if (ret < 0)
++    {
++      /* PIE binary: need to determine the actual load base.
++	 For the current process own binary, use dl_iterate_phdr to get it.
++	 For foreign binaries (cross-process profiling), bypass dl_iterate_phdr
++	 and add with zero base so symbols land at ELF VMA; the caller adjusts
++	 addresses via addr - map_start + map_file_offset before backtrace_syminfo.  */
++      int is_self = 0;
++      char self_exe[4096];
++      ssize_t self_len = readlink ("/proc/self/exe", self_exe,
++				   sizeof (self_exe) - 1);
++      if (self_len > 0)
++	{
++	  self_exe[self_len] = '\0';
++	  is_self = (strcmp (filename, self_exe) == 0)
++		    || (strcmp (filename, "/proc/self/exe") == 0);
++	}
++      if (is_self)
++	pd.exe_descriptor = descriptor;
++      else
++	{
++	  struct libbacktrace_base_address zero_base;
++	  memset (&zero_base, 0, sizeof zero_base);
++	  elf_add (state, filename, descriptor, NULL, 0, zero_base,
++		   NULL, error_callback, data, &elf_fileline_fn, &found_sym,
++		   &found_dwarf, NULL, 0, 0, NULL, 0);
++	  pd.exe_descriptor = -1;
++	}
++    }
++  else
++    pd.exe_descriptor = -1;
+ 
+   dl_iterate_phdr (phdr_callback, (void *) &pd);
+ 

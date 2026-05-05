@@ -1,0 +1,64 @@
+--- contrib/poco/Net/src/HTTPChunkedStream.cpp	2026-04-20 16:31:19.470964571 +0000
++++ contrib/poco-cmake/patches/HTTPChunkedStream.cpp.new	2026-04-20 16:38:11.845791076 +0000
+@@ -137,7 +137,6 @@
+ //
+ 
+ 
+-Poco::MemoryPool HTTPChunkedInputStream::_pool(sizeof(HTTPChunkedInputStream));
+ 
+ 
+ HTTPChunkedInputStream::HTTPChunkedInputStream(HTTPSession& session):
+@@ -154,20 +153,13 @@
+ 
+ void* HTTPChunkedInputStream::operator new(std::size_t size)
+ {
+-	return _pool.get();
++	return ::operator new(size);
+ }
+ 
+ 
+ void HTTPChunkedInputStream::operator delete(void* ptr)
+ {
+-	try
+-	{
+-		_pool.release(ptr);
+-	}
+-	catch (...)
+-	{
+-		poco_unexpected();
+-	}
++	::operator delete(ptr);
+ }
+ 
+ 
+@@ -176,7 +168,6 @@
+ //
+ 
+ 
+-Poco::MemoryPool HTTPChunkedOutputStream::_pool(sizeof(HTTPChunkedOutputStream));
+ 
+ 
+ HTTPChunkedOutputStream::HTTPChunkedOutputStream(HTTPSession& session):
+@@ -193,20 +184,13 @@
+ 
+ void* HTTPChunkedOutputStream::operator new(std::size_t size)
+ {
+-	return _pool.get();
++	return ::operator new(size);
+ }
+ 
+ 
+ void HTTPChunkedOutputStream::operator delete(void* ptr)
+ {
+-	try
+-	{
+-		_pool.release(ptr);
+-	}
+-	catch (...)
+-	{
+-		poco_unexpected();
+-	}
++	::operator delete(ptr);
+ }
+ 
+ 
