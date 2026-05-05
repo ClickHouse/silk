@@ -2,6 +2,9 @@
 
 #include <silk/fibers/sequencer.h>
 
+namespace silk
+{
+
 /**
  * Fiber-aware manual-reset event with Future support.
  *
@@ -9,10 +12,6 @@
  * keeps the event set until reset() is called. wait() returns immediately
  * if the event is already set.
  */
-
-namespace silk
-{
-
 class FiberEvent
 {
 public:

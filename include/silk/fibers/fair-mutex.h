@@ -5,15 +5,14 @@
 #include <atomic>
 #include <cstdint>
 
+namespace silk
+{
+
 /**
  * Fair fiber-aware mutex. Waiters are granted the lock in FIFO order (ticket lock).
  *
  * Conforms to BasicLockable; compatible with std::lock_guard.
  */
-
-namespace silk
-{
-
 class FairFiberMutex
 {
 public:

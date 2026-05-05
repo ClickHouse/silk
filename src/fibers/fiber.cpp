@@ -40,13 +40,12 @@
 #include <sys/mman.h>
 #include <sys/uio.h>
 
+namespace silk
+{
 
 //
 // Constants.
 //
-
-namespace silk
-{
 
 static constexpr uint64_t FIBER_STACK_SIZE = 64 * 1024;
 static constexpr uint64_t READY_QUEUE_CAPACITY = 1024;
