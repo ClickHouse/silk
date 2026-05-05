@@ -1,0 +1,160 @@
+name: CI
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+  workflow_dispatch:
+
+jobs:
+  fmt:
+    runs-on: [ self-hosted, silk-arm-small-cpu ]
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install clang-format-21
+        run: |
+          wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc
+          . /etc/os-release
+          echo "deb http://apt.llvm.org/${VERSION_CODENAME}/ llvm-toolchain-${VERSION_CODENAME}-21 main" | sudo tee /etc/apt/sources.list.d/llvm-21.list
+          sudo apt-get -o DPkg::Lock::Timeout=60 update -q
+          sudo apt-get -o DPkg::Lock::Timeout=60 install -y clang-format-21
+
+      - name: Check formatting
+        run: ./bb fmt --check
+
+  test:
+    runs-on: [ self-hosted, "${{ matrix.arch.runner }}" ]
+
+    strategy:
+      fail-fast: false
+      matrix:
+        arch:
+          - name: amd64
+            runner: silk-amd-small-cpu
+          - name: arm64
+            runner: silk-arm-small-cpu
+        build:
+          - name: coverage
+            cmd: ./bb -b debug test --coverage
+          - name: release
+            cmd: ./bb -b release test
+            bench_cmd: ./bb -b release bench
+            perf_cmd: ./bb -v -b release perf
+          - name: tsan
+            cmd: ./bb -b release -s thread test
+            bench_cmd: ./bb -b release -s thread bench
+            perf_cmd: ./bb -v -b release -s thread perf
+          - name: asan
+            cmd: ./bb -b release -s address test
+          - name: ubsan
+            cmd: ./bb -b release -s undefined test
+          - name: msan
+            cmd: ./bb -b release -s memory test
+
+    name: test (${{ matrix.arch.name }}, ${{ matrix.build.name }})
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Init submodules
+        run: |
+          git submodule update --init --depth=1 \
+            contrib/libbacktrace \
+            contrib/librseq \
+            contrib/liburing \
+            contrib/googletest \
+            contrib/benchmark
+
+      - name: Init libc++ submodule (MSan only)
+        if: matrix.build.name == 'msan'
+        run: git submodule update --init --depth=1 contrib/llvm-project
+
+      - name: Install LLVM 21
+        run: |
+          wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc
+          . /etc/os-release
+          echo "deb http://apt.llvm.org/${VERSION_CODENAME}/ llvm-toolchain-${VERSION_CODENAME}-21 main" | sudo tee /etc/apt/sources.list.d/llvm-21.list
+          sudo apt-get -o DPkg::Lock::Timeout=60 update -q
+          sudo apt-get -o DPkg::Lock::Timeout=60 install -y clang-21 llvm-21
+
+      - name: Install CMake
+        run: |
+          wget -qO- https://apt.kitware.com/keys/kitware-archive-latest.asc | sudo tee /etc/apt/trusted.gpg.d/kitware.asc
+          . /etc/os-release
+          echo "deb https://apt.kitware.com/ubuntu/ ${VERSION_CODENAME} main" | sudo tee /etc/apt/sources.list.d/kitware.list
+          sudo apt-get -o DPkg::Lock::Timeout=60 update -q
+          sudo apt-get -o DPkg::Lock::Timeout=60 install -y cmake
+
+      - name: Install libstdc++-13
+        run: |
+          sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test
+          sudo apt-get -o DPkg::Lock::Timeout=60 update -q
+          sudo apt-get -o DPkg::Lock::Timeout=60 install -y libstdc++-13-dev
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get -o DPkg::Lock::Timeout=60 install -y \
+            ninja-build \
+            ccache \
+            libboost-context-dev \
+            libboost-program-options-dev \
+            libbpf-dev
+
+      - name: Cache ccache
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/ccache
+          key: ${{ runner.os }}-ccache-${{ matrix.arch.name }}-${{ matrix.build.name
+            }}-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-ccache-${{ matrix.arch.name }}-${{ matrix.build.name }}-
+
+      - name: Build and test
+        run: ${{ matrix.build.cmd }}
+
+      - name: bench
+        if: matrix.build.name == 'release' || matrix.build.name == 'tsan'
+        run: ${{ matrix.build.bench_cmd }}
+
+      - name: perf
+        if: matrix.build.name == 'release' || matrix.build.name == 'tsan'
+        run: ${{ matrix.build.perf_cmd }} --net
+
+      - name: Upload coverage report
+        if: matrix.build.name == 'coverage' && matrix.arch.name == 'amd64'
+        uses: actions/upload-artifact@v5
+        with:
+          name: coverage-${{ matrix.arch.name }}
+          path: build/debug-coverage/html/
+
+  pages:
+    needs: test
+    if: github.ref == 'refs/heads/master'
+    runs-on: [ self-hosted, silk-amd-small-cpu ]
+
+    permissions:
+      pages: write
+      id-token: write
+
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+
+    steps:
+      - name: Download amd64 coverage report
+        uses: actions/download-artifact@v5
+        with:
+          name: coverage-amd64
+          path: html
+
+      - name: Upload to Pages
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: html
+
+      - name: Deploy to Pages
+        id: deploy
+        uses: actions/deploy-pages@v4
