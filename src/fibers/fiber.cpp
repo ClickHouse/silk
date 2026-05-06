@@ -117,7 +117,7 @@ public:
     Fiber(bool isProxyFiber = false) noexcept;
     ~Fiber() noexcept;
 
-    bool initialize(FiberMain * fiberMain, FiberFuture * waitingFuture) noexcept;
+    bool initialize(FiberMain * fiberMain, ParametersDtor * parametersDtor, FiberFuture * waitingFuture) noexcept;
     void deinitialize() noexcept;
 
     void switchToFiberContext() noexcept;
@@ -193,8 +193,11 @@ public:
     // dummy is stored here so it can be reused.
     QueueBase::QueueNode queueNode;
 
-    // Entry point and parameters buffer.
+    // Entry point, parameters buffer, and optional parameters destructor.
+    // parametersDtor is set by run<T> for non-trivially-destructible T and
+    // called by fiberContextMain immediately after fiberMain returns.
     FiberMain * fiberMain = nullptr;
+    ParametersDtor * parametersDtor = nullptr;
     uint8_t parameters[FIBER_PARAMETERS_SIZE];
 
 #if defined(__SANITIZE_ADDRESS__)
@@ -250,7 +253,7 @@ Fiber::~Fiber() noexcept
     }
 }
 
-bool Fiber::initialize(FiberMain * fiberMain_, FiberFuture * waitingFuture_) noexcept
+bool Fiber::initialize(FiberMain * fiberMain_, ParametersDtor * parametersDtor_, FiberFuture * waitingFuture_) noexcept
 {
     state.store(FiberState::SUSPENDED, std::memory_order_relaxed);
 
@@ -289,6 +292,7 @@ bool Fiber::initialize(FiberMain * fiberMain_, FiberFuture * waitingFuture_) noe
 #endif
 
     fiberMain = fiberMain_;
+    parametersDtor = parametersDtor_;
     fiberContext = boost::context::detail::make_fcontext(
         static_cast<uint8_t *>(stack) + PAGE_SIZE + FIBER_STACK_SIZE, FIBER_STACK_SIZE, fiberContextMain);
 
@@ -298,6 +302,11 @@ bool Fiber::initialize(FiberMain * fiberMain_, FiberFuture * waitingFuture_) noe
 void Fiber::deinitialize() noexcept
 {
     ASSERT(!suspendedEntry.is_linked());
+
+    if (parametersDtor)
+    {
+        parametersDtor(parameters);
+    }
 
 #if defined(__SANITIZE_THREAD__)
     TSAN_FIBER_DESTROY(tsanFiber);
@@ -1034,12 +1043,12 @@ void * FiberScheduler::getFiberParameters(Fiber * fiber) noexcept
     return fiber->parameters;
 }
 
-Fiber * FiberScheduler::allocateFiber(FiberMain * fiberMain, FiberFuture * future) noexcept
+Fiber * FiberScheduler::allocateFiber(FiberMain * fiberMain, ParametersDtor * parametersDtor, FiberFuture * future) noexcept
 {
     Fiber * fiber = scheduler->fiberPool.allocate();
     if (fiber)
     {
-        if (fiber->initialize(fiberMain, future))
+        if (fiber->initialize(fiberMain, parametersDtor, future))
         {
             Perf::getSimpleCounter(simpleCounters[FIBER_STARTED]).increment();
             return fiber;
