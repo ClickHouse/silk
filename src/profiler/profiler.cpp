@@ -204,13 +204,21 @@ void Profiler::collect(Symbolizer * symbolizer)
         uint64_t userAddrs[MAX_FRAMES] = {};
         uint64_t kernelAddrs[MAX_FRAMES] = {};
 
+        // UINT32_MAX is the sentinel the BPF program stores when bpf_get_stackid
+        // fails (normalizes all negative errno values to -1, which becomes
+        // 0xFFFFFFFF when cast to u32). Valid stack IDs are always non-negative
+        // s32 values and never alias UINT32_MAX.
+        //
+        // On lookup failure (stack ID evicted between map iteration and lookup)
+        // the arrays remain zero-initialized, countFrames returns 0, and the
+        // sample is skipped by the nUser == 0 && nKernel == 0 check below.
         if (userSid != UINT32_MAX)
         {
-            bpf_map_lookup_elem(stackFd, &userSid, userAddrs);
+            (void)bpf_map_lookup_elem(stackFd, &userSid, userAddrs);
         }
         if (kernelSid != UINT32_MAX)
         {
-            bpf_map_lookup_elem(stackFd, &kernelSid, kernelAddrs);
+            (void)bpf_map_lookup_elem(stackFd, &kernelSid, kernelAddrs);
         }
 
         int nUser = countFrames(userAddrs);
