@@ -19,6 +19,7 @@ A cooperative fiber scheduler for Linux with per-CPU scheduler threads, io_uring
 - Clang 21
 - ccache (optional)
 - Boost (`libboost-dev`, `libboost-context-dev`, `libboost-program-options-dev`)
+- libbpf (`libbpf-dev`) — optional, required only for `src/profiler`; the profiler is silently skipped if absent
 
 GTest, Google Benchmark, libbacktrace, liburing, and librseq are bundled as submodules under `contrib/` and do not need to be installed separately. Poco, the AWS SDK, and jemalloc are built on demand via `--build-poco`, `--build-aws`, and `--build-jemalloc` passed to `configure`.
 

@@ -2,14 +2,7 @@
 
 ## Build requirements
 
-- CMake >= 3.28
-- Ninja
-- Clang 21
-- ccache (optional, speeds up incremental builds)
-- Boost (`libboost-dev`, `libboost-context-dev`, `libboost-program-options-dev`)
-
-GTest, Google Benchmark, libbacktrace, liburing, and librseq are bundled as
-submodules under `contrib/` and do not need to be installed separately.
+See [README.md](README.md#requirements) for the full list of build dependencies.
 
 Initialize the required submodules after cloning:
 
@@ -20,6 +13,29 @@ git submodule update --init --depth=1 \
     contrib/liburing \
     contrib/googletest \
     contrib/benchmark
+```
+
+To build optional components, initialize their submodules too:
+
+```
+# http-perf (requires Poco)
+git submodule update --init --depth=1 contrib/poco
+
+# s3-perf (requires AWS SDK and its nested submodule)
+git submodule update --init --depth=1 contrib/aws-sdk-cpp
+git submodule update --init --depth=1 --recursive contrib/aws-sdk-cpp
+
+# jemalloc (used by http-perf and s3-perf for improved allocator performance)
+git submodule update --init --depth=1 contrib/jemalloc
+```
+
+Then pass the relevant flags to `configure`:
+
+```
+./bb configure --build-poco
+./bb configure --build-aws
+./bb configure --build-jemalloc
+./bb configure --build-poco --build-aws --build-jemalloc
 ```
 
 ## Running tests
