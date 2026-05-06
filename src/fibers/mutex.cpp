@@ -5,6 +5,7 @@
 #include <silk/util/spinlock.h>
 
 #include <atomic>
+#include <format>
 
 namespace silk
 {
@@ -39,6 +40,8 @@ void FiberMutex::lock() noexcept
     State currentState;
     currentState.raw = state.load(std::memory_order_relaxed);
 
+    ASSERT_DEBUG(currentState.owner != reinterpret_cast<uint64_t>(FiberScheduler::getCurrentFiber()), "FiberMutex is not reentrant");
+
     // Spin briefly before suspending: if the owner is on another CPU and releases
     // within ~500 ns, we avoid the full scheduler wakeup path.
     // Skip if there are already waiters in the queue.
@@ -62,6 +65,11 @@ void FiberMutex::unlock() noexcept
 {
     State currentState;
     currentState.raw = state.load(std::memory_order_relaxed);
+
+    ASSERT_DEBUG(
+        currentState.owner == reinterpret_cast<uint64_t>(FiberScheduler::getCurrentFiber()),
+        "FiberMutex::unlock called by non-owner fiber");
+
     for (;;)
     {
         ASSERT(currentState.raw);
