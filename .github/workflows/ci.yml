@@ -121,7 +121,7 @@ jobs:
 
       - name: perf
         if: matrix.build.name == 'release' || matrix.build.name == 'tsan'
-        run: ${{ matrix.build.perf_cmd }} --net
+        run: ${{ matrix.build.perf_cmd }} --file --net
 
       - name: Upload coverage report
         if: matrix.build.name == 'coverage' && matrix.arch.name == 'amd64'
