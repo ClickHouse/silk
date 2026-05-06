@@ -116,12 +116,20 @@ private:
 
     static_assert(sizeof(Slot) == CACHELINE_SIZE);
 
+    // Match offsets and stride used by src/gdb/fiber.py::_walk_bounded_queue
+    static_assert(offsetof(Slot, sequence) == 0);
+    static_assert(offsetof(Slot, value) == 8);
+
     //
     // State.
     //
 
     uint64_t mask;
     std::unique_ptr<Slot[]> slots;
+
+    // src/gdb/fiber.py::_walk_bounded_queue reads enqueuePos at offset 64 and
+    // dequeuePos at offset 128 (mask=8 bytes, slots=8 bytes, then 2 x cacheline).
+    // Reordering or inserting fields here requires updating that script.
     alignas(CACHELINE_SIZE) std::atomic<uint64_t> enqueuePos{};
     alignas(CACHELINE_SIZE) std::atomic<uint64_t> dequeuePos{};
 };

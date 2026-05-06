@@ -30,6 +30,10 @@ public:
 
     static_assert(sizeof(QueueNode) == CACHELINE_SIZE);
 
+    // Match offsets used by src/gdb/fiber.py::_walk_queue
+    static_assert(offsetof(QueueNode, next) == 8);
+    static_assert(offsetof(QueueNode, value) == 16);
+
     static void initialize() noexcept;
     static void destroy() noexcept;
 
