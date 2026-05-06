@@ -233,7 +233,7 @@ private:
 
     struct PooledSession
     {
-        StackEntry entry;
+        silk::StackEntry entry;
         std::unique_ptr<Poco::Net::HTTPClientSession> session;
         char buffer[SESSION_BUFFER_SIZE];
     };
