@@ -59,8 +59,21 @@ bool FiberSequencer::advance(uint64_t value) noexcept
 
 void FiberSequencer::cancelWait(Future * future) noexcept
 {
-    uint32_t prev = future->state.fetch_or(Future::CANCELLED, std::memory_order_acq_rel);
-    if (prev & Future::IN_TABLE)
+    uint32_t expected = future->state.load(std::memory_order_relaxed);
+    for (;;)
+    {
+        if (expected & Future::CANCELLED)
+        {
+            return;
+        }
+        if (future->state.compare_exchange_weak(
+                expected, expected | Future::CANCELLED, std::memory_order_acq_rel, std::memory_order_relaxed))
+        {
+            break;
+        }
+    }
+
+    if (expected & Future::IN_TABLE)
     {
         cancelQueue.push(future);
     }

@@ -1265,8 +1265,21 @@ void FiberScheduler::sleep(uint64_t nanoseconds, SleepFuture * future) noexcept
 
 void FiberScheduler::cancelSleep(SleepFuture * future) noexcept
 {
-    uint32_t prev = future->state.fetch_or(SleepFuture::CANCELLED, std::memory_order_acq_rel);
-    if (prev & SleepFuture::IN_TABLE)
+    uint32_t expected = future->state.load(std::memory_order_relaxed);
+    for (;;)
+    {
+        if (expected & SleepFuture::CANCELLED)
+        {
+            return;
+        }
+        if (future->state.compare_exchange_weak(
+                expected, expected | SleepFuture::CANCELLED, std::memory_order_acq_rel, std::memory_order_relaxed))
+        {
+            break;
+        }
+    }
+
+    if (expected & SleepFuture::IN_TABLE)
     {
         ProcessorState * processor = &scheduler->processorState[future->processorNumber];
         processor->cancelQueue.push(future);
