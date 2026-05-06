@@ -28,6 +28,12 @@ static constexpr uint64_t FIBER_PARAMETERS_SIZE = 64;
 using FiberMain = int(void * parameters) noexcept;
 
 /**
+ * Destructor for the fiber's parameter buffer. Called after the entry point returns.
+ * Null for trivially destructible parameter types.
+ */
+using ParametersDtor = void(void * parameters) noexcept;
+
+/**
  * Cooperative fiber scheduler with per-CPU threads, async IO, and work-stealing.
  */
 class FiberScheduler
@@ -57,7 +63,8 @@ public:
     [[nodiscard]] static int run(int (*fiberMain)(T *) noexcept, T && parameters, FiberFuture * future) noexcept
     {
         static_assert(sizeof(T) <= FIBER_PARAMETERS_SIZE);
-        Fiber * fiber = allocateFiber(reinterpret_cast<FiberMain *>(fiberMain), future);
+        Fiber * fiber = allocateFiber(
+            reinterpret_cast<FiberMain *>(fiberMain), std::is_trivially_destructible_v<T> ? nullptr : destroyParameters<T>, future);
         if (fiber)
         {
             std::construct_at(static_cast<T *>(getFiberParameters(fiber)), std::forward<T>(parameters));
@@ -355,9 +362,15 @@ private:
     // Helpers.
     //
 
+    template <typename T>
+    static void destroyParameters(void * p) noexcept
+    {
+        std::destroy_at(static_cast<T *>(p));
+    }
+
     static void buildStealCandidates() noexcept;
     static void * getFiberParameters(Fiber * fiber) noexcept;
-    static Fiber * allocateFiber(FiberMain * fiberMain, FiberFuture * future) noexcept;
+    static Fiber * allocateFiber(FiberMain * fiberMain, ParametersDtor * parametersDtor, FiberFuture * future) noexcept;
     static void freeFiber(Fiber * fiber) noexcept;
     static void enqueueReady(Fiber * fiber) noexcept;
     static void yieldSuspendCallback(Fiber * fiber, void * context) noexcept;
