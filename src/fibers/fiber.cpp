@@ -518,6 +518,11 @@ struct FiberScheduler::ProcessorState
         // ring each time it becomes readable, waking io_uring_enter2.
         int eventFd = -1;
 
+        // Set to true by runScheduler after initialization completes.
+        // The steal loop checks this before accessing the ring,
+        // and FiberScheduler spins on it before spawning worker threads.
+        std::atomic<bool> initialized{};
+
         // Set just before entering io_uring_enter2; cleared on exit.
         // wakeThread() checks this before writing to eventFd so that
         // eventfd_write is only called when the thread is actually parked.
@@ -813,8 +818,8 @@ struct FiberScheduler::SchedulerState
     std::unique_ptr<std::thread[]> workerThreads;
 
     MemoryPool<Fiber, &Fiber::stackEntry> fiberPool;
-
     IntrusiveQueue<Fiber, &Fiber::reservedNode> readyQueue;
+
     sem_t threadSemaphore{};
 
     WaitStack waiterTable[WAITER_TABLE_SIZE];
@@ -877,12 +882,11 @@ void FiberScheduler::initialize() noexcept
 
     for (uint32_t cpu = 0; cpu < scheduler->processorCount; ++cpu)
     {
-        if (!CPU_ISSET(cpu, &processCpuSet))
+        if (CPU_ISSET(cpu, &processCpuSet))
         {
-            continue;
+            ProcessorState * processor = &scheduler->processorState[cpu];
+            processor->number = cpu;
         }
-        ProcessorState * processor = &scheduler->processorState[cpu];
-        processor->initialize(cpu);
     }
 
     buildStealCandidates();
@@ -890,12 +894,23 @@ void FiberScheduler::initialize() noexcept
     uint32_t threadIndex = 0;
     for (uint32_t cpu = 0; cpu < scheduler->processorCount; ++cpu)
     {
-        ProcessorState * processor = &scheduler->processorState[cpu];
-        if (processor->number == UINT32_MAX)
+        if (CPU_ISSET(cpu, &processCpuSet))
         {
-            continue;
+            ProcessorState * processor = &scheduler->processorState[cpu];
+            scheduler->schedulerThreads[threadIndex++] = std::thread(runScheduler, processor);
         }
-        scheduler->schedulerThreads[threadIndex++] = std::thread(runScheduler, processor);
+    }
+
+    for (uint32_t cpu = 0; cpu < scheduler->processorCount; ++cpu)
+    {
+        if (CPU_ISSET(cpu, &processCpuSet))
+        {
+            ProcessorState * processor = &scheduler->processorState[cpu];
+            while (!processor->initialized.load(std::memory_order_acquire))
+            {
+                cpuPause();
+            }
+        }
     }
 
     scheduler->workerThreadCount = scheduler->schedulerThreadCount;
@@ -1294,6 +1309,11 @@ void FiberScheduler::runScheduler(ProcessorState * processor) noexcept
     CPU_SET(processor->number, &cpuSet);
     ::pthread_setaffinity_np(::pthread_self(), sizeof(cpuSet), &cpuSet);
 
+    // Initialize per-CPU resources pinned to this CPU so that mmap'd memory
+    // (io_uring rings, eventfd) is allocated on the local NUMA node.
+    processor->initialize(processor->number);
+    processor->initialized.store(true, std::memory_order_release);
+
     uint64_t idleSinceCycles = Tsc::getCycles();
     uint64_t waitNs = 0;
 
@@ -1387,6 +1407,13 @@ bool FiberScheduler::runStealLoop(ProcessorState * processor, uint64_t idleSince
         }
 
         ProcessorState * victim = &scheduler->processorState[candidate->processorNumber];
+
+        // Skip uninitialized processors.
+        if (!victim->initialized.load(std::memory_order_acquire))
+        {
+            continue;
+        }
+
         didWork |= runServiceLoop(victim, 0, timer);
 
         // We have a limited budget to spend doing work for others.
