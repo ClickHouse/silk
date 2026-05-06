@@ -745,6 +745,9 @@ bool FiberScheduler::ProcessorState::enqueueIo(IoFuture * future, Setup && setup
     {
         setup(sqe);
 
+        // Contract: when future is non-null, enqueueIo writes it as user_data after
+        // setup runs; when future is null, the setup callback is responsible for
+        // setting user_data itself (typically to CQE_TAG_CANCEL to ignore the CQE).
         if (future)
         {
             ::io_uring_sqe_set_data(sqe, future);
@@ -1263,7 +1266,13 @@ void FiberScheduler::poll(int fd, uint32_t events, uint64_t * triggeredEvents, I
 void FiberScheduler::cancelIo(IoFuture * future) noexcept
 {
     future->result = nullptr;
-    enqueueIo(nullptr, [=](io_uring_sqe * sqe) noexcept { ::io_uring_prep_cancel(sqe, future, 0); });
+    enqueueIo(
+        nullptr,
+        [=](io_uring_sqe * sqe) noexcept
+        {
+            ::io_uring_prep_cancel(sqe, future, 0);
+            ::io_uring_sqe_set_data64(sqe, CQE_TAG_CANCEL);
+        });
 }
 
 void FiberScheduler::sleep(uint64_t nanoseconds, SleepFuture * future) noexcept
