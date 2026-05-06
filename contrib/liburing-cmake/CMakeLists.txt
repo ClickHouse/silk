@@ -1,4 +1,4 @@
-set(LIBURING_SRC ${CMAKE_SOURCE_DIR}/contrib/liburing)
+set(LIBURING_SRC ${CMAKE_CURRENT_SOURCE_DIR}/../liburing)
 set(LIBURING_BIN ${CMAKE_BINARY_DIR}/liburing-generated)
 
 file(MAKE_DIRECTORY ${LIBURING_BIN})

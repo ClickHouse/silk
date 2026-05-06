@@ -1,4 +1,4 @@
-set(LIBBACKTRACE_SRC ${CMAKE_SOURCE_DIR}/contrib/libbacktrace)
+set(LIBBACKTRACE_SRC ${CMAKE_CURRENT_SOURCE_DIR}/../libbacktrace)
 set(LIBBACKTRACE_BIN ${CMAKE_BINARY_DIR}/libbacktrace-generated)
 file(MAKE_DIRECTORY ${LIBBACKTRACE_BIN})
 
