@@ -40,10 +40,12 @@ jobs:
           - name: coverage
             cmd: ./bb -b debug test --coverage
           - name: release
+            configure_cmd: ./bb -b release configure --build-poco --build-jemalloc
             cmd: ./bb -b release test
             bench_cmd: ./bb -b release bench
             perf_cmd: ./bb -v -b release perf
           - name: tsan
+            configure_cmd: ./bb -b release -s thread configure --build-poco
             cmd: ./bb -b release -s thread test
             bench_cmd: ./bb -b release -s thread bench
             perf_cmd: ./bb -v -b release -s thread perf
@@ -67,6 +69,14 @@ jobs:
             contrib/liburing \
             contrib/googletest \
             contrib/benchmark
+
+      - name: Init Poco submodule
+        if: matrix.build.name == 'release' || matrix.build.name == 'tsan'
+        run: git submodule update --init --depth=1 contrib/poco
+
+      - name: Init jemalloc submodule
+        if: matrix.build.name == 'release'
+        run: git submodule update --init --depth=1 contrib/jemalloc
 
       - name: Init libc++ submodule (MSan only)
         if: matrix.build.name == 'msan'
@@ -101,7 +111,9 @@ jobs:
             ccache \
             libboost-context-dev \
             libboost-program-options-dev \
-            libbpf-dev
+            libbpf-dev \
+            libdouble-conversion-dev \
+            zlib1g-dev
 
       - name: Cache ccache
         uses: actions/cache@v5
@@ -112,6 +124,10 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-ccache-${{ matrix.arch.name }}-${{ matrix.build.name }}-
 
+      - name: Configure with Poco
+        if: matrix.build.name == 'release' || matrix.build.name == 'tsan'
+        run: ${{ matrix.build.configure_cmd }}
+
       - name: Build and test
         run: ${{ matrix.build.cmd }}
 
@@ -121,7 +137,7 @@ jobs:
 
       - name: perf
         if: matrix.build.name == 'release' || matrix.build.name == 'tsan'
-        run: ${{ matrix.build.perf_cmd }} --file --net
+        run: ${{ matrix.build.perf_cmd }} --file --net --http
 
       - name: Upload coverage report
         if: matrix.build.name == 'coverage' && matrix.arch.name == 'amd64'
