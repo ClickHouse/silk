@@ -22,7 +22,6 @@
 #include <cerrno>
 #include <cstdint>
 #include <format>
-#include <functional>
 #include <memory>
 #include <mutex>
 #include <random>
@@ -57,6 +56,8 @@ static constexpr uint64_t SPIN_THRESHOLD_NS = 20'000;
 static constexpr uint64_t CQE_TAG_CANCEL = 0;
 static constexpr uint64_t CQE_TAG_TIMEOUT = 1;
 static constexpr uint64_t CQE_TAG_DOORBELL = 2;
+
+static_assert((WAITER_TABLE_SIZE & (WAITER_TABLE_SIZE - 1)) == 0);
 
 // clang-format off
 #define FIBER_SIMPLE_COUNTERS(x) \
@@ -1192,7 +1193,7 @@ void FiberScheduler::suspend(SuspendCallback * callback, void * context) noexcep
 
 void FiberScheduler::enqueueWaiter(uint64_t key, Fiber * fiber) noexcept
 {
-    uint64_t index = std::hash<uint64_t>{}(key) % WAITER_TABLE_SIZE;
+    uint64_t index = intHash(key) & (WAITER_TABLE_SIZE - 1);
     scheduler->waiterTable[index].push(fiber);
 
     // seq_cst fence pairs with the one in releaseWaiters to prevent the
@@ -1207,7 +1208,7 @@ void FiberScheduler::releaseWaiters(uint64_t key) noexcept
     // seq_cst fence pairs with the one in enqueueWaiter.
     std::atomic_thread_fence(std::memory_order_seq_cst);
 
-    uint64_t index = std::hash<uint64_t>{}(key) % WAITER_TABLE_SIZE;
+    uint64_t index = intHash(key) & (WAITER_TABLE_SIZE - 1);
     Fiber * fiber = scheduler->waiterTable[index].popAll();
     while (fiber)
     {
