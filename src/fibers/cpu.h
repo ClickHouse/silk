@@ -24,4 +24,11 @@ void readCpuTopologies(CpuTopology * topologies, uint32_t processorCount) noexce
  */
 uint64_t topologyCostCycles(const CpuTopology & first, const CpuTopology & second) noexcept;
 
+/**
+ * Test whether @p cpu is in a Linux cpulist string. Accepts the kernel grammar
+ * "[a[-b[:c[/d]]]](,...)" with optional stride: positions in [a, b] for which
+ * (pos - a) % d < c. Defaults are b=a, c=1, d=c. Exposed for unit tests.
+ */
+bool cpuInCpulist(uint32_t cpu, const char * list) noexcept;
+
 } // namespace silk
