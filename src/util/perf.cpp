@@ -12,6 +12,12 @@ namespace silk
 
 void Perf::initialize() noexcept
 {
+    if (processorState)
+    {
+        // Skip the second initialization.
+        return;
+    }
+
     uint32_t processorCount = getProcessorCount();
 
     simpleCounters = std::make_unique<CounterInfo[]>(NUM_SIMPLE_COUNTERS);

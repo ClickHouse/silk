@@ -33,9 +33,9 @@
 #include <silk/fibers/future.h>
 #include <silk/fibers/mutex.h>
 #include <silk/util/assert.h>
+#include <silk/util/init.h>
 #include <silk/util/perf.h>
 #include <silk/util/platform.h>
-#include <silk/util/queue.h>
 
 #include <atomic>
 #include <cstdio>
@@ -106,9 +106,7 @@ __attribute__((noinline, used)) static void gdb_ready()
 
 int main()
 {
-    silk::initRseq();
-    silk::Perf::initialize();
-    silk::QueueBase::initialize();
+    silk::initialize();
     silk::FiberScheduler::initialize();
 
     // Spinner stays RUNNING on a CPU.
@@ -157,8 +155,7 @@ int main()
     sem_destroy(&ready);
 
     silk::FiberScheduler::destroy();
-    silk::QueueBase::destroy();
-    silk::Perf::destroy();
+    silk::destroy();
 
     return 0;
 }

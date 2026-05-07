@@ -4,10 +4,10 @@
 #include <silk/fibers/fiber.h>
 #include <silk/fibers/future.h>
 #include <silk/util/assert.h>
+#include <silk/util/init.h>
 #include <silk/util/logger.h>
 #include <silk/util/perf.h>
 #include <silk/util/platform.h>
-#include <silk/util/queue.h>
 #include <silk/util/stack.h>
 #include <silk/util/tsc.h>
 
@@ -756,9 +756,7 @@ int main(int argc, char ** argv)
 
     std::shared_ptr<Aws::Utils::Threading::Executor> executor;
 
-    silk::initRseq();
-    silk::Perf::initialize();
-    silk::QueueBase::initialize();
+    silk::initialize();
     if (!cfg.useThreads)
     {
         silk::FiberScheduler::initialize();
@@ -814,8 +812,7 @@ int main(int argc, char ** argv)
     {
         silk::FiberScheduler::destroy();
     }
-    silk::QueueBase::destroy();
-    silk::Perf::destroy();
+    silk::destroy();
 
     return 0;
 }

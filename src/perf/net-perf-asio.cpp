@@ -1,6 +1,7 @@
 #include "common.h"
 
 #include <silk/util/assert.h>
+#include <silk/util/init.h>
 #include <silk/util/logger.h>
 #include <silk/util/perf.h>
 #include <silk/util/platform.h>
@@ -523,8 +524,7 @@ int main(int argc, char ** argv)
         return 1;
     }
 
-    silk::initRseq();
-    silk::Perf::initialize();
+    silk::initialize();
 
     const char * subcmd = argv[1];
     if (strcmp(subcmd, "server") == 0)
@@ -542,6 +542,6 @@ int main(int argc, char ** argv)
         return 1;
     }
 
-    silk::Perf::destroy();
+    silk::destroy();
     return 0;
 }

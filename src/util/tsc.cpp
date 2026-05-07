@@ -13,6 +13,23 @@ namespace silk
 {
 
 #if defined(__x86_64__)
+
+// CPUID leaf 0x80000007 EDX bit 8 advertises the Invariant TSC feature:
+// TSC runs at a constant rate across frequency transitions and remains synchronized
+// across cores. Silk reads TSC on one CPU and compares the result on another
+// (sleep deadlines, work-stealing budgets) -- if TSC is not invariant those
+// comparisons are unsound. Older CPUs without this bit are not supported.
+static bool hasInvariantTsc() noexcept
+{
+    uint32_t eax, ebx, ecx, edx;
+    if (__get_cpuid(0x80000000, &eax, &ebx, &ecx, &edx) == 0 || eax < 0x80000007)
+    {
+        return false;
+    }
+    __cpuid(0x80000007, eax, ebx, ecx, edx);
+    return (edx & (1u << 8)) != 0;
+}
+
 static uint64_t getTscFrequencyCpuid() noexcept
 {
     uint32_t eax, ebx, ecx, edx;
@@ -84,11 +101,20 @@ static uint64_t getTscFrequencyCpuid() noexcept
 }
 #endif // __x86_64__
 
-void Tsc::init() noexcept
+void Tsc::initialize() noexcept
 {
+    if (frequency)
+    {
+        // Skip the second initialization.
+        return;
+    }
+
 #if defined(__x86_64__)
+    ASSERT(hasInvariantTsc(), "CPU does not advertise Invariant TSC; silk requires a stable cross-core counter");
     frequency = getTscFrequencyCpuid();
 #elif defined(__aarch64__)
+    // ARMv8 cntvct_el0 is anchored to a system counter that is invariant by
+    // architecture, so no equivalent capability check is required.
     __asm__ volatile("mrs %0, cntfrq_el0" : "=r"(frequency));
 #else
 #    error Unsupported platform

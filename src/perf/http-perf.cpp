@@ -4,10 +4,10 @@
 #include <silk/fibers/fiber.h>
 #include <silk/fibers/future.h>
 #include <silk/util/assert.h>
+#include <silk/util/init.h>
 #include <silk/util/logger.h>
 #include <silk/util/perf.h>
 #include <silk/util/platform.h>
-#include <silk/util/queue.h>
 #include <silk/util/tsc.h>
 
 #include <Poco/Net/HTTPClientSession.h>
@@ -282,11 +282,9 @@ static void runClient(int argc, char ** argv)
     sigset_t mask = blockSignals();
     bool signalled = false;
 
+    silk::initialize();
     if (!cfg.useThreads)
     {
-        silk::initRseq();
-        silk::Perf::initialize();
-        silk::QueueBase::initialize();
         silk::FiberScheduler::initialize();
     }
 
@@ -323,9 +321,8 @@ static void runClient(int argc, char ** argv)
     if (!cfg.useThreads)
     {
         silk::FiberScheduler::destroy();
-        silk::QueueBase::destroy();
-        silk::Perf::destroy();
     }
+    silk::destroy();
 }
 
 /**

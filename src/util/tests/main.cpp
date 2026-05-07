@@ -1,10 +1,19 @@
-#include <silk/util/perf.h>
+#include <silk/util/init.h>
 
 #include <gtest/gtest.h>
 
 int main(int argc, char ** argv)
 {
     ::testing::InitGoogleTest(&argc, argv);
-    silk::initRseq();
-    return RUN_ALL_TESTS();
+    if (::testing::GTEST_FLAG(list_tests))
+    {
+        return RUN_ALL_TESTS();
+    }
+
+    silk::initialize();
+
+    int r = RUN_ALL_TESTS();
+
+    silk::destroy();
+    return r;
 }
