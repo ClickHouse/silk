@@ -45,38 +45,70 @@ static int readSysfsUint32(const char * path, uint32_t * out) noexcept
     return 0;
 }
 
-static bool cpuInCpulist(uint32_t cpu, const char * list) noexcept
+// Parse a non-negative decimal integer at *p, advancing p past the digits.
+// Returns the parsed value, or 0 if no digits are present.
+static uint32_t parseUint32(const char *& p) noexcept
+{
+    uint32_t value = 0;
+    while (*p >= '0' && *p <= '9')
+    {
+        value = value * 10 + static_cast<uint32_t>(*p++ - '0');
+    }
+    return value;
+}
+
+// Parse a single Linux cpulist entry "[a[-b[:c[/d]]]]" and return whether @p cpu
+// is included. The kernel's full grammar (see bitmap_parselist) selects bit
+// positions in [a, b] for which (pos - a) % d < c -- the stride form is rare
+// outside of cgroup-restricted layouts but is valid sysfs output.
+static bool cpuInCpulistEntry(uint32_t cpu, const char *& p) noexcept
+{
+    uint32_t start = parseUint32(p);
+    uint32_t end = start;
+    if (*p == '-')
+    {
+        ++p;
+        end = parseUint32(p);
+    }
+
+    // Optional stride: ":used[/group]". used defaults to 1 (every position),
+    // group defaults to used (a:c is shorthand for a:c/c, which selects all
+    // positions in the range).
+    uint32_t used = 1;
+    uint32_t group = 1;
+    if (*p == ':')
+    {
+        ++p;
+        used = parseUint32(p);
+        group = used;
+        if (*p == '/')
+        {
+            ++p;
+            group = parseUint32(p);
+        }
+    }
+
+    if (cpu < start || cpu > end || group == 0)
+    {
+        return false;
+    }
+    return (cpu - start) % group < used;
+}
+
+bool cpuInCpulist(uint32_t cpu, const char * list) noexcept
 {
     const char * p = list;
     while (*p && *p != '\n')
     {
-        uint32_t start = 0;
-        while (*p >= '0' && *p <= '9')
-        {
-            start = start * 10 + static_cast<uint32_t>(*p++ - '0');
-        }
-        uint32_t end = start;
-        if (*p == '-')
-        {
-            ++p;
-            end = 0;
-            while (*p >= '0' && *p <= '9')
-            {
-                end = end * 10 + static_cast<uint32_t>(*p++ - '0');
-            }
-        }
-        if (cpu >= start && cpu <= end)
+        if (cpuInCpulistEntry(cpu, p))
         {
             return true;
         }
-        if (*p == ',')
-        {
-            ++p;
-        }
-        else
+        if (*p != ',')
         {
             break;
         }
+        ++p;
     }
     return false;
 }
@@ -93,7 +125,10 @@ void readCpuTopologies(CpuTopology * topologies, uint32_t processorCount) noexce
         ::snprintf(path, sizeof(path), "/sys/devices/system/cpu/cpu%u/topology/core_id", cpu);
         readSysfsUint32(path, &topologies[cpu].coreId);
 
-        topologies[cpu].numaNodeId = 0;
+        // numaNodeId stays at UINT32_MAX until the NUMA pass below sets it.
+        // In environments without NUMA sysfs (containers, minimal kernels) it
+        // remains UINT32_MAX so topologyCostCycles falls through to the safe
+        // cross-NUMA cost rather than misclassifying every CPU as same-node.
     }
 
     // Open each NUMA node file once and fill all CPUs that belong to it.
@@ -137,7 +172,10 @@ uint64_t topologyCostCycles(const CpuTopology & first, const CpuTopology & secon
         // HT sibling ~1 us
         return Tsc::nanosecondsToCycles(1'000);
     }
-    if (first.numaNodeId == second.numaNodeId)
+    // Treat unknown NUMA (UINT32_MAX, e.g. containers without /sys/devices/system/node)
+    // as cross-NUMA: the equality check below would otherwise classify two unknown
+    // CPUs as same-node.
+    if (first.numaNodeId != UINT32_MAX && first.numaNodeId == second.numaNodeId)
     {
         // same NUMA ~50 us
         return Tsc::nanosecondsToCycles(50'000);
