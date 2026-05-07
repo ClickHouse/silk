@@ -10,6 +10,7 @@ import re
 import resource
 import shutil
 import signal
+import socket
 import subprocess
 import sys
 import tempfile
@@ -64,6 +65,17 @@ def start_process(*args: str, **kwargs: Any) -> subprocess.Popen[str]:
             f"process exited prematurely (code {proc.returncode}): {' '.join(args)}"
         )
     return proc
+
+
+def wait_for_tcp_port(host: str, port: int, timeout: float = 5.0) -> None:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            with socket.create_connection((host, port), timeout=0.1):
+                return
+        except OSError:
+            time.sleep(0.05)
+    raise TimeoutError(f"{host}:{port} not ready within {timeout}s")
 
 
 def cmd_clean() -> None:
@@ -962,6 +974,7 @@ class HttpPerfParams:
     flamegraph: bool = False
     print_counters: bool = False
     timeout: int = 180
+    nginx: bool = False
 
 
 _HP_HEADERS: list[str] = [
@@ -994,19 +1007,9 @@ http {{
 """
 
 
-def cmd_http_perf(preset: str, params: HttpPerfParams) -> None:
-    mode = "threads" if params.threads else "fibers"
-    print()
-    print(f"## http-perf ({mode}) -- HTTP/1.1 GET")
-    print()
-    print(
-        f"nginx loopback, duration={params.duration}, warmup={params.warmup}, delay={params.delay}"
-    )
-    print()
-
-    server_cpus, client_cpus = _cpu_split()
-    half = (os.cpu_count() or 2) // 2
-
+def _start_nginx_server(
+    params: HttpPerfParams, server_cpus: str, workers: int
+) -> subprocess.Popen[str]:
     delay_s = _parse_duration_s(params.delay)
     if delay_s > 0:
         load_modules = "load_module modules/ndk_http_module.so;\nload_module modules/ngx_http_lua_module.so;\n"
@@ -1023,14 +1026,14 @@ def cmd_http_perf(preset: str, params: HttpPerfParams) -> None:
         f.write(
             _NGINX_CONF.format(
                 port=params.port,
-                workers=half,
+                workers=workers,
                 handler=handler,
                 load_modules=load_modules,
                 pid_file=os.path.join(TMP_DIR, "http-perf-nginx.pid"),
             )
         )
 
-    nginx = start_process(
+    return start_process(
         "taskset",
         "-c",
         server_cpus,
@@ -1040,6 +1043,46 @@ def cmd_http_perf(preset: str, params: HttpPerfParams) -> None:
         "-g",
         "daemon off;",
     )
+
+
+def _start_internal_server(
+    preset: str, params: HttpPerfParams, server_cpus: str
+) -> subprocess.Popen[str]:
+    http_perf = os.path.join(ROOT, f"build/{preset}/bin/http-perf")
+    args = [
+        "taskset",
+        "-c",
+        server_cpus,
+        http_perf,
+        "server",
+        "--port",
+        str(params.port),
+    ]
+    if _parse_duration_s(params.delay) > 0:
+        args += ["--delay", params.delay]
+    if log.isEnabledFor(logging.DEBUG):
+        args += ["--verbose"]
+    return start_process(*args)
+
+
+def cmd_http_perf(preset: str, params: HttpPerfParams) -> None:
+    mode = "threads" if params.threads else "fibers"
+    server_kind = "nginx" if params.nginx else "internal"
+    print()
+    print(f"## http-perf (server={server_kind}, client={mode}) -- HTTP/1.1 GET")
+    print()
+    print(f"duration={params.duration}, warmup={params.warmup}, delay={params.delay}")
+    print()
+
+    server_cpus, client_cpus = _cpu_split()
+    workers = (os.cpu_count() or 2) // 2
+
+    if params.nginx:
+        server = _start_nginx_server(params, server_cpus, workers)
+    else:
+        server = _start_internal_server(preset, params, server_cpus)
+
+    wait_for_tcp_port(params.host, params.port)
 
     http_perf = os.path.join(ROOT, f"build/{preset}/bin/http-perf")
     threads_flag = ["--threads"] if params.threads else []
@@ -1112,8 +1155,8 @@ def cmd_http_perf(preset: str, params: HttpPerfParams) -> None:
                 if params.print_counters:
                     _print_counters(data)
     finally:
-        nginx.terminate()
-        nginx.wait()
+        server.terminate()
+        server.wait()
 
 
 def _ensure_minio() -> tuple[str, str]:
@@ -1482,9 +1525,16 @@ def _build_parser() -> argparse.ArgumentParser:
         "--net-asio", action="store_true", help="run net-perf-asio"
     )
     perf_parser.add_argument("--file", action="store_true", help="run file-perf")
-    perf_parser.add_argument("--http", action="store_true", help="run http-perf")
     perf_parser.add_argument(
-        "--http-threads", action="store_true", help="run http-perf (threads)"
+        "--http", action="store_true", help="run http-perf (internal server, fibers)"
+    )
+    perf_parser.add_argument(
+        "--http-threads",
+        action="store_true",
+        help="run http-perf (internal server, thread client)",
+    )
+    perf_parser.add_argument(
+        "--http-nginx", action="store_true", help="run http-perf against nginx"
     )
     perf_parser.add_argument("--fio", action="store_true", help="run fio comparison")
     perf_parser.add_argument(
@@ -1783,7 +1833,13 @@ def _build_parser() -> argparse.ArgumentParser:
         dest="http_delay",
         default=http_params.delay,
         metavar="DURATION",
-        help="server-side nginx delay per request (e.g. 1ms, 100us)",
+        help="server-side response delay per request (e.g. 1ms, 100us)",
+    )
+    http_perf_parser.add_argument(
+        "--nginx",
+        dest="http_nginx",
+        action="store_true",
+        help="run client against nginx instead of the internal server",
     )
     http_perf_parser.add_argument(
         "--threads",
@@ -2009,6 +2065,9 @@ def main() -> None:
         if args.http_threads or args.all:
             cmd_build(preset, ["http-perf"])
             cmd_http_perf(preset, replace(http_params, threads=True))
+        if args.http_nginx or args.all:
+            cmd_build(preset, ["http-perf"])
+            cmd_http_perf(preset, replace(http_params, nginx=True))
         s3_params = S3PerfParams(
             numjobs=[1, 16],
             iodepth=[1, 64],
