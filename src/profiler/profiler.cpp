@@ -4,10 +4,13 @@
 #include <silk/util/assert.h>
 #include <silk/util/logger.h>
 
+#include <array>
 #include <cerrno>
 #include <cstdio>
 #include <cstring>
+#include <map>
 #include <string>
+#include <utility>
 
 #include <unistd.h>
 
@@ -22,6 +25,7 @@ typedef __u8 u8;
 typedef __u16 u16;
 typedef __u32 u32;
 typedef __u64 u64;
+typedef bool _Bool;
 
 #include <profiler.skel.h>
 
@@ -71,12 +75,13 @@ static int libbpfPrint(libbpf_print_level level, const char * format, va_list ar
     return 0;
 }
 
-Profiler::Profiler(uint32_t targetTgid, uint32_t sampleHz, bool kernelStacks, bool oncpu, bool offcpu) noexcept
+Profiler::Profiler(uint32_t targetTgid, uint32_t sampleHz, bool kernelStacks, bool oncpu, bool offcpu, bool usdt) noexcept
     : targetTgid(targetTgid)
     , sampleHz(sampleHz)
     , kernelStacks(kernelStacks)
     , oncpu(oncpu)
     , offcpu(offcpu)
+    , usdt(usdt)
 {
 }
 
@@ -112,6 +117,14 @@ int Profiler::start() noexcept
     if (!offcpu)
     {
         bpf_program__set_autoload(skel->progs.on_sched_switch, false);
+    }
+    if (!usdt)
+    {
+        bpf_program__set_autoload(skel->progs.on_fiber_start, false);
+        bpf_program__set_autoload(skel->progs.on_fiber_schedule, false);
+        bpf_program__set_autoload(skel->progs.on_fiber_enter, false);
+        bpf_program__set_autoload(skel->progs.on_fiber_exit, false);
+        bpf_program__set_autoload(skel->progs.on_fiber_stop, false);
     }
 
     if (profiler_bpf__load(skel))
@@ -172,6 +185,41 @@ int Profiler::start() noexcept
         }
     }
 
+    // Attach all five lifecycle USDT probes to the target's executable when
+    // --usdt is on. Probes live in libsilk-fibers statically linked into the
+    // target, so the binary path is /proc/<pid>/exe.
+    if (usdt)
+    {
+        char exePath[64];
+        std::snprintf(exePath, sizeof(exePath), "/proc/%u/exe", targetTgid);
+
+        struct
+        {
+            bpf_program * prog;
+            const char * name;
+        } probes[] = {
+            {skel->progs.on_fiber_start, "fiber_start"},
+            {skel->progs.on_fiber_schedule, "fiber_schedule"},
+            {skel->progs.on_fiber_enter, "fiber_enter"},
+            {skel->progs.on_fiber_exit, "fiber_exit"},
+            {skel->progs.on_fiber_stop, "fiber_stop"},
+        };
+
+        for (auto & probe : probes)
+        {
+            bpf_link * link = bpf_program__attach_usdt(probe.prog, targetTgid, exePath, "silk", probe.name, nullptr);
+            if (!link)
+            {
+                int r = errno;
+                LOG_WARN("attach silk:{} to {}: {} (latency breakdown disabled)", probe.name, exePath, strerror(r));
+            }
+            else
+            {
+                usdtLinks.push_back(link);
+            }
+        }
+    }
+
     return 0;
 }
 
@@ -182,6 +230,12 @@ void Profiler::stop() noexcept
         bpf_link__destroy(link);
     }
     perfLinks.clear();
+
+    for (bpf_link * link : usdtLinks)
+    {
+        bpf_link__destroy(link);
+    }
+    usdtLinks.clear();
 }
 
 void Profiler::emitFoldedStacks(Symbolizer * symbolizer)
@@ -325,4 +379,129 @@ int Profiler::countFrames(const uint64_t * addrs) noexcept
         n++;
     }
     return n;
+}
+
+void Profiler::emitLatencyBreakdown()
+{
+    LatencyHist hist;
+    drainHistogram(bpf_map__fd(skel->maps.latency_hist), hist);
+
+    if (hist.empty())
+    {
+        return;
+    }
+
+    std::printf("\n=== fiber latency breakdown (ns, log2 buckets) ===\n");
+    std::printf("%-24s%12s%12s%12s%12s%12s\n", "category / phase", "count", "p50", "p90", "p99", "max");
+    for (const auto & [phaseKey, buckets] : hist)
+    {
+        uint64_t total = 0;
+        for (uint64_t c : buckets)
+        {
+            total += c;
+        }
+        if (total == 0)
+        {
+            continue;
+        }
+
+        char label[32];
+        std::snprintf(label, sizeof(label), "fiber-%02x  %s", phaseKey.first, phaseName(phaseKey.second));
+        std::printf(
+            "%-24s%12lu%12lu%12lu%12lu%12lu\n",
+            label,
+            total,
+            percentileNs(buckets, 0.50),
+            percentileNs(buckets, 0.90),
+            percentileNs(buckets, 0.99),
+            maxNs(buckets));
+    }
+}
+
+void Profiler::drainHistogram(int fd, LatencyHist & hist)
+{
+    int numCpus = libbpf_num_possible_cpus();
+    std::vector<uint64_t> perCpuValues(numCpus);
+
+    uint64_t key, nextKey;
+    if (bpf_map_get_next_key(fd, nullptr, &nextKey) != 0)
+    {
+        return;
+    }
+
+    do
+    {
+        key = nextKey;
+        bpf_map_lookup_elem(fd, &key, perCpuValues.data());
+
+        uint64_t total = 0;
+        for (int i = 0; i < numCpus; i++)
+        {
+            total += perCpuValues[i];
+        }
+        if (total == 0)
+        {
+            continue;
+        }
+
+        // Key encoding from profiler.bpf.c::bumpLatency:
+        //   bits  0..7  bucket (clamped log2 ns)
+        //   bits  8..15 phase
+        //   bits 16..23 fiber category
+        uint8_t category = static_cast<uint8_t>(key >> 16);
+        uint8_t phase = static_cast<uint8_t>(key >> 8);
+        uint8_t bucket = static_cast<uint8_t>(key);
+        if (bucket < HIST_BUCKETS)
+        {
+            hist[{category, phase}][bucket] += total;
+        }
+    } while (bpf_map_get_next_key(fd, &key, &nextKey) == 0);
+}
+
+uint64_t Profiler::percentileNs(const HistBuckets & buckets, double p) noexcept
+{
+    uint64_t total = 0;
+    for (uint64_t c : buckets)
+    {
+        total += c;
+    }
+
+    uint64_t target = static_cast<uint64_t>(total * p);
+    uint64_t cum = 0;
+    for (int b = 0; b < HIST_BUCKETS; b++)
+    {
+        cum += buckets[b];
+        if (cum >= target)
+        {
+            return 1ULL << b;
+        }
+    }
+    return 1ULL << (HIST_BUCKETS - 1);
+}
+
+uint64_t Profiler::maxNs(const HistBuckets & buckets) noexcept
+{
+    for (int b = HIST_BUCKETS - 1; b >= 0; b--)
+    {
+        if (buckets[b])
+        {
+            return 1ULL << b;
+        }
+    }
+    return 0;
+}
+
+const char * Profiler::phaseName(uint8_t phase) noexcept
+{
+    switch (phase)
+    {
+        case 1:
+            return "waiting";
+        case 2:
+            return "wakeup";
+        case 3:
+            return "running";
+        default:
+            return "?";
+    }
 }

@@ -433,26 +433,30 @@ def _render_flamegraph(folded_file: str, out_svg: str, title: str) -> None:
         )
 
 
-def _run_flamegraph(preset: str, name: str, client_args: list[str]) -> None:
+def _run_profiler(
+    preset: str,
+    name: str,
+    client_args: list[str],
+    profiler_args: list[str],
+    out_suffix: str,
+) -> str:
     cmd_build(preset, ["profiler"])
 
     profiler_bin = os.path.join(ROOT, f"build/{preset}/bin/profiler")
-    folded_stacks = os.path.join(ROOT, f"build/{preset}/{name}.flamegraph.folded")
-    out_svg = os.path.join(ROOT, f"build/{preset}/{name}.flamegraph.svg")
+    out_file = os.path.join(ROOT, f"build/{preset}/{name}.{out_suffix}")
     verbose_flag = ["--verbose"] if log.isEnabledFor(logging.DEBUG) else []
 
-    log.info("profiling %s -> %s", name, out_svg)
+    log.info("profiling %s -> %s", name, out_file)
 
     client = start_process(*client_args, stdout=subprocess.DEVNULL)
 
     try:
-        with open(folded_stacks, "w") as f:
+        with open(out_file, "w") as f:
             profiler = start_process(
                 profiler_bin,
                 "--pid",
                 str(client.pid),
-                "--off-cpu",
-                "--kernel-stacks",
+                *profiler_args,
                 *verbose_flag,
                 stdout=f,
             )
@@ -469,10 +473,33 @@ def _run_flamegraph(preset: str, name: str, client_args: list[str]) -> None:
         client.kill()
         raise
 
+    return out_file
+
+
+def _run_flamegraph(preset: str, name: str, client_args: list[str]) -> None:
+    folded_stacks = _run_profiler(
+        preset,
+        name,
+        client_args,
+        ["--on-cpu", "--off-cpu", "--kernel-stacks"],
+        "flamegraph.folded",
+    )
+
+    out_svg = os.path.join(ROOT, f"build/{preset}/{name}.flamegraph.svg")
     _render_flamegraph(folded_stacks, out_svg, f"{name} on-CPU + off-CPU")
 
     log.info("folded stacks: %s", folded_stacks)
     log.info("flamegraph: %s", out_svg)
+
+
+def _run_latency(preset: str, name: str, client_args: list[str]) -> None:
+    latency_report = _run_profiler(preset, name, client_args, ["--usdt"], "latency.txt")
+
+    # Echo the latency table to the user in addition to leaving it on disk.
+    with open(latency_report) as f:
+        sys.stdout.write(f.read())
+
+    log.info("latency report: %s", latency_report)
 
 
 def _print_counters(data: dict[str, Any]) -> None:
@@ -553,6 +580,7 @@ class NetPerfParams:
     connections: list[int] = field(default_factory=lambda: [1000])
     delay: str = "0"
     flamegraph: bool = False
+    latency: bool = False
     print_counters: bool = False
     timeout: int = 180
 
@@ -604,31 +632,31 @@ def cmd_net_perf(preset: str, params: NetPerfParams) -> None:
         wait_for_tcp_port(params.host, params.port)
 
     try:
-        if params.flamegraph:
-            _run_flamegraph(
-                preset,
-                binary,
-                [
-                    "taskset",
-                    "-c",
-                    client_cpus,
-                    net_perf,
-                    "client",
-                    "--host",
-                    params.host,
-                    "--port",
-                    str(params.port),
-                    "--connections",
-                    str(params.connections[0]),
-                    "--msg-size",
-                    str(params.msg_size),
-                    "--duration",
-                    str(params.duration),
-                    "--warmup",
-                    str(params.warmup),
-                    *verbose_flag,
-                ],
-            )
+        if params.flamegraph or params.latency:
+            client_cmd = [
+                "taskset",
+                "-c",
+                client_cpus,
+                net_perf,
+                "client",
+                "--host",
+                params.host,
+                "--port",
+                str(params.port),
+                "--connections",
+                str(params.connections[0]),
+                "--msg-size",
+                str(params.msg_size),
+                "--duration",
+                str(params.duration),
+                "--warmup",
+                str(params.warmup),
+                *verbose_flag,
+            ]
+            if params.flamegraph:
+                _run_flamegraph(preset, binary, client_cmd)
+            else:
+                _run_latency(preset, binary, client_cmd)
         else:
             print(_perf_row(_NP_HEADERS, _NP_WIDTH))
             print(_perf_sep(_NP_WIDTH))
@@ -688,6 +716,7 @@ class FilePerfParams:
     iodepth: list[int] = field(default_factory=lambda: [16])
     rw: list[str] = field(default_factory=lambda: ["randread"])
     flamegraph: bool = False
+    latency: bool = False
     print_counters: bool = False
     timeout: int = 180
 
@@ -726,32 +755,32 @@ def cmd_file_perf(preset: str, params: FilePerfParams) -> None:
     verbose_flag = ["--verbose"] if log.isEnabledFor(logging.DEBUG) else []
 
     try:
-        if params.flamegraph:
+        if params.flamegraph or params.latency:
             jobs, depth, mode = configs[0]
-            _run_flamegraph(
-                preset,
-                "file-perf",
-                [
-                    file_perf,
-                    "--numjobs",
-                    str(jobs),
-                    "--iodepth",
-                    str(depth),
-                    "--bs",
-                    params.bs,
-                    "--rw",
-                    mode,
-                    "--size",
-                    params.size,
-                    "--runtime",
-                    str(params.duration),
-                    "--warmup",
-                    str(params.warmup),
-                    "--filename",
-                    params.file,
-                    *verbose_flag,
-                ],
-            )
+            client_cmd = [
+                file_perf,
+                "--numjobs",
+                str(jobs),
+                "--iodepth",
+                str(depth),
+                "--bs",
+                params.bs,
+                "--rw",
+                mode,
+                "--size",
+                params.size,
+                "--runtime",
+                str(params.duration),
+                "--warmup",
+                str(params.warmup),
+                "--filename",
+                params.file,
+                *verbose_flag,
+            ]
+            if params.flamegraph:
+                _run_flamegraph(preset, "file-perf", client_cmd)
+            else:
+                _run_latency(preset, "file-perf", client_cmd)
         else:
             print(_perf_row(_FP_HEADERS, _FP_WIDTHS))
             print(_perf_sep(_FP_WIDTHS))
@@ -1004,6 +1033,7 @@ class HttpPerfParams:
     delay: str = "0"
     threads: bool = False
     flamegraph: bool = False
+    latency: bool = False
     print_counters: bool = False
     timeout: int = 180
     nginx: bool = False
@@ -1121,30 +1151,31 @@ def cmd_http_perf(preset: str, params: HttpPerfParams) -> None:
     verbose_flag = ["--verbose"] if log.isEnabledFor(logging.DEBUG) else []
 
     try:
-        if params.flamegraph:
-            _run_flamegraph(
-                preset,
-                "http-perf-" + mode,
-                [
-                    "taskset",
-                    "-c",
-                    client_cpus,
-                    http_perf,
-                    "client",
-                    "--host",
-                    params.host,
-                    "--port",
-                    str(params.port),
-                    "--connections",
-                    str(params.connections[0]),
-                    "--duration",
-                    str(params.duration),
-                    "--warmup",
-                    str(params.warmup),
-                    *threads_flag,
-                    *verbose_flag,
-                ],
-            )
+        if params.flamegraph or params.latency:
+            client_cmd = [
+                "taskset",
+                "-c",
+                client_cpus,
+                http_perf,
+                "client",
+                "--host",
+                params.host,
+                "--port",
+                str(params.port),
+                "--connections",
+                str(params.connections[0]),
+                "--duration",
+                str(params.duration),
+                "--warmup",
+                str(params.warmup),
+                *threads_flag,
+                *verbose_flag,
+            ]
+            tag = "http-perf-" + mode
+            if params.flamegraph:
+                _run_flamegraph(preset, tag, client_cmd)
+            else:
+                _run_latency(preset, tag, client_cmd)
         else:
             print(_perf_row(_HP_HEADERS, _HP_WIDTHS))
             print(_perf_sep(_HP_WIDTHS))
@@ -1234,6 +1265,7 @@ class S3PerfParams:
     rw: list[str] = field(default_factory=lambda: ["read"])
     threads: bool = False
     flamegraph: bool = False
+    latency: bool = False
     data_dir: str = "/dev/shm/minio-data"
     print_counters: bool = False
     timeout: int = 180
@@ -1377,13 +1409,14 @@ def cmd_s3_perf(preset: str, params: S3PerfParams) -> None:
 
         executor = "threads" if params.threads else "fibers"
 
-        if params.flamegraph:
+        if params.flamegraph or params.latency:
             jobs, depth, mode = configs[0]
-            _run_flamegraph(
-                preset,
-                f"s3-perf-{mode}-{executor}",
-                ["taskset", "-c", client_cpus] + make_cmd(jobs, depth, mode),
-            )
+            client_cmd = ["taskset", "-c", client_cpus] + make_cmd(jobs, depth, mode)
+            tag = f"s3-perf-{mode}-{executor}"
+            if params.flamegraph:
+                _run_flamegraph(preset, tag, client_cmd)
+            else:
+                _run_latency(preset, tag, client_cmd)
         else:
             print(_perf_row(_S3P_HEADERS, _S3P_WIDTHS))
             print(_perf_sep(_S3P_WIDTHS))
@@ -1637,6 +1670,12 @@ def _build_parser() -> argparse.ArgumentParser:
         help="profile process and generate flamegraph SVG",
     )
     file_perf_parser.add_argument(
+        "--latency",
+        dest="file_latency",
+        action="store_true",
+        help="profile process with USDT probes and print fiber latency breakdown",
+    )
+    file_perf_parser.add_argument(
         "--print-counters",
         dest="file_print_counters",
         action="store_true",
@@ -1764,6 +1803,12 @@ def _build_parser() -> argparse.ArgumentParser:
             dest="net_flamegraph",
             action="store_true",
             help="profile client and generate flamegraph SVG",
+        )
+        parser.add_argument(
+            "--latency",
+            dest="net_latency",
+            action="store_true",
+            help="profile client with USDT probes and print fiber latency breakdown",
         )
         parser.add_argument(
             "--timeout",
@@ -1894,6 +1939,12 @@ def _build_parser() -> argparse.ArgumentParser:
         help="profile client and generate flamegraph SVG",
     )
     http_perf_parser.add_argument(
+        "--latency",
+        dest="http_latency",
+        action="store_true",
+        help="profile client with USDT probes and print fiber latency breakdown",
+    )
+    http_perf_parser.add_argument(
         "--print-counters",
         dest="http_print_counters",
         action="store_true",
@@ -1975,6 +2026,12 @@ def _build_parser() -> argparse.ArgumentParser:
         dest="s3_flamegraph",
         action="store_true",
         help="profile first config and generate flamegraph SVG",
+    )
+    s3_perf_parser.add_argument(
+        "--latency",
+        dest="s3_latency",
+        action="store_true",
+        help="profile first config with USDT probes and print fiber latency breakdown",
     )
     s3_perf_parser.add_argument(
         "--data-dir",

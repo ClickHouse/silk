@@ -37,6 +37,7 @@
 
 #include <sys/eventfd.h>
 #include <sys/mman.h>
+#include <sys/sdt.h>
 #include <sys/uio.h>
 
 namespace silk
@@ -1101,6 +1102,10 @@ FiberScheduler::allocateFiber(FiberMain * fiberMain, ParametersDtor * parameters
         uint64_t fiberId = (uint64_t(category) << 56) | (uint64_t(cpu) << 48) | (serial & ((uint64_t(1) << 48) - 1));
         if (fiber->initialize(fiberId, fiberMain, parametersDtor, future))
         {
+            // USDT lifecycle probe: fiber created.
+            // Fires once per fiber init, before it has been scheduled to run.
+            DTRACE_PROBE2(silk, fiber_start, fiber, fiberId);
+
             Perf::getSimpleCounter(simpleCounters[FIBER_STARTED]).increment();
             return fiber;
         }
@@ -1113,6 +1118,10 @@ FiberScheduler::allocateFiber(FiberMain * fiberMain, ParametersDtor * parameters
 
 void FiberScheduler::freeFiber(Fiber * fiber) noexcept
 {
+    // USDT lifecycle probe: fiber destroyed.
+    // Fires once per fiber as it heads back to the pool. Pair with silk:fiber_start.
+    DTRACE_PROBE2(silk, fiber_stop, fiber, fiber->fiberId);
+
     Perf::getSimpleCounter(simpleCounters[FIBER_STOPPED], fiber->processorNumber).increment();
 
     fiber->deinitialize();
@@ -1134,6 +1143,10 @@ void FiberScheduler::enqueueReady(Fiber * fiber) noexcept
 {
     if (!fiber->isProxyFiber)
     {
+        // USDT lifecycle probe: fiber became runnable.
+        // Useful for tracers that want to measure wakeup latency.
+        DTRACE_PROBE2(silk, fiber_schedule, fiber, fiber->fiberId);
+
         if (!fiber->inThreadMode)
         {
             if (fiber->processorNumber == MAX_PROCESSOR_NUMBER)
@@ -1684,9 +1697,14 @@ void FiberScheduler::runFiber(Fiber * fiber, CpuTimer * timer) noexcept
         fiber->suspendedProcessorNumber = MAX_PROCESSOR_NUMBER;
     }
 
-    threadFiber = fiber;
-
     fiber->changeState(FiberState::READY, FiberState::RUNNING);
+
+    // USDT probes for fiber-aware profilers (see src/profiler).
+    // fiber_enter publishes the fiber identity for the calling thread.
+    // fiber_exit clears it so the per-tid map tracks "currently running fiber".
+    DTRACE_PROBE2(silk, fiber_enter, fiber, fiber->fiberId);
+
+    threadFiber = fiber;
 
     if (timer)
     {
@@ -1701,6 +1719,8 @@ void FiberScheduler::runFiber(Fiber * fiber, CpuTimer * timer) noexcept
     }
 
     threadFiber = nullptr;
+
+    DTRACE_PROBE2(silk, fiber_exit, fiber, fiber->fiberId);
 
     // Submit any SQEs the fiber enqueued during this run.
     ProcessorState * processor = &scheduler->processorState[fiber->processorNumber];

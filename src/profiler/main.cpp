@@ -70,6 +70,7 @@ int main(int argc, char ** argv)
     bool kernelStacks = false;
     bool oncpu = false;
     bool offcpu = false;
+    bool usdt = false;
     bool verbose = false;
 
     namespace po = boost::program_options;
@@ -81,9 +82,10 @@ int main(int argc, char ** argv)
         ("pid",           po::value(&targetPid)->required(),         "target process ID")
         ("hz",            po::value(&sampleHz)->default_value(sampleHz),   "on-CPU sampling frequency")
         ("duration",      po::value(&durationSec)->default_value(durationSec), "run for N seconds (0 = until Ctrl+C)")
-        ("kernel-stacks", po::bool_switch(&kernelStacks),            "capture kernel stack frames")
+        ("kernel-stacks", po::bool_switch(&kernelStacks),            "capture kernel stack frames (only with --on-cpu/--off-cpu)")
         ("on-cpu",        po::bool_switch(&oncpu),                   "capture on-CPU stack samples")
         ("off-cpu",       po::bool_switch(&offcpu),                  "capture off-CPU blocking time")
+        ("usdt",          po::bool_switch(&usdt),                    "attach silk USDT probes for fiber latency breakdown")
         ("verbose,v",     po::bool_switch(&verbose),                 "enable debug logging")
         ;
     // clang-format on
@@ -109,9 +111,9 @@ int main(int argc, char ** argv)
         return 1;
     }
 
-    if (!oncpu && !offcpu)
+    if (!oncpu && !offcpu && !usdt)
     {
-        LOG_ERROR("nothing to capture; pass at least one of --on-cpu, --off-cpu");
+        LOG_ERROR("nothing to capture; pass at least one of --on-cpu, --off-cpu, --usdt");
         return 1;
     }
 
@@ -159,7 +161,7 @@ int main(int argc, char ** argv)
         }
     }
 
-    Profiler profiler(targetPid, sampleHz, kernelStacks, oncpu, offcpu);
+    Profiler profiler(targetPid, sampleHz, kernelStacks, oncpu, offcpu, usdt);
 
     r = profiler.start();
     if (r)
@@ -185,7 +187,14 @@ int main(int argc, char ** argv)
     LOG_INFO("collecting results...");
     try
     {
-        profiler.emitFoldedStacks(&symbolizer);
+        if (oncpu || offcpu)
+        {
+            profiler.emitFoldedStacks(&symbolizer);
+        }
+        if (usdt)
+        {
+            profiler.emitLatencyBreakdown();
+        }
     }
     catch (const std::exception & ex)
     {
