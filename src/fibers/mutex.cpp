@@ -45,6 +45,13 @@ void FiberMutex::lock() noexcept
     // Spin briefly before suspending: if the owner is on another CPU and releases
     // within ~500 ns, we avoid the full scheduler wakeup path.
     // Skip if there are already waiters in the queue.
+    //
+    // The owner pointer is loaded from a stale snapshot of state, so by the time
+    // we call isFiberRunning the original owner may have unlocked, returned, and
+    // been recycled by the fiber pool into a different fiber. The pool never
+    // unmaps Fiber memory, so the load on owner->state is always safe; the worst
+    // case is a spurious 500 ns spin against the wrong fiber's state, after which
+    // lockHelper takes the slow path. No correctness consequence.
     if (!currentState.hasWaiters)
     {
         Fiber * owner = reinterpret_cast<Fiber *>(currentState.owner);
