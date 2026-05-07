@@ -30,7 +30,11 @@ BENCHMARK_F(FiberFutexBench, RoundTrip)(benchmark::State & state)
         {
             for (uint64_t i = 1; !p->stop->load(std::memory_order_relaxed); ++i)
             {
-                p->request->wait(i);
+                int r = p->request->wait(i);
+                if (r)
+                {
+                    return r;
+                }
                 if (p->stop->load(std::memory_order_relaxed))
                 {
                     break;
@@ -53,7 +57,11 @@ BENCHMARK_F(FiberFutexBench, RoundTrip)(benchmark::State & state)
             for (auto _ : *p->state)
             {
                 p->request->post();
-                p->reply->wait(replyToken);
+                int r = p->reply->wait(replyToken);
+                if (r)
+                {
+                    return r;
+                }
                 ++replyToken;
             }
             return 0;

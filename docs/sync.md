@@ -37,10 +37,11 @@ int err = future.wait(); // suspends until set
 
 `reset()` clears the future so it can be reused for the next operation.
 
-**State** -- packed `uint64_t`: `{waiter:62, multipleWait:1, isSet:1}`. The
-`waiter` field holds a `Fiber*` (normal wait) or a `MultipleWaitState*`
-(multiple wait). The `multipleWait` bit distinguishes the two cases in
-`signal()`.
+**State** -- packed `uint64_t`: `{waiter:61, multipleWait:1, hasCallback:1, isSet:1}`.
+The `waiter` field holds a `Fiber*` (normal wait), a `MultipleWaitState*`
+(multiple wait), or a `SubscribeCallback*` (subscribe). The `multipleWait`
+and `hasCallback` bits select the dispatch path in `signal()`; only one is
+ever set on a given future.
 
 **suspendCallback race** -- the waiter pointer is installed inside
 `suspendCallback`, which runs after the fiber is parked. If `signal()` arrives

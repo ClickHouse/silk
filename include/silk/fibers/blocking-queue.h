@@ -3,7 +3,6 @@
 #include <silk/fibers/futex.h>
 #include <silk/util/bounded-queue.h>
 
-#include <atomic>
 #include <cerrno>
 #include <cstdint>
 
@@ -32,7 +31,7 @@ public:
      */
     [[nodiscard]] int enqueue(T value) noexcept
     {
-        while (!stopping.load(std::memory_order_relaxed))
+        while (!spaceAvailable.stopped())
         {
             uint64_t token = spaceAvailable.get();
             if (queue.enqueue(value))
@@ -40,12 +39,14 @@ public:
                 itemAvailable.post();
                 return 0;
             }
-            if (stopping.load(std::memory_order_relaxed))
+
+            int r = spaceAvailable.wait(token + 1);
+            if (r)
             {
-                break;
+                return r;
             }
-            spaceAvailable.wait(token + 1);
         }
+
         return ECANCELED;
     }
 
@@ -55,7 +56,7 @@ public:
      */
     [[nodiscard]] int dequeue(T * value) noexcept
     {
-        while (!stopping.load(std::memory_order_relaxed))
+        while (!itemAvailable.stopped())
         {
             uint64_t token = itemAvailable.get();
             if (queue.dequeue(value))
@@ -63,19 +64,21 @@ public:
                 spaceAvailable.post();
                 return 0;
             }
-            if (stopping.load(std::memory_order_relaxed))
+
+            int r = itemAvailable.wait(token + 1);
+            if (r)
             {
-                break;
+                return r;
             }
-            itemAvailable.wait(token + 1);
         }
+
         return ECANCELED;
     }
 
-    /** Append a value without suspending. Returns false if the queue is full. */
+    /** Append a value without suspending. Returns false if the queue is full or torn down. */
     [[nodiscard]] bool tryEnqueue(T value) noexcept
     {
-        if (!stopping.load(std::memory_order_relaxed) && queue.enqueue(value))
+        if (!spaceAvailable.stopped() && queue.enqueue(value))
         {
             itemAvailable.post();
             return true;
@@ -83,10 +86,10 @@ public:
         return false;
     }
 
-    /** Write the head value into @p value without suspending. Returns false if empty. */
+    /** Write the head value into @p value without suspending. Returns false if empty or torn down. */
     [[nodiscard]] bool tryDequeue(T * value) noexcept
     {
-        if (!stopping.load(std::memory_order_relaxed) && queue.dequeue(value))
+        if (!itemAvailable.stopped() && queue.dequeue(value))
         {
             spaceAvailable.post();
             return true;
@@ -97,16 +100,14 @@ public:
     /** Unblock all current and future enqueue/dequeue callers with ECANCELED. */
     void teardown() noexcept
     {
-        stopping.store(true, std::memory_order_relaxed);
-        spaceAvailable.post();
-        itemAvailable.post();
+        spaceAvailable.stop();
+        itemAvailable.stop();
     }
 
 private:
     BoundedQueue<T> queue;
     FiberFutex spaceAvailable;
     FiberFutex itemAvailable;
-    std::atomic<bool> stopping{};
 };
 
 } // namespace silk
