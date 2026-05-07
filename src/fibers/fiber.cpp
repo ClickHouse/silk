@@ -122,7 +122,7 @@ public:
     Fiber(bool isProxyFiber = false) noexcept;
     ~Fiber() noexcept;
 
-    bool initialize(FiberMain * fiberMain, ParametersDtor * parametersDtor, FiberFuture * waitingFuture) noexcept;
+    bool initialize(uint64_t fiberId, FiberMain * fiberMain, ParametersDtor * parametersDtor, FiberFuture * waitingFuture) noexcept;
     void deinitialize() noexcept;
 
     void switchToFiberContext() noexcept;
@@ -174,6 +174,9 @@ public:
 
         // Node ready for the next enqueue to the shared ready queue.
         QueueBase::QueueNode * reservedNode = nullptr;
+
+        // Fiber identity packed as [category:8 | cpu:8 | serial:48].
+        uint64_t fiberId = 0;
     };
 
     // Cache line 1: context-switch state + per-fiber-once start/stop state.
@@ -272,7 +275,7 @@ Fiber::~Fiber() noexcept
     }
 }
 
-bool Fiber::initialize(FiberMain * fiberMain_, ParametersDtor * parametersDtor_, FiberFuture * waitingFuture_) noexcept
+bool Fiber::initialize(uint64_t fiberId_, FiberMain * fiberMain_, ParametersDtor * parametersDtor_, FiberFuture * waitingFuture_) noexcept
 {
     state.store(FiberState::SUSPENDED, std::memory_order_relaxed);
 
@@ -281,6 +284,7 @@ bool Fiber::initialize(FiberMain * fiberMain_, ParametersDtor * parametersDtor_,
     suspendedProcessorNumber = MAX_PROCESSOR_NUMBER;
     suspendCallback = nullptr;
     suspendContext = nullptr;
+    fiberId = fiberId_;
     result = 0;
     waitingFuture = waitingFuture_;
 
@@ -595,6 +599,13 @@ struct FiberScheduler::ProcessorState
         // Must be a member: the SQPOLL thread reads the pointer from the SQE
         // asynchronously after enqueueWakeup() returns.
         __kernel_timespec wakeupTs{};
+
+        // Per-CPU monotonic counter feeding the serial bits of Fiber::fiberId.
+        // Initialized to 1 so the first allocated fiber (cpu=0, serial=0) does
+        // not collide with the all-zero sentinel that getCurrentFiberId returns
+        // for "no fiber". Incremented relaxed; uniqueness across the (cpu, serial)
+        // pair holds because each CPU advances only its own counter.
+        std::atomic<uint64_t> fiberSerial{1};
     };
 };
 
@@ -1060,6 +1071,11 @@ Fiber * FiberScheduler::getCurrentFiber() noexcept
     return proxyFiber.get();
 }
 
+uint64_t FiberScheduler::getCurrentFiberId() noexcept
+{
+    return threadFiber ? threadFiber->fiberId : 0;
+}
+
 bool FiberScheduler::isFiberRunning(Fiber * fiber) noexcept
 {
     return fiber->state.load(std::memory_order_acquire) == FiberState::RUNNING;
@@ -1070,12 +1086,20 @@ void * FiberScheduler::getFiberParameters(Fiber * fiber) noexcept
     return fiber->parameters;
 }
 
-Fiber * FiberScheduler::allocateFiber(FiberMain * fiberMain, ParametersDtor * parametersDtor, FiberFuture * future) noexcept
+Fiber *
+FiberScheduler::allocateFiber(FiberMain * fiberMain, ParametersDtor * parametersDtor, uint8_t category, FiberFuture * future) noexcept
 {
     Fiber * fiber = scheduler->fiberPool.allocate();
     if (fiber)
     {
-        if (fiber->initialize(fiberMain, parametersDtor, future))
+        uint32_t cpu = getCurrentProcessor();
+        ASSERT_DEBUG(cpu < 256, "FiberId reserves only 8 bits for cpu index");
+
+        ProcessorState * processor = &scheduler->processorState[cpu];
+        uint64_t serial = processor->fiberSerial.fetch_add(1, std::memory_order_relaxed);
+
+        uint64_t fiberId = (uint64_t(category) << 56) | (uint64_t(cpu) << 48) | (serial & ((uint64_t(1) << 48) - 1));
+        if (fiber->initialize(fiberId, fiberMain, parametersDtor, future))
         {
             Perf::getSimpleCounter(simpleCounters[FIBER_STARTED]).increment();
             return fiber;

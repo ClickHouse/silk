@@ -62,9 +62,24 @@ public:
     template <typename T>
     [[nodiscard]] static int run(int (*fiberMain)(T *) noexcept, T && parameters, FiberFuture * future) noexcept
     {
+        return run(fiberMain, std::forward<T>(parameters), 0, future);
+    }
+
+    /**
+     * Start a fiber whose result will be delivered to a FiberFuture and stamp
+     * the fiber's identity with @p category (high 8 bits of getCurrentFiberId).
+     * The runtime treats the category as opaque; profilers and tracers use it
+     * to group samples by fiber role.
+     */
+    template <typename T>
+    [[nodiscard]] static int run(int (*fiberMain)(T *) noexcept, T && parameters, uint8_t category, FiberFuture * future) noexcept
+    {
         static_assert(sizeof(T) <= FIBER_PARAMETERS_SIZE);
         Fiber * fiber = allocateFiber(
-            reinterpret_cast<FiberMain *>(fiberMain), std::is_trivially_destructible_v<T> ? nullptr : destroyParameters<T>, future);
+            reinterpret_cast<FiberMain *>(fiberMain),
+            std::is_trivially_destructible_v<T> ? nullptr : destroyParameters<T>,
+            category,
+            future);
         if (fiber)
         {
             std::construct_at(static_cast<T *>(getFiberParameters(fiber)), std::forward<T>(parameters));
@@ -84,10 +99,10 @@ public:
      * @return           The fiber's integer result code.
      */
     template <typename T>
-    static int run(int (*fiberMain)(T *) noexcept, T && parameters) noexcept
+    static int run(int (*fiberMain)(T *) noexcept, T && parameters, uint8_t category = 0) noexcept
     {
         FiberFuture future;
-        int r = run(fiberMain, std::forward<T>(parameters), &future);
+        int r = run(fiberMain, std::forward<T>(parameters), category, &future);
         return r ? r : future.wait();
     }
 
@@ -96,6 +111,21 @@ public:
      * Valid from any context, including non-fiber threads.
      */
     static Fiber * getCurrentFiber() noexcept;
+
+    /**
+     * Return the current fiber's identity, or 0 if the calling thread is not
+     * currently inside a fiber's context (e.g. proxy fiber thread, or scheduler
+     * thread between fibers).
+     *
+     * Identity is packed as [category:8 | cpu:8 | serial:48]:
+     *   category: byte passed to run(); the runtime treats it as opaque.
+     *   cpu:      CPU on which the fiber's id was minted at allocation time.
+     *   serial:   per-CPU monotonic counter, fresh on every Fiber init/reuse.
+     *
+     * Profilers and tracers can use the id as a stack-key prefix to group
+     * samples by fiber rather than by OS thread.
+     */
+    static uint64_t getCurrentFiberId() noexcept;
 
     /**
      * Return true if fiber is currently running.
@@ -370,7 +400,7 @@ private:
 
     static void buildStealCandidates() noexcept;
     static void * getFiberParameters(Fiber * fiber) noexcept;
-    static Fiber * allocateFiber(FiberMain * fiberMain, ParametersDtor * parametersDtor, FiberFuture * future) noexcept;
+    static Fiber * allocateFiber(FiberMain * fiberMain, ParametersDtor * parametersDtor, uint8_t category, FiberFuture * future) noexcept;
     static void freeFiber(Fiber * fiber) noexcept;
     static void enqueueReady(Fiber * fiber) noexcept;
     static void yieldSuspendCallback(Fiber * fiber, void * context) noexcept;

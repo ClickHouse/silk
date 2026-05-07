@@ -128,6 +128,94 @@ TEST(Fiber, getCurrent)
     ASSERT_EQ(r, 0);
 }
 
+// getCurrentFiberId returns 0 outside a fiber context (proxy fiber thread).
+TEST(Fiber, getCurrentFiberIdOutsideFiber)
+{
+    EXPECT_EQ(FiberScheduler::getCurrentFiberId(), 0u);
+}
+
+// getCurrentFiberId returns a non-zero id inside a fiber, encoding cpu+serial.
+TEST(Fiber, getCurrentFiberIdInsideFiber)
+{
+    struct Params
+    {
+        static int fiberMain(Params * p) noexcept
+        {
+            UNUSED(p);
+            uint64_t id = FiberScheduler::getCurrentFiberId();
+            // serial is allocated monotonically per cpu; cpu byte is the
+            // allocating CPU. Both serial and cpu must be representable.
+            uint8_t category = static_cast<uint8_t>(id >> 56);
+            EXPECT_EQ(category, 0u) << "category byte starts at 0";
+            return id != 0 ? 0 : 1;
+        }
+    };
+
+    int r = FiberScheduler::run(Params::fiberMain, {});
+    ASSERT_EQ(r, 0);
+}
+
+// Two concurrent fibers must observe distinct fiber ids -- the per-CPU serial
+// counter increments on every allocation and is never reused.
+TEST(Fiber, fiberIdIsUniquePerInvocation)
+{
+    static constexpr int N = 64;
+
+    struct Params
+    {
+        std::atomic<uint64_t> * out;
+        int index;
+
+        static int fiberMain(Params * p) noexcept
+        {
+            p->out[p->index].store(FiberScheduler::getCurrentFiberId(), std::memory_order_relaxed);
+            return 0;
+        }
+    };
+
+    std::atomic<uint64_t> ids[N];
+    FiberFuture futures[N];
+    for (int i = 0; i < N; ++i)
+    {
+        ids[i].store(0, std::memory_order_relaxed);
+        int r = FiberScheduler::run(Params::fiberMain, {ids, i}, &futures[i]);
+        ASSERT_FALSE(r);
+    }
+    for (int i = 0; i < N; ++i)
+    {
+        futures[i].wait();
+    }
+
+    std::set<uint64_t> unique;
+    for (int i = 0; i < N; ++i)
+    {
+        uint64_t id = ids[i].load(std::memory_order_relaxed);
+        ASSERT_NE(id, 0u);
+        EXPECT_TRUE(unique.insert(id).second) << "fiber id " << id << " appeared twice";
+    }
+}
+
+// run() with explicit category stamps the byte into the high 8 bits of fiberId.
+TEST(Fiber, runWithCategoryStampsUpperByte)
+{
+    struct Params
+    {
+        uint64_t * out;
+
+        static int fiberMain(Params * p) noexcept
+        {
+            *p->out = FiberScheduler::getCurrentFiberId();
+            return 0;
+        }
+    };
+
+    uint64_t id = 0;
+    int r = FiberScheduler::run(Params::fiberMain, {&id}, uint8_t{0xAB});
+    ASSERT_EQ(r, 0);
+    EXPECT_EQ(id >> 56, 0xABu);
+    EXPECT_NE(id & ((uint64_t(1) << 56) - 1), 0u) << "cpu+serial must be non-zero";
+}
+
 // Async IO from a non-fiber thread (proxy fiber): enqueueIo must call
 // submitIo immediately since there is no runFiber to flush the SQE.
 TEST(Fiber, asyncIoFromThread)
