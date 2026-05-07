@@ -384,7 +384,7 @@ private:
     };
 
     //
-    // silk::Fiber main functions.
+    // Fiber main functions.
     //
 
     struct AcceptFiberParams
@@ -558,7 +558,7 @@ private:
     };
 
     //
-    // silk::Fiber main functions.
+    // Fiber main functions.
     //
 
     struct ClientFiberParams

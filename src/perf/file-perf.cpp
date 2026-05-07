@@ -167,7 +167,7 @@ private:
     void submit(Job * job, Slot * slot);
 
     //
-    // silk::Fiber main functions.
+    // Fiber main functions.
     //
 
     struct WorkerFiberParams

@@ -3,8 +3,10 @@
 
 #include <silk/fibers/fiber.h>
 #include <silk/fibers/future.h>
+#include <silk/fibers/mutex.h>
 #include <silk/util/assert.h>
 #include <silk/util/init.h>
+#include <silk/util/list.h>
 #include <silk/util/logger.h>
 #include <silk/util/perf.h>
 #include <silk/util/platform.h>
@@ -12,11 +14,21 @@
 
 #include <Poco/Net/HTTPClientSession.h>
 #include <Poco/Net/HTTPRequest.h>
+#include <Poco/Net/HTTPRequestHandler.h>
+#include <Poco/Net/HTTPRequestHandlerFactory.h>
 #include <Poco/Net/HTTPResponse.h>
+#include <Poco/Net/HTTPServer.h>
+#include <Poco/Net/HTTPServerConnection.h>
+#include <Poco/Net/HTTPServerParams.h>
+#include <Poco/Net/HTTPServerRequest.h>
+#include <Poco/Net/HTTPServerResponse.h>
 #include <Poco/Net/NetException.h>
+#include <Poco/Net/ServerSocket.h>
+#include <Poco/Net/StreamSocket.h>
 #include <boost/program_options.hpp>
 
 #include <atomic>
+#include <chrono>
 #include <cmath>
 #include <csignal>
 #include <cstdint>
@@ -30,12 +42,10 @@
 #include <thread>
 #include <vector>
 
-#include <poll.h>
 #include <pthread.h>
-#include <unistd.h>
 
 //
-// Benchmark
+// Client
 //
 
 struct ClientConfig
@@ -74,7 +84,7 @@ private:
     void runLoop(Connection * connection) noexcept;
 
     //
-    // silk::Fiber main functions.
+    // Fiber main functions.
     //
 
     struct FiberParams
@@ -139,13 +149,13 @@ void Client::stop()
     {
         try
         {
-            conn.session->abort();
+            conn.session->socket().shutdown();
         }
         catch (const Poco::Exception & e)
         {
             if (!isExpectedShutdown(e.code()))
             {
-                LOG_ERROR("abort failed: {}", e.displayText());
+                LOG_ERROR("shutdown failed: {}", e.displayText());
             }
         }
     }
@@ -325,6 +335,365 @@ static void runClient(int argc, char ** argv)
     silk::destroy();
 }
 
+//
+// Server
+//
+
+struct ServerConfig
+{
+    uint16_t port = 8080;
+    uint32_t maxQueued = 0;
+    uint64_t delayNs = 0;
+    bool useThreads = false;
+};
+
+struct EchoHandlerConfig
+{
+    uint64_t delayNs = 0;
+    bool fiberSleep = false;
+};
+
+class EchoHandler final : public Poco::Net::HTTPRequestHandler
+{
+public:
+    explicit EchoHandler(const EchoHandlerConfig & cfg)
+        : cfg(cfg)
+    {
+    }
+
+    void handleRequest(Poco::Net::HTTPServerRequest & request, Poco::Net::HTTPServerResponse & response) override
+    {
+        UNUSED(request);
+
+        if (cfg.delayNs)
+        {
+            if (cfg.fiberSleep)
+            {
+                silk::FiberScheduler::sleep(cfg.delayNs);
+            }
+            else
+            {
+                std::this_thread::sleep_for(std::chrono::nanoseconds(cfg.delayNs));
+            }
+        }
+
+        response.setStatus(Poco::Net::HTTPResponse::HTTP_OK);
+        response.setContentLength(0);
+        response.send();
+    }
+
+private:
+    const EchoHandlerConfig & cfg;
+};
+
+class EchoHandlerFactory final : public Poco::Net::HTTPRequestHandlerFactory
+{
+public:
+    explicit EchoHandlerFactory(const EchoHandlerConfig & cfg)
+        : cfg(cfg)
+    {
+    }
+
+    Poco::Net::HTTPRequestHandler * createRequestHandler(const Poco::Net::HTTPServerRequest & request) override
+    {
+        UNUSED(request);
+        return new EchoHandler(cfg);
+    }
+
+private:
+    EchoHandlerConfig cfg;
+};
+
+/**
+ * One accept fiber, one fiber per connection.
+ *
+ * Per-connection logic is delegated to Poco::Net::HTTPServerConnection over a
+ * FiberSocketImpl-backed StreamSocket so all read/write I/O suspends fibers
+ * instead of blocking threads.
+ */
+class FiberHTTPServer
+{
+public:
+    FiberHTTPServer(Poco::Net::HTTPRequestHandlerFactory::Ptr factory, FiberServerSocket socket, Poco::Net::HTTPServerParams::Ptr params)
+        : factory(std::move(factory))
+        , params(std::move(params))
+        , socket(std::move(socket))
+    {
+    }
+
+    void start();
+    void stop();
+
+private:
+    struct Conn
+    {
+        silk::ListEntry listEntry;
+        Poco::Net::StreamSocket socket;
+        silk::FiberFuture future;
+    };
+
+    //
+    // Fiber main functions.
+    //
+
+    struct AcceptFiberParams
+    {
+        FiberHTTPServer * server;
+    };
+    static int acceptFiberMain(AcceptFiberParams * params) noexcept
+    {
+        params->server->acceptLoop();
+        return 0;
+    }
+
+    struct ConnFiberParams
+    {
+        FiberHTTPServer * server;
+        Poco::Net::StreamSocket socket;
+    };
+    static int connFiberMain(ConnFiberParams * params) noexcept
+    {
+        params->server->connectionLoop(params->socket);
+        return 0;
+    }
+
+    //
+    // Helpers.
+    //
+
+    void acceptLoop() noexcept;
+    void connectionLoop(Poco::Net::StreamSocket socket) noexcept;
+
+    //
+    // State.
+    //
+
+    Poco::Net::HTTPRequestHandlerFactory::Ptr factory;
+    Poco::Net::HTTPServerParams::Ptr params;
+
+    FiberServerSocket socket;
+    std::atomic<bool> stopping{false};
+    silk::FiberFuture acceptFuture;
+
+    silk::FiberMutex connsMutex;
+    silk::List<Conn, &Conn::listEntry> conns;
+};
+
+void FiberHTTPServer::start()
+{
+    int r = silk::FiberScheduler::run(acceptFiberMain, AcceptFiberParams{this}, &acceptFuture);
+    ASSERT(r == 0, "spawn accept fiber: {}", std::strerror(r));
+}
+
+void FiberHTTPServer::stop()
+{
+    stopping.store(true, std::memory_order_relaxed);
+
+    // shutdown wakes a pending io_uring poll on the listen socket via POLLHUP;
+    // close() alone is not guaranteed to deliver a CQE to the accept fiber.
+    try
+    {
+        socket.shutdown();
+    }
+    catch (const Poco::Exception & e)
+    {
+        if (!isExpectedShutdown(e.code()))
+        {
+            LOG_ERROR("shutdown failed: {}", e.displayText());
+        }
+    }
+
+    int r = acceptFuture.wait();
+    ASSERT(r == 0, "accept fiber: {}", std::strerror(r));
+
+    socket.close();
+
+    {
+        std::lock_guard lock(connsMutex);
+        for (Conn * c = conns.front(); c; c = conns.next(c))
+        {
+            try
+            {
+                c->socket.shutdown();
+            }
+            catch (const Poco::Exception & e)
+            {
+                if (!isExpectedShutdown(e.code()))
+                {
+                    LOG_ERROR("shutdown failed: {}", e.displayText());
+                }
+            }
+        }
+    }
+
+    while (Conn * c = conns.pop_front())
+    {
+        c->future.wait();
+        delete c;
+    }
+}
+
+void FiberHTTPServer::acceptLoop() noexcept
+{
+    while (!stopping.load(std::memory_order_relaxed))
+    {
+        Poco::Net::StreamSocket clientSocket;
+        try
+        {
+            clientSocket = socket.acceptConnection();
+        }
+        catch (const Poco::Exception & e)
+        {
+            if (!stopping.load(std::memory_order_relaxed) && !isExpectedShutdown(e.code()))
+            {
+                LOG_ERROR("accept failed: {}", e.displayText());
+            }
+            return;
+        }
+
+        Conn * conn = new Conn();
+        conn->socket = clientSocket;
+        {
+            std::lock_guard lock(connsMutex);
+            conns.push_back(conn);
+        }
+
+        int r = silk::FiberScheduler::run(connFiberMain, ConnFiberParams{this, clientSocket}, &conn->future);
+        if (r != 0)
+        {
+            LOG_ERROR("spawn conn fiber: {}", std::strerror(r));
+            {
+                std::lock_guard lock(connsMutex);
+                conns.remove(conn);
+            }
+            delete conn;
+            return;
+        }
+    }
+}
+
+void FiberHTTPServer::connectionLoop(Poco::Net::StreamSocket socket) noexcept
+{
+    try
+    {
+        Poco::Net::HTTPServerConnection conn(socket, params, factory);
+        conn.run();
+    }
+    catch (const Poco::Exception & e)
+    {
+        if (!stopping.load(std::memory_order_relaxed) && !isExpectedShutdown(e.code()))
+        {
+            LOG_ERROR("connection error: {}", e.displayText());
+        }
+    }
+}
+
+/**
+ * Server entry point.
+ */
+static void runServer(int argc, char ** argv)
+{
+    ServerConfig cfg;
+    std::string delayStr = "0";
+    bool verbose = false;
+
+    namespace po = boost::program_options;
+    po::options_description desc("http-perf server options");
+
+    // clang-format off
+    desc.add_options()
+        ("help,h",    "show this help")
+        ("port",      po::value(&cfg.port),       "listen port")
+        ("queued",    po::value(&cfg.maxQueued),  "max queued connections (default: 4 * available CPUs)")
+        ("delay",     po::value(&delayStr),       "per-request response delay (e.g. 5ms, 100us)")
+        ("threads",   po::bool_switch(&cfg.useThreads), "use OS threads instead of fibers")
+        ("verbose,v", po::bool_switch(&verbose),  "enable debug logging")
+        ;
+    // clang-format on
+
+    po::variables_map vm;
+    try
+    {
+        po::store(po::parse_command_line(argc, argv, desc), vm);
+        if (vm.count("help"))
+        {
+            std::cout << "usage: http-perf server [options]\n" << desc << "\n";
+            return;
+        }
+        po::notify(vm);
+        cfg.delayNs = parseDuration(delayStr);
+        if (verbose)
+        {
+            silk::Logger::setLevel(silk::LogLevel::DEBUG);
+        }
+    }
+    catch (const po::error & ex)
+    {
+        std::cerr << "error: " << ex.what() << "\n" << desc << "\n";
+        exit(1);
+    }
+
+    uint32_t numProcessors = silk::getAvailableProcessorCount();
+    if (cfg.maxQueued == 0)
+    {
+        cfg.maxQueued = numProcessors * 4;
+    }
+
+    sigset_t mask = blockSignals();
+
+    silk::initialize();
+    if (!cfg.useThreads)
+    {
+        silk::FiberScheduler::initialize();
+    }
+
+    Poco::Net::HTTPServerParams::Ptr params = new Poco::Net::HTTPServerParams();
+    params->setMaxThreads(static_cast<int>(numProcessors));
+    params->setMaxQueued(static_cast<int>(cfg.maxQueued));
+    params->setKeepAlive(true);
+
+    EchoHandlerConfig handlerCfg{.delayNs = cfg.delayNs, .fiberSleep = !cfg.useThreads};
+    Poco::Net::HTTPRequestHandlerFactory::Ptr factory = new EchoHandlerFactory(handlerCfg);
+
+    LOG_INFO(
+        "starting {} http server on port {}, queued={}, delay={}",
+        cfg.useThreads ? "threaded" : "fiber",
+        cfg.port,
+        cfg.maxQueued,
+        formatDuration(cfg.delayNs));
+
+    if (cfg.useThreads)
+    {
+        Poco::Net::ServerSocket socket(cfg.port);
+        Poco::Net::HTTPServer server(factory, socket, params);
+        server.start();
+
+        int sig = 0;
+        sigwait(&mask, &sig);
+
+        LOG_INFO("stopping http server");
+        server.stopAll();
+    }
+    else
+    {
+        FiberServerSocket socket(cfg.port);
+        FiberHTTPServer server(factory, socket, params);
+        server.start();
+
+        int sig = 0;
+        sigwait(&mask, &sig);
+
+        LOG_INFO("stopping http server");
+        server.stop();
+    }
+
+    if (!cfg.useThreads)
+    {
+        silk::FiberScheduler::destroy();
+    }
+    silk::destroy();
+}
+
 /**
  * Main entry point.
  */
@@ -332,8 +701,8 @@ int main(int argc, char ** argv)
 {
     if (argc < 2)
     {
-        std::cerr << "usage: http-perf <client> [options]\n"
-                  << "       http-perf <client> --help\n";
+        std::cerr << "usage: http-perf <client|server> [options]\n"
+                  << "       http-perf <client|server> --help\n";
         return 1;
     }
 
@@ -342,10 +711,14 @@ int main(int argc, char ** argv)
     {
         runClient(argc - 1, argv + 1);
     }
+    else if (strcmp(subcmd, "server") == 0)
+    {
+        runServer(argc - 1, argv + 1);
+    }
     else
     {
         std::cerr << "unknown subcommand: " << subcmd << "\n"
-                  << "usage: http-perf <client> [options]\n";
+                  << "usage: http-perf <client|server> [options]\n";
         return 1;
     }
     return 0;
