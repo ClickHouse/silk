@@ -118,6 +118,17 @@ static inline uint64_t getTimeNanoseconds() noexcept
     return static_cast<uint64_t>(ts.tv_sec) * 1'000'000'000 + static_cast<uint64_t>(ts.tv_nsec);
 }
 
+/** 64-bit integer hash (Murmur3 fmix64 finalizer). */
+static constexpr uint64_t intHash(uint64_t key) noexcept
+{
+    key ^= key >> 33;
+    key *= 0xff51afd7ed558ccdULL;
+    key ^= key >> 33;
+    key *= 0xc4ceb9fe1a85ec53ULL;
+    key ^= key >> 33;
+    return key;
+}
+
 /**
  * Initialize librseq. Must be called before any rseq critical sections run.
  * Idempotent -- safe to call multiple times.
