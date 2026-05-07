@@ -2,10 +2,10 @@
 
 #include <silk/fibers/fiber.h>
 #include <silk/util/assert.h>
+#include <silk/util/init.h>
 #include <silk/util/logger.h>
 #include <silk/util/perf.h>
 #include <silk/util/platform.h>
-#include <silk/util/queue.h>
 #include <silk/util/tsc.h>
 
 #include <boost/program_options.hpp>
@@ -406,9 +406,7 @@ int main(int argc, char ** argv)
 
     sigset_t mask = blockSignals();
 
-    silk::initRseq();
-    silk::Perf::initialize();
-    silk::QueueBase::initialize();
+    silk::initialize();
     silk::FiberScheduler::initialize();
 
     LOG_INFO(
@@ -445,8 +443,7 @@ int main(int argc, char ** argv)
     printJson(allLat, cfg);
 
     silk::FiberScheduler::destroy();
-    silk::QueueBase::destroy();
-    silk::Perf::destroy();
+    silk::destroy();
 
     ::close(fd);
     return 0;

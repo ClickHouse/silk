@@ -129,10 +129,4 @@ static constexpr uint64_t intHash(uint64_t key) noexcept
     return key;
 }
 
-/**
- * Initialize librseq. Must be called before any rseq critical sections run.
- * Idempotent -- safe to call multiple times.
- */
-void initRseq() noexcept;
-
 } // namespace silk

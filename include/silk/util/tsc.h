@@ -8,7 +8,7 @@ namespace silk
 /**
  * TSC frequency query and cycle/nanosecond conversion.
  *
- * Frequency is queried once via CPUID on first use and cached.
+ * Frequency is queried once via CPUID at initialization and cached.
  * Conversions use fixed-point multiply+shift - no division on the hot path.
  */
 class Tsc
@@ -38,40 +38,23 @@ public:
 #endif
     }
 
+    /**
+     * Query TSC frequency, populate the fixed-point conversion factors, and
+     * assert that the running CPU advertises an invariant TSC. Idempotent.
+     */
+    static void initialize() noexcept;
+
     /** Return the TSC frequency in Hz. */
-    static uint64_t getFrequency() noexcept
-    {
-        if (frequency == 0) [[unlikely]]
-        {
-            init();
-        }
-        return frequency;
-    }
+    static uint64_t getFrequency() noexcept { return frequency; }
 
     /** Convert TSC cycles to nanoseconds. */
-    static uint64_t cyclesToNanoseconds(uint64_t cycles) noexcept
-    {
-        if (nsPerCycleFp == 0) [[unlikely]]
-        {
-            init();
-        }
-        return (cycles * nsPerCycleFp) >> SHIFT;
-    }
+    static uint64_t cyclesToNanoseconds(uint64_t cycles) noexcept { return (cycles * nsPerCycleFp) >> SHIFT; }
 
     /** Convert nanoseconds to TSC cycles. */
-    static uint64_t nanosecondsToCycles(uint64_t ns) noexcept
-    {
-        if (cyclesPerNsFp == 0) [[unlikely]]
-        {
-            init();
-        }
-        return (ns * cyclesPerNsFp) >> SHIFT;
-    }
+    static uint64_t nanosecondsToCycles(uint64_t ns) noexcept { return (ns * cyclesPerNsFp) >> SHIFT; }
 
 private:
     static constexpr uint32_t SHIFT = 20;
-
-    static void init() noexcept;
 
     inline static uint64_t frequency = 0; ///< Hz
     inline static uint64_t nsPerCycleFp = 0; ///< (1 << SHIFT) * 1'000'000'000 / frequency

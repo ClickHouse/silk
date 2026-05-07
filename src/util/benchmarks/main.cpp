@@ -1,13 +1,15 @@
-#include <silk/util/platform.h>
+#include <silk/util/init.h>
 
 #include <benchmark/benchmark.h>
 
 int main(int argc, char ** argv)
 {
-    silk::initRseq();
+    silk::initialize();
 
     benchmark::Initialize(&argc, argv);
     benchmark::RunSpecifiedBenchmarks();
     benchmark::Shutdown();
+
+    silk::destroy();
     return 0;
 }

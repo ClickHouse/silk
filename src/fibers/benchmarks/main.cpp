@@ -1,14 +1,11 @@
 #include <silk/fibers/fiber.h>
-#include <silk/util/perf.h>
-#include <silk/util/queue.h>
+#include <silk/util/init.h>
 
 #include <benchmark/benchmark.h>
 
 int main(int argc, char ** argv)
 {
-    silk::initRseq();
-    silk::Perf::initialize();
-    silk::QueueBase::initialize();
+    silk::initialize();
     silk::FiberScheduler::initialize();
 
     benchmark::Initialize(&argc, argv);
@@ -16,7 +13,6 @@ int main(int argc, char ** argv)
     benchmark::Shutdown();
 
     silk::FiberScheduler::destroy();
-    silk::QueueBase::destroy();
-    silk::Perf::destroy();
+    silk::destroy();
     return 0;
 }

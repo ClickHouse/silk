@@ -7,7 +7,11 @@ namespace silk
 
 void QueueBase::initialize() noexcept
 {
-    ASSERT(!pool);
+    if (pool)
+    {
+        // Skip the second initialization.
+        return;
+    }
 
     pool = new MemoryPool();
     ASSERT(pool);
@@ -15,8 +19,6 @@ void QueueBase::initialize() noexcept
 
 void QueueBase::destroy() noexcept
 {
-    ASSERT(pool);
-
     delete pool;
     pool = nullptr;
 }
