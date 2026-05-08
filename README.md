@@ -19,11 +19,11 @@ A cooperative fiber scheduler for Linux with per-CPU scheduler threads, io_uring
 - Clang 21
 - ccache (optional)
 - Boost (`libboost-dev`, `libboost-context-dev`, `libboost-program-options-dev`)
-- libbpf (`libbpf-dev`) — optional, required only for `src/profiler`; the profiler is silently skipped if absent
+- libelf (`libelf-dev`) — optional, required only for `src/profiler`; the profiler is silently skipped if absent.
 
-GTest, Google Benchmark, libbacktrace, liburing, and librseq are bundled as submodules under `contrib/` and do not need to be installed separately. Poco, the AWS SDK, and jemalloc are built on demand via `--build-poco`, `--build-aws`, and `--build-jemalloc` passed to `configure`.
+GTest, Google Benchmark, libbacktrace, liburing, librseq, libbpf, and bpftool are bundled as submodules under `contrib/` and do not need to be installed separately. Poco, the AWS SDK, and jemalloc are built on demand via `--build-poco`, `--build-aws`, and `--build-jemalloc` passed to `configure`.
 
-Runtime dependencies for optional benchmarks: nginx (for `http-perf`), fio (for `fio-perf`), sockperf (for `sockperf-perf`), and MinIO (for `s3-perf`). MinIO is downloaded automatically to `.tools/` if not in PATH; the others must be installed separately.
+Runtime dependencies for optional benchmarks: nginx (only for `http-perf --nginx`; the default uses an internal Poco-based server built into the `http-perf` binary), fio (for `fio-perf`), sockperf (for `sockperf-perf`), and MinIO (for `s3-perf`). MinIO is downloaded automatically to `.tools/` if not in PATH; the others must be installed separately.
 
 ## Build
 
@@ -204,7 +204,7 @@ sockperf comparison (ping-pong). Same options as `net-perf` (except `--delay`, `
 
 #### `http-perf`
 
-HTTP/1.1 GET benchmark. Uses nginx as the server.
+HTTP/1.1 GET benchmark. Defaults to silk's internal HTTP server (Poco's `HTTPServerConnection` over `FiberSocketImpl`, one fiber per connection); pass `--nginx` to run against nginx instead.
 
 | Option | Default | Description |
 |---|---|---|
@@ -213,14 +213,16 @@ HTTP/1.1 GET benchmark. Uses nginx as the server.
 | `--duration DURATION` | `10` | Measurement duration |
 | `--warmup DURATION` | `2` | Warmup duration |
 | `--connections N [N ...]` | `1000` | Connection counts to sweep |
-| `--delay DURATION` | `0` | Server-side delay injected via nginx lua sleep (e.g. `1ms`, `100us`) |
-| `--threads` | | Use thread-per-connection mode instead of fibers |
+| `--delay DURATION` | `0` | Server-side per-request delay (e.g. `1ms`, `100us`); fiber server uses `silk::FiberScheduler::sleep`, nginx uses lua sleep |
+| `--threads` | | Use thread-per-connection client mode instead of fibers |
+| `--nginx` | | Run client against nginx instead of the internal server |
 | `--flamegraph` | | Profile client and generate flamegraph SVG |
 | `--print-counters` | | Print perf counters after each run |
 
 ```
 ./bb -b release http-perf
 ./bb -b release http-perf --threads
+./bb -b release http-perf --nginx
 ./bb -b release http-perf --delay 5ms
 ./bb -b release http-perf --connections 1 512 1024 2048
 ./bb -b release http-perf --flamegraph
@@ -268,8 +270,9 @@ Run multiple perf benchmarks in one shot.
 | `--net` | Run net-perf |
 | `--net-asio` | Run net-perf-asio |
 | `--sockperf` | Run sockperf comparison |
-| `--http` | Run http-perf (fibers) |
-| `--http-threads` | Run http-perf (threads) |
+| `--http` | Run http-perf (internal server, fiber client) |
+| `--http-threads` | Run http-perf (internal server, thread client) |
+| `--http-nginx` | Run http-perf against nginx |
 | `--s3` | Run s3-perf (fibers) |
 | `--s3-threads` | Run s3-perf (threads) |
 | `--all` | Run everything |

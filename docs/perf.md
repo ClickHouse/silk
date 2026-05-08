@@ -1,7 +1,7 @@
 # Performance Results
 
 Measurements on an AWS instance (32-CPU Intel Xeon Platinum 8488C, Linux 6.17, release build `-O3`).
-Results are reproducible with `./bb -b release perf --file --fio --net --net-asio --http --http-threads --s3 --s3-threads`.
+Results are reproducible with `./bb -b release perf --file --fio --net --net-asio --http --http-threads --http-nginx --s3 --s3-threads`.
 
 ---
 
