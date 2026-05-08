@@ -10,7 +10,23 @@
 #include <time.h>
 #include <unistd.h>
 
-#include <sys/rseq.h>
+/**
+ * On older sysroots we fall back to a minimal in-tree `struct rseq` matching
+ * the kernel UAPI layout (cpu_id_start at offset 0, cpu_id at offset 4) and
+ * alias `__rseq_offset` to librseq's `rseq_offset`, which librseq populates.
+ */
+#if __has_include(<sys/rseq.h>)
+#    include <sys/rseq.h>
+#else
+#    include <stddef.h>
+struct rseq
+{
+    uint32_t cpu_id_start;
+    uint32_t cpu_id;
+};
+extern "C" ptrdiff_t rseq_offset;
+#    define __rseq_offset rseq_offset
+#endif
 
 /** Suppress unused-variable warnings. */
 #define SILK_UNUSED(x) (void)(x)
