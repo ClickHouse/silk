@@ -18,6 +18,7 @@
 #include <aws/core/Aws.h>
 #include <aws/core/auth/AWSCredentials.h>
 #include <aws/core/client/ClientConfiguration.h>
+#include <aws/core/client/DefaultRetryStrategy.h>
 #include <aws/core/http/HttpClient.h>
 #include <aws/core/http/HttpClientFactory.h>
 #include <aws/core/http/HttpRequest.h>
@@ -183,12 +184,16 @@ makeS3Client(const ClientConfig & cfg, std::shared_ptr<Aws::Utils::Threading::Ex
     s3Config.useVirtualAddressing = false;
     s3Config.payloadSigningPolicy = Aws::Client::AWSAuthV4Signer::PayloadSigningPolicy::Never;
     s3Config.executor = std::move(executor);
+    // The bench measures single-attempt latency. With retries enabled the SDK
+    // would re-read slot.body on retry, which conflicts with the slot's reuse
+    // across iterations and would muddy the latency distribution.
+    s3Config.retryStrategy = std::make_shared<Aws::Client::DefaultRetryStrategy>(0L, 0L);
 
     return std::make_unique<Aws::S3::S3Client>(
         creds, std::make_shared<CachingS3EndpointProvider>(cfg.endpointUrl + "/" + cfg.bucket), s3Config);
 }
 
-static void printJson(std::vector<uint64_t> & latNs, const ClientConfig & cfg)
+static void printJson(std::vector<uint64_t> & latNs, const ClientConfig & cfg, uint32_t failedSessions)
 {
     uint64_t total = latNs.size();
     double durationS = static_cast<double>(cfg.durationNs) / 1e9;
@@ -206,6 +211,7 @@ static void printJson(std::vector<uint64_t> & latNs, const ClientConfig & cfg)
     printf("  \"duration_s\": %.3f,\n", durationS);
     printf("  \"total\": %lu,\n", total);
     printf("  \"rps\": %.1f,\n", opsPerSec);
+    printf("  \"errors\": %u,\n", failedSessions);
     printLatencyUs(latNs);
     printCounters();
     printf("}\n");
@@ -463,6 +469,12 @@ public:
 
 /**
  * FiberExecutor - runs SDK async tasks as fibers instead of OS threads.
+ *
+ * Note: SubmitToThread is unbounded -- FiberScheduler::run always succeeds, so
+ * unlike PooledThreadExecutor (which blocks when the pool saturates) this
+ * executor offers no backpressure. The s3-perf bench is bounded externally by
+ * numJobs * ioDepth, so this is harmless here. Code copying this class into
+ * production should add a bound (counting semaphore, slot accounting, etc.).
  */
 class FiberExecutor final : public Aws::Utils::Threading::Executor
 {
@@ -518,6 +530,8 @@ public:
 
     std::vector<uint64_t> collectLatencies();
 
+    uint32_t failedSessions() const;
+
 private:
     struct Slot
     {
@@ -531,6 +545,7 @@ private:
     {
         std::thread thread;
         std::vector<uint64_t> latencies;
+        bool failed = false;
     };
 
     void submit(Slot & slot, uint32_t & count);
@@ -578,6 +593,19 @@ std::vector<uint64_t> S3Bench::collectLatencies()
         all.insert(all.end(), session.latencies.begin(), session.latencies.end());
     }
     return all;
+}
+
+uint32_t S3Bench::failedSessions() const
+{
+    uint32_t count = 0;
+    for (const Session & session : sessions)
+    {
+        if (session.failed)
+        {
+            count++;
+        }
+    }
+    return count;
 }
 
 void S3Bench::submit(Slot & slot, uint32_t & count)
@@ -664,7 +692,12 @@ void S3Bench::runSession(Session * session)
 
         if (slots[head].error)
         {
+            // Fail-fast: a single S3 error terminates the session. With a misconfigured
+            // endpoint or a transient failure every session exits after one bad outcome,
+            // and the run produces no useful latency data. failedSessions exposes the
+            // count so the caller can warn.
             LOG_ERROR("S3 request failed: {}", slots[head].error->GetMessage());
+            session->failed = true;
             head = (head + 1) % cfg.ioDepth;
             break;
         }
@@ -802,8 +835,14 @@ int main(int argc, char ** argv)
     LOG_INFO("stopping benchmark");
     bench.stop();
 
+    uint32_t failedSessions = bench.failedSessions();
+    if (failedSessions > 0)
+    {
+        LOG_WARN("{}/{} sessions exited early due to S3 errors", failedSessions, cfg.numJobs);
+    }
+
     auto latencies = bench.collectLatencies();
-    printJson(latencies, cfg);
+    printJson(latencies, cfg, failedSessions);
 
     s3.reset();
     Aws::ShutdownAPI(sdkOptions);
