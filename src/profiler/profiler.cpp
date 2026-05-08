@@ -11,6 +11,8 @@
 
 #include <unistd.h>
 
+#include <bpf/bpf.h>
+#include <bpf/libbpf.h>
 #include <linux/perf_event.h>
 #include <linux/types.h>
 #include <sys/syscall.h>
@@ -21,8 +23,6 @@ typedef __u16 u16;
 typedef __u32 u32;
 typedef __u64 u64;
 
-#include <bpf/bpf.h>
-#include <bpf/libbpf.h>
 #include <profiler.skel.h>
 
 static int perfEventOpen(perf_event_attr * attr, pid_t pid, int cpu, int groupFd, unsigned long flags)
@@ -71,10 +71,11 @@ static int libbpfPrint(libbpf_print_level level, const char * format, va_list ar
     return 0;
 }
 
-Profiler::Profiler(uint32_t targetTgid, uint32_t sampleHz, bool kernelStacks, bool offcpu) noexcept
+Profiler::Profiler(uint32_t targetTgid, uint32_t sampleHz, bool kernelStacks, bool oncpu, bool offcpu) noexcept
     : targetTgid(targetTgid)
     , sampleHz(sampleHz)
     , kernelStacks(kernelStacks)
+    , oncpu(oncpu)
     , offcpu(offcpu)
 {
 }
@@ -104,6 +105,10 @@ int Profiler::start() noexcept
     skel->rodata->target_tgid = targetTgid;
     skel->rodata->kernel_stacks = kernelStacks ? 1 : 0;
 
+    if (!oncpu)
+    {
+        bpf_program__set_autoload(skel->progs.on_cpu_sample, false);
+    }
     if (!offcpu)
     {
         bpf_program__set_autoload(skel->progs.on_sched_switch, false);
@@ -123,45 +128,48 @@ int Profiler::start() noexcept
         return EINVAL;
     }
 
-    perf_event_attr attr = {};
-    attr.type = PERF_TYPE_SOFTWARE;
-    attr.config = PERF_COUNT_SW_CPU_CLOCK;
-    attr.freq = 1;
-    attr.sample_freq = sampleHz;
-
-    int numCpus = libbpf_num_possible_cpus();
-    for (int cpu = 0; cpu < numCpus; cpu++)
+    if (oncpu)
     {
-        int fd = perfEventOpen(&attr, -1, cpu, -1, 0);
-        if (fd < 0)
+        perf_event_attr attr = {};
+        attr.type = PERF_TYPE_SOFTWARE;
+        attr.config = PERF_COUNT_SW_CPU_CLOCK;
+        attr.freq = 1;
+        attr.sample_freq = sampleHz;
+
+        int numCpus = libbpf_num_possible_cpus();
+        for (int cpu = 0; cpu < numCpus; cpu++)
         {
-            int r = errno;
-            if (r == ENODEV)
+            int fd = perfEventOpen(&attr, -1, cpu, -1, 0);
+            if (fd < 0)
             {
-                // CPU offline
+                int r = errno;
+                if (r == ENODEV)
+                {
+                    // CPU offline
+                    continue;
+                }
+                LOG_WARN("perf_event_open cpu {}: {}", cpu, strerror(r));
                 continue;
             }
-            LOG_WARN("perf_event_open cpu {}: {}", cpu, strerror(r));
-            continue;
+
+            bpf_link * link = bpf_program__attach_perf_event(skel->progs.on_cpu_sample, fd);
+            if (!link)
+            {
+                int r = errno;
+                LOG_WARN("attach perf_event cpu {}: {}", cpu, strerror(r));
+                ::close(fd);
+                continue;
+            }
+
+            perfLinks.push_back(link);
         }
 
-        bpf_link * link = bpf_program__attach_perf_event(skel->progs.on_cpu_sample, fd);
-        if (!link)
+        if (perfLinks.empty())
         {
-            int r = errno;
-            LOG_WARN("attach perf_event cpu {}: {}", cpu, strerror(r));
-            ::close(fd);
-            continue;
+            LOG_ERROR("failed to attach to any CPU");
+            stop();
+            return ENODEV;
         }
-
-        perfLinks.push_back(link);
-    }
-
-    if (perfLinks.empty())
-    {
-        LOG_ERROR("failed to attach to any CPU");
-        stop();
-        return ENODEV;
     }
 
     return 0;
@@ -176,7 +184,7 @@ void Profiler::stop() noexcept
     perfLinks.clear();
 }
 
-void Profiler::collect(Symbolizer * symbolizer)
+void Profiler::emitFoldedStacks(Symbolizer * symbolizer)
 {
     ASSERT(skel);
 
@@ -189,8 +197,8 @@ void Profiler::collect(Symbolizer * symbolizer)
     // Merge both maps into {stack_key → (on_ns, off_ns)}.
     std::unordered_map<uint64_t, std::pair<uint64_t, uint64_t>> merged;
 
-    drainMap(oncpuFd, merged, true, sampleNs);
-    drainMap(offcpuFd, merged, false, 1);
+    drainStacks(oncpuFd, merged, true, sampleNs);
+    drainStacks(offcpuFd, merged, false, 1);
 
     std::string folded;
 
@@ -275,7 +283,7 @@ void Profiler::collect(Symbolizer * symbolizer)
     }
 }
 
-void Profiler::drainMap(int fd, StackMap & merged, bool isOnCpu, uint64_t weightFactor)
+void Profiler::drainStacks(int fd, StackMap & merged, bool isOnCpu, uint64_t weightFactor)
 {
     int numCpus = libbpf_num_possible_cpus();
     std::vector<uint64_t> perCpuValues(numCpus);
@@ -309,7 +317,7 @@ void Profiler::drainMap(int fd, StackMap & merged, bool isOnCpu, uint64_t weight
     } while (bpf_map_get_next_key(fd, &key, &nextKey) == 0);
 }
 
-int Profiler::countFrames(const uint64_t * addrs)
+int Profiler::countFrames(const uint64_t * addrs) noexcept
 {
     int n = 0;
     while (n < MAX_FRAMES && addrs[n])
