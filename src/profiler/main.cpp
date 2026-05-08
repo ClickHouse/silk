@@ -64,11 +64,12 @@ static bool sigwaitFor(const sigset_t & mask, uint64_t ns) noexcept
 
 int main(int argc, char ** argv)
 {
-    uint32_t targetPid;
-    uint32_t sampleHz;
-    uint32_t durationSec;
-    bool kernelStacks;
-    bool offcpu;
+    uint32_t targetPid = 0;
+    uint32_t sampleHz = 99;
+    uint32_t durationSec = 0;
+    bool kernelStacks = false;
+    bool oncpu = false;
+    bool offcpu = false;
     bool verbose = false;
 
     namespace po = boost::program_options;
@@ -78,9 +79,10 @@ int main(int argc, char ** argv)
     desc.add_options()
         ("help,h",                                              "show this help")
         ("pid",           po::value(&targetPid)->required(),         "target process ID")
-        ("hz",            po::value(&sampleHz)->default_value(99),   "on-CPU sampling frequency")
-        ("duration",      po::value(&durationSec)->default_value(0), "run for N seconds (0 = until Ctrl+C)")
+        ("hz",            po::value(&sampleHz)->default_value(sampleHz),   "on-CPU sampling frequency")
+        ("duration",      po::value(&durationSec)->default_value(durationSec), "run for N seconds (0 = until Ctrl+C)")
         ("kernel-stacks", po::bool_switch(&kernelStacks),            "capture kernel stack frames")
+        ("on-cpu",        po::bool_switch(&oncpu),                   "capture on-CPU stack samples")
         ("off-cpu",       po::bool_switch(&offcpu),                  "capture off-CPU blocking time")
         ("verbose,v",     po::bool_switch(&verbose),                 "enable debug logging")
         ;
@@ -104,6 +106,12 @@ int main(int argc, char ** argv)
     catch (const po::error & ex)
     {
         std::cerr << "error: " << ex.what() << "\n" << desc << "\n";
+        return 1;
+    }
+
+    if (!oncpu && !offcpu)
+    {
+        LOG_ERROR("nothing to capture; pass at least one of --on-cpu, --off-cpu");
         return 1;
     }
 
@@ -151,7 +159,7 @@ int main(int argc, char ** argv)
         }
     }
 
-    Profiler profiler(targetPid, sampleHz, kernelStacks, offcpu);
+    Profiler profiler(targetPid, sampleHz, kernelStacks, oncpu, offcpu);
 
     r = profiler.start();
     if (r)
@@ -177,7 +185,7 @@ int main(int argc, char ** argv)
     LOG_INFO("collecting results...");
     try
     {
-        profiler.collect(&symbolizer);
+        profiler.emitFoldedStacks(&symbolizer);
     }
     catch (const std::exception & ex)
     {
