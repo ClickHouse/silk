@@ -2,14 +2,18 @@
 
 #include <silk/util/platform.h>
 
+#include <cstdio>
 #include <cstdlib>
-#include <cstring>
-#include <format>
 #include <sstream>
-#include <string_view>
 
-#include <backtrace.h>
-#include <cxxabi.h>
+#if defined(SILK_USE_LIBBACKTRACE)
+#    include <cstring>
+#    include <format>
+#    include <string_view>
+
+#    include <backtrace.h>
+#    include <cxxabi.h>
+#endif // SILK_USE_LIBBACKTRACE
 
 namespace silk
 {
@@ -18,6 +22,8 @@ static constexpr const char * COLOR_RESET = "\033[0m";
 static constexpr const char * COLOR_RED = "\033[1;31m";
 static constexpr const char * COLOR_YELLOW = "\033[0;33m";
 static constexpr const char * COLOR_GREEN = "\033[0;32m";
+
+#if defined(SILK_USE_LIBBACKTRACE)
 
 static void btCreateErrorCallback(void * data, const char * msg, int err) noexcept
 {
@@ -74,6 +80,8 @@ static void btErrorCallback(void * data, const char * msg, int err) noexcept
     (*ctx->out) << "  backtrace error " << err << ": " << msg << "\n";
 }
 
+#endif // SILK_USE_LIBBACKTRACE
+
 void assertFail(const char * message, const char * file, int line, const char * details) noexcept
 {
     std::ostringstream out;
@@ -84,8 +92,10 @@ void assertFail(const char * message, const char * file, int line, const char * 
     }
     out << COLOR_RESET << "\n";
 
+#if defined(SILK_USE_LIBBACKTRACE)
     Context ctx{&out, 0};
     backtrace_full(btState, 0, btCallback, btErrorCallback, &ctx);
+#endif
 
     std::fputs(out.str().c_str(), stderr);
     std::fflush(stderr);

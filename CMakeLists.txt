@@ -85,12 +85,16 @@ endif()
 
 add_subdirectory(contrib/liburing-cmake)
 add_subdirectory(contrib/librseq-cmake)
-add_subdirectory(contrib/libbacktrace-cmake)
 add_subdirectory(contrib/googletest-cmake)
 add_subdirectory(contrib/benchmark-cmake)
 add_subdirectory(contrib/systemtap-sdt)
 add_subdirectory(contrib/libbpf-cmake)
 add_subdirectory(contrib/bpftool-cmake)
+
+option(BUILD_LIBBACKTRACE "Build libbacktrace (used to symbolize stack traces on SILK_ASSERT failure and by the profiler)" ON)
+if(BUILD_LIBBACKTRACE)
+    add_subdirectory(contrib/libbacktrace-cmake)
+endif()
 
 option(BUILD_POCO "Build Poco library (required by http-perf)" OFF)
 if(BUILD_POCO)
@@ -135,5 +139,8 @@ if(NOT SANITIZER STREQUAL "memory")
     # Boost::context (used by silk) is assembly-level and has no std::string
     # in its ABI, so it works with libc++ despite being a system library.
     add_subdirectory(src/perf)
-    add_subdirectory(src/profiler)
+    if(BUILD_LIBBACKTRACE)
+        # symbolizer.cpp depends directly on <backtrace.h>.
+        add_subdirectory(src/profiler)
+    endif()
 endif()
