@@ -33,9 +33,16 @@
  * Hyper-threaded CPUs may need a special instruction inside spin loops in
  * order to yield to another virtual CPU.
  */
+#if defined(__x86_64__) || defined(__i386__)
 #define CPU_SPINWAIT __asm__ volatile("pause")
-/* 1 if CPU_SPINWAIT is defined, 0 otherwise. */
 #define HAVE_CPU_SPINWAIT 1
+#elif defined(__aarch64__)
+#define CPU_SPINWAIT __asm__ volatile("isb")
+#define HAVE_CPU_SPINWAIT 1
+#else
+/* 1 if CPU_SPINWAIT is defined, 0 otherwise. */
+#define HAVE_CPU_SPINWAIT 0
+#endif
 
 /*
  * Number of significant bits in virtual addresses.  This may be less than the
