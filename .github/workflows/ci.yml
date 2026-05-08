@@ -2,14 +2,14 @@ name: CI
 
 on:
   push:
-    branches: [ main ]
+    branches: [main]
   pull_request:
-    branches: [ main ]
+    branches: [main]
   workflow_dispatch:
 
 jobs:
   fmt:
-    runs-on: [ self-hosted, silk-arm-small-cpu ]
+    runs-on: [self-hosted, silk-arm-small-cpu]
 
     steps:
       - uses: actions/checkout@v5
@@ -26,7 +26,7 @@ jobs:
         run: ./bb fmt --check
 
   test:
-    runs-on: [ self-hosted, "${{ matrix.arch.runner }}" ]
+    runs-on: [self-hosted, "${{ matrix.arch.runner }}"]
 
     strategy:
       fail-fast: false
@@ -68,7 +68,9 @@ jobs:
             contrib/librseq \
             contrib/liburing \
             contrib/googletest \
-            contrib/benchmark
+            contrib/benchmark \
+            contrib/libbpf \
+            contrib/bpftool
 
       - name: Init Poco submodule
         if: matrix.build.name == 'release' || matrix.build.name == 'tsan'
@@ -111,16 +113,15 @@ jobs:
             ccache \
             libboost-context-dev \
             libboost-program-options-dev \
-            libbpf-dev \
             libdouble-conversion-dev \
+            libelf-dev \
             zlib1g-dev
 
       - name: Cache ccache
         uses: actions/cache@v5
         with:
           path: ~/.cache/ccache
-          key: ${{ runner.os }}-ccache-${{ matrix.arch.name }}-${{ matrix.build.name
-            }}-${{ github.sha }}
+          key: ${{ runner.os }}-ccache-${{ matrix.arch.name }}-${{ matrix.build.name }}-${{ github.sha }}
           restore-keys: |
             ${{ runner.os }}-ccache-${{ matrix.arch.name }}-${{ matrix.build.name }}-
 
@@ -149,7 +150,7 @@ jobs:
   pages:
     needs: test
     if: github.ref == 'refs/heads/main'
-    runs-on: [ self-hosted, silk-amd-small-cpu ]
+    runs-on: [self-hosted, silk-amd-small-cpu]
 
     permissions:
       pages: write

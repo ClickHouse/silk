@@ -89,6 +89,8 @@ add_subdirectory(contrib/libbacktrace-cmake)
 add_subdirectory(contrib/googletest-cmake)
 add_subdirectory(contrib/benchmark-cmake)
 add_subdirectory(contrib/systemtap-sdt)
+add_subdirectory(contrib/libbpf-cmake)
+add_subdirectory(contrib/bpftool-cmake)
 
 option(BUILD_POCO "Build Poco library (required by http-perf)" OFF)
 if(BUILD_POCO)
