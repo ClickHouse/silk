@@ -39,7 +39,7 @@ protected:
             for (uint64_t i = 0; i < CAPACITY; ++i)
             {
                 bool b = queue.enqueue(i);
-                ASSERT(b);
+                SILK_ASSERT(b);
             }
         }
     };

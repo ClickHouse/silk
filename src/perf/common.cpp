@@ -55,7 +55,7 @@ bool sigwaitFor(const sigset_t & mask, uint64_t ns) noexcept
         {
             return false;
         }
-        ASSERT(r == EINTR);
+        SILK_ASSERT(r == EINTR);
     }
 }
 

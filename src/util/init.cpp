@@ -19,7 +19,7 @@ namespace silk
 void initialize() noexcept
 {
     int r = rseq_init();
-    ASSERT(r == RSEQ_INIT_OK);
+    SILK_ASSERT(r == RSEQ_INIT_OK);
 
     Tsc::initialize();
     Perf::initialize();

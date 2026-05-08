@@ -34,7 +34,7 @@ BENCHMARK_F(FiberSequencerBench, IncrementUncontended)(benchmark::State & state)
 
     FiberSequencer sequencer;
     int r = FiberScheduler::run(Params::fiberMain, {&state, &sequencer});
-    ASSERT(!r);
+    SILK_ASSERT(!r);
 }
 
 // Measures the fiber-to-fiber round-trip cost: a driver fiber increments and
@@ -87,9 +87,9 @@ BENCHMARK_F(FiberSequencerBench, RoundTrip)(benchmark::State & state)
 
     FiberFuture responder, driver;
     int r = FiberScheduler::run(Responder::fiberMain, {&request, &reply, &stop}, &responder);
-    ASSERT(!r);
+    SILK_ASSERT(!r);
     r = FiberScheduler::run(Driver::fiberMain, {&state, &request, &reply}, &driver);
-    ASSERT(!r);
+    SILK_ASSERT(!r);
 
     driver.wait();
     stop.store(true, std::memory_order_relaxed);

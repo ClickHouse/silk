@@ -119,7 +119,7 @@ int Event::create(Event * out) noexcept
     if (fd < 0)
     {
         int r = errno;
-        LOG_ERROR("eventfd failed: {}", std::strerror(r));
+        SILK_ERROR("eventfd failed: {}", std::strerror(r));
         return r;
     }
     *out = Event(fd);
@@ -133,7 +133,7 @@ int Event::trigger() noexcept
     if (n != sizeof(value))
     {
         int r = errno;
-        LOG_ERROR("write eventfd failed: {}", std::strerror(r));
+        SILK_ERROR("write eventfd failed: {}", std::strerror(r));
         return r;
     }
     return 0;
@@ -205,7 +205,7 @@ int Epoll::create(Epoll * out) noexcept
     if (fd < 0)
     {
         int r = errno;
-        LOG_ERROR("epoll_create1 failed: {}", std::strerror(r));
+        SILK_ERROR("epoll_create1 failed: {}", std::strerror(r));
         return r;
     }
     *out = Epoll(fd);
@@ -221,7 +221,7 @@ int Epoll::add(int fd, uint32_t events, void * ptr) noexcept
     if (r)
     {
         r = errno;
-        LOG_ERROR("epoll_ctl ADD failed: {}", std::strerror(r));
+        SILK_ERROR("epoll_ctl ADD failed: {}", std::strerror(r));
         return r;
     }
     return 0;
@@ -233,7 +233,7 @@ int Epoll::del(int fd) noexcept
     if (r)
     {
         r = errno;
-        LOG_ERROR("epoll_ctl DEL failed: {}", std::strerror(r));
+        SILK_ERROR("epoll_ctl DEL failed: {}", std::strerror(r));
         return r;
     }
     return 0;
@@ -247,7 +247,7 @@ int Epoll::wait(epoll_event * events, int maxEvents, int timeoutMs, int * outCou
         int r = errno;
         if (r != EINTR)
         {
-            LOG_ERROR("epoll_wait failed: {}", std::strerror(r));
+            SILK_ERROR("epoll_wait failed: {}", std::strerror(r));
         }
         return r;
     }
@@ -334,7 +334,7 @@ int TcpConnection::connect(const char * host, uint16_t port, TcpConnection * out
     int r = ::inet_pton(AF_INET, host, &addr.sin_addr);
     if (r != 1)
     {
-        LOG_ERROR("inet_pton failed: invalid address {}", host);
+        SILK_ERROR("inet_pton failed: invalid address {}", host);
         return EINVAL;
     }
 
@@ -345,7 +345,7 @@ int TcpConnection::connect(const char * host, uint16_t port, TcpConnection * out
     if (fd < 0)
     {
         r = errno;
-        LOG_ERROR("socket failed: {}", std::strerror(r));
+        SILK_ERROR("socket failed: {}", std::strerror(r));
         return r;
     }
 
@@ -354,7 +354,7 @@ int TcpConnection::connect(const char * host, uint16_t port, TcpConnection * out
     if (r)
     {
         r = errno;
-        LOG_ERROR("setsockopt TCP_NODELAY failed: {}", std::strerror(r));
+        SILK_ERROR("setsockopt TCP_NODELAY failed: {}", std::strerror(r));
         ::close(fd);
         return r;
     }
@@ -363,7 +363,7 @@ int TcpConnection::connect(const char * host, uint16_t port, TcpConnection * out
     if (r)
     {
         r = errno;
-        LOG_ERROR("connect failed: {}", std::strerror(r));
+        SILK_ERROR("connect failed: {}", std::strerror(r));
         ::close(fd);
         return r;
     }
@@ -372,7 +372,7 @@ int TcpConnection::connect(const char * host, uint16_t port, TcpConnection * out
     if (flags < 0)
     {
         r = errno;
-        LOG_ERROR("fcntl F_GETFL failed: {}", std::strerror(r));
+        SILK_ERROR("fcntl F_GETFL failed: {}", std::strerror(r));
         ::close(fd);
         return r;
     }
@@ -381,7 +381,7 @@ int TcpConnection::connect(const char * host, uint16_t port, TcpConnection * out
     if (r)
     {
         r = errno;
-        LOG_ERROR("fcntl F_SETFL O_NONBLOCK failed: {}", std::strerror(r));
+        SILK_ERROR("fcntl F_SETFL O_NONBLOCK failed: {}", std::strerror(r));
         ::close(fd);
         return r;
     }
@@ -405,7 +405,7 @@ int TcpConnection::listen(const char * host, uint16_t port, int backlog, TcpConn
         int r = ::inet_pton(AF_INET, host, &addr.sin_addr);
         if (r != 1)
         {
-            LOG_ERROR("inet_pton failed: invalid address {}", host);
+            SILK_ERROR("inet_pton failed: invalid address {}", host);
             return EINVAL;
         }
     }
@@ -414,7 +414,7 @@ int TcpConnection::listen(const char * host, uint16_t port, int backlog, TcpConn
     if (fd < 0)
     {
         int r = errno;
-        LOG_ERROR("socket failed: {}", std::strerror(r));
+        SILK_ERROR("socket failed: {}", std::strerror(r));
         return r;
     }
 
@@ -423,7 +423,7 @@ int TcpConnection::listen(const char * host, uint16_t port, int backlog, TcpConn
     if (r)
     {
         r = errno;
-        LOG_ERROR("setsockopt TCP_NODELAY failed: {}", std::strerror(r));
+        SILK_ERROR("setsockopt TCP_NODELAY failed: {}", std::strerror(r));
         ::close(fd);
         return r;
     }
@@ -432,7 +432,7 @@ int TcpConnection::listen(const char * host, uint16_t port, int backlog, TcpConn
     if (r)
     {
         r = errno;
-        LOG_ERROR("setsockopt SO_REUSEADDR failed: {}", std::strerror(r));
+        SILK_ERROR("setsockopt SO_REUSEADDR failed: {}", std::strerror(r));
         ::close(fd);
         return r;
     }
@@ -444,7 +444,7 @@ int TcpConnection::listen(const char * host, uint16_t port, int backlog, TcpConn
     if (r)
     {
         r = errno;
-        LOG_ERROR("setsockopt SO_REUSEPORT failed: {}", std::strerror(r));
+        SILK_ERROR("setsockopt SO_REUSEPORT failed: {}", std::strerror(r));
         ::close(fd);
         return r;
     }
@@ -453,7 +453,7 @@ int TcpConnection::listen(const char * host, uint16_t port, int backlog, TcpConn
     if (r)
     {
         r = errno;
-        LOG_ERROR("bind failed: {}", std::strerror(r));
+        SILK_ERROR("bind failed: {}", std::strerror(r));
         ::close(fd);
         return r;
     }
@@ -462,7 +462,7 @@ int TcpConnection::listen(const char * host, uint16_t port, int backlog, TcpConn
     if (r)
     {
         r = errno;
-        LOG_ERROR("listen failed: {}", std::strerror(r));
+        SILK_ERROR("listen failed: {}", std::strerror(r));
         ::close(fd);
         return r;
     }
@@ -485,7 +485,7 @@ int TcpConnection::accept(TcpConnection * out) noexcept
     if (r)
     {
         r = errno;
-        LOG_ERROR("setsockopt TCP_NODELAY failed: {}", std::strerror(r));
+        SILK_ERROR("setsockopt TCP_NODELAY failed: {}", std::strerror(r));
         ::close(fd);
         return r;
     }
@@ -603,7 +603,7 @@ Server::Server(const ServerConfig & cfg)
     for (Worker & worker : workers)
     {
         int r = TcpConnection::listen(cfg.host.c_str(), cfg.port, LISTEN_BACKLOG, &worker.listener);
-        ASSERT(!r, "listen failed: {}", std::strerror(r));
+        SILK_ASSERT(!r, "listen failed: {}", std::strerror(r));
     }
 }
 
@@ -617,12 +617,12 @@ Server::~Server()
 
 void Server::start()
 {
-    ASSERT(!started);
+    SILK_ASSERT(!started);
 
     for (Worker & worker : workers)
     {
         int r = Event::create(&worker.stopEvent);
-        ASSERT(!r, "Event::create failed: {}", std::strerror(r));
+        SILK_ASSERT(!r, "Event::create failed: {}", std::strerror(r));
         worker.thread = std::thread(workerMain, WorkerParams{this, &worker});
     }
 
@@ -644,7 +644,7 @@ void Server::stop()
     for (Worker & worker : workers)
     {
         int r = worker.stopEvent.trigger();
-        UNUSED(r);
+        SILK_UNUSED(r);
     }
     for (Worker & worker : workers)
     {
@@ -687,7 +687,7 @@ bool Server::drive(Connection * conn, uint32_t msgSize) noexcept
             }
             if (!isExpectedShutdown(r))
             {
-                LOG_ERROR("read failed: {}", std::strerror(r));
+                SILK_ERROR("read failed: {}", std::strerror(r));
             }
             return false;
         }
@@ -715,7 +715,7 @@ bool Server::drive(Connection * conn, uint32_t msgSize) noexcept
         }
         if (!isExpectedShutdown(r))
         {
-            LOG_ERROR("write failed: {}", std::strerror(r));
+            SILK_ERROR("write failed: {}", std::strerror(r));
         }
         return false;
     }
@@ -728,14 +728,14 @@ void Server::workerMain(WorkerParams params) noexcept
 
     Epoll epoll;
     int r = Epoll::create(&epoll);
-    ASSERT(!r, "Epoll::create failed: {}", std::strerror(r));
+    SILK_ASSERT(!r, "Epoll::create failed: {}", std::strerror(r));
 
     ListenerTag listenerTag;
     StopTag stopTag;
     r = epoll.add(worker->listener.getFd(), EPOLLIN | EPOLLET, &listenerTag);
-    ASSERT(!r);
+    SILK_ASSERT(!r);
     r = epoll.add(worker->stopEvent.getFd(), EPOLLIN, &stopTag);
-    ASSERT(!r);
+    SILK_ASSERT(!r);
 
     std::unordered_set<Connection *> liveConnections;
     epoll_event events[EPOLL_BATCH];
@@ -749,7 +749,7 @@ void Server::workerMain(WorkerParams params) noexcept
         {
             continue;
         }
-        ASSERT(!r, "epoll_wait failed: {}", std::strerror(r));
+        SILK_ASSERT(!r, "epoll_wait failed: {}", std::strerror(r));
 
         for (int i = 0; i < eventCount; ++i)
         {
@@ -776,7 +776,7 @@ void Server::workerMain(WorkerParams params) noexcept
                         }
                         if (!isExpectedShutdown(ar))
                         {
-                            LOG_ERROR("accept failed: {}", std::strerror(ar));
+                            SILK_ERROR("accept failed: {}", std::strerror(ar));
                         }
                         break;
                     }
@@ -784,7 +784,7 @@ void Server::workerMain(WorkerParams params) noexcept
                     conn->buf = std::make_unique<char[]>(server->cfg.msgSize);
                     liveConnections.insert(conn);
                     ar = epoll.add(conn->conn.getFd(), EPOLLIN | EPOLLOUT | EPOLLET | EPOLLRDHUP, conn);
-                    ASSERT(!ar);
+                    SILK_ASSERT(!ar);
                 }
                 continue;
             }
@@ -805,7 +805,7 @@ void Server::workerMain(WorkerParams params) noexcept
             {
                 liveConnections.erase(conn);
                 int dr = epoll.del(conn->conn.getFd());
-                UNUSED(dr);
+                SILK_UNUSED(dr);
                 delete conn;
             }
         }
@@ -814,7 +814,7 @@ void Server::workerMain(WorkerParams params) noexcept
     for (Connection * conn : liveConnections)
     {
         int dr = epoll.del(conn->conn.getFd());
-        UNUSED(dr);
+        SILK_UNUSED(dr);
         delete conn;
     }
 }
@@ -916,12 +916,12 @@ Client::~Client()
 
 void Client::start()
 {
-    ASSERT(!started);
+    SILK_ASSERT(!started);
 
     for (Connection & connection : connections)
     {
         int r = TcpConnection::connect(cfg.host.c_str(), cfg.port, &connection.conn);
-        ASSERT(!r, "connect failed: {}", std::strerror(r));
+        SILK_ASSERT(!r, "connect failed: {}", std::strerror(r));
         connection.buf = std::make_unique<char[]>(cfg.msgSize);
         std::memset(connection.buf.get(), 0xAB, cfg.msgSize);
     }
@@ -934,7 +934,7 @@ void Client::start()
     {
         Worker & worker = workers[i];
         int r = Event::create(&worker.stopEvent);
-        ASSERT(!r, "Event::create failed: {}", std::strerror(r));
+        SILK_ASSERT(!r, "Event::create failed: {}", std::strerror(r));
         worker.connections = connections.data() + connIdx;
         worker.connCount = base + (i < extra ? 1 : 0);
         connIdx += worker.connCount;
@@ -961,7 +961,7 @@ void Client::stop()
     for (Worker & worker : workers)
     {
         int r = worker.stopEvent.trigger();
-        UNUSED(r);
+        SILK_UNUSED(r);
     }
     for (Worker & worker : workers)
     {
@@ -1016,7 +1016,7 @@ bool Client::drive(Connection * conn, uint32_t msgSize, uint64_t warmupEndCycles
             }
             if (!isExpectedShutdown(r))
             {
-                LOG_ERROR("write failed: {}", std::strerror(r));
+                SILK_ERROR("write failed: {}", std::strerror(r));
             }
             return false;
         }
@@ -1054,7 +1054,7 @@ bool Client::drive(Connection * conn, uint32_t msgSize, uint64_t warmupEndCycles
         }
         if (!isExpectedShutdown(r))
         {
-            LOG_ERROR("read failed: {}", std::strerror(r));
+            SILK_ERROR("read failed: {}", std::strerror(r));
         }
         return false;
     }
@@ -1067,11 +1067,11 @@ void Client::workerMain(WorkerParams params) noexcept
 
     Epoll epoll;
     int r = Epoll::create(&epoll);
-    ASSERT(!r, "Epoll::create failed: {}", std::strerror(r));
+    SILK_ASSERT(!r, "Epoll::create failed: {}", std::strerror(r));
 
     StopTag stopTag;
     r = epoll.add(worker->stopEvent.getFd(), EPOLLIN, &stopTag);
-    ASSERT(!r);
+    SILK_ASSERT(!r);
 
     uint64_t startCycles = silk::Tsc::getCycles();
     for (uint32_t i = 0; i < worker->connCount; ++i)
@@ -1079,7 +1079,7 @@ void Client::workerMain(WorkerParams params) noexcept
         Connection * conn = &worker->connections[i];
         conn->startCycles = startCycles;
         r = epoll.add(conn->conn.getFd(), EPOLLIN | EPOLLOUT | EPOLLET | EPOLLRDHUP, conn);
-        ASSERT(!r);
+        SILK_ASSERT(!r);
     }
 
     epoll_event events[EPOLL_BATCH];
@@ -1093,7 +1093,7 @@ void Client::workerMain(WorkerParams params) noexcept
         {
             continue;
         }
-        ASSERT(!r, "epoll_wait failed: {}", std::strerror(r));
+        SILK_ASSERT(!r, "epoll_wait failed: {}", std::strerror(r));
 
         uint64_t warmupEndCycles = client->warmupEndCycles.load(std::memory_order_relaxed);
 
@@ -1121,7 +1121,7 @@ void Client::workerMain(WorkerParams params) noexcept
             if (!keepAlive || eventClosesConnection(mask))
             {
                 int dr = epoll.del(conn->conn.getFd());
-                UNUSED(dr);
+                SILK_UNUSED(dr);
             }
         }
     }
@@ -1207,7 +1207,7 @@ static void runServer(int argc, char ** argv)
     sigset_t mask = blockSignals();
     silk::initialize();
 
-    LOG_INFO("starting server on {}:{} with {} thread(s)", cfg.host, cfg.port, cfg.threads);
+    SILK_INFO("starting server on {}:{} with {} thread(s)", cfg.host, cfg.port, cfg.threads);
 
     Server server(cfg);
     server.start();
@@ -1216,7 +1216,7 @@ static void runServer(int argc, char ** argv)
     sigwait(&mask, &sig);
     pthread_sigmask(SIG_UNBLOCK, &mask, nullptr);
 
-    LOG_INFO("stopping server");
+    SILK_INFO("stopping server");
     server.stop();
 
     silk::destroy();
@@ -1284,7 +1284,7 @@ static void runClient(int argc, char ** argv)
     sigset_t mask = blockSignals();
     silk::initialize();
 
-    LOG_INFO("starting client on {}:{} with {} thread(s) and {} connection(s)", cfg.host, cfg.port, cfg.threads, cfg.numConnections);
+    SILK_INFO("starting client on {}:{} with {} thread(s) and {} connection(s)", cfg.host, cfg.port, cfg.threads, cfg.numConnections);
 
     Client client(cfg);
     client.start();
@@ -1293,19 +1293,19 @@ static void runClient(int argc, char ** argv)
 
     if (cfg.warmupNs > 0)
     {
-        LOG_INFO("warming up for {}...", formatDuration(cfg.warmupNs));
+        SILK_INFO("warming up for {}...", formatDuration(cfg.warmupNs));
         signalled = sigwaitFor(mask, cfg.warmupNs);
     }
 
     if (!signalled)
     {
-        LOG_INFO("measuring for {}...", formatDuration(cfg.durationNs));
+        SILK_INFO("measuring for {}...", formatDuration(cfg.durationNs));
         sigwaitFor(mask, cfg.durationNs);
     }
 
     pthread_sigmask(SIG_UNBLOCK, &mask, nullptr);
 
-    LOG_INFO("stopping client");
+    SILK_INFO("stopping client");
     client.stop();
 
     std::vector<uint64_t> allLat = client.collectLatencies();

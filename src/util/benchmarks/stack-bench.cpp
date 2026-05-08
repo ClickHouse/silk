@@ -64,7 +64,7 @@ BENCHMARK_DEFINE_F(LockFreeStackBench, PushPop)(benchmark::State & state)
     for (auto _ : state)
     {
         Entry * entry = shared->stack.pop();
-        ASSERT(entry);
+        SILK_ASSERT(entry);
 
         shared->stack.push(entry);
     }
@@ -125,7 +125,7 @@ BENCHMARK_DEFINE_F(StackBench, PushPop)(benchmark::State & state)
         std::lock_guard lock(shared->lock);
 
         Entry * entry = shared->stack.pop();
-        ASSERT(entry);
+        SILK_ASSERT(entry);
 
         shared->stack.push(entry);
     }

@@ -253,7 +253,7 @@ Fiber::Fiber(bool isProxyFiber) noexcept
     if (isProxyFiber)
     {
         int r = ::sem_init(&threadSemaphore, 0, 0);
-        ASSERT(!r);
+        SILK_ASSERT(!r);
     }
 }
 
@@ -262,13 +262,13 @@ Fiber::~Fiber() noexcept
     if (isProxyFiber)
     {
         int r = ::sem_destroy(&threadSemaphore);
-        ASSERT(!r);
+        SILK_ASSERT(!r);
     }
 
     if (stack)
     {
         int r = ::munmap(stack, FIBER_STACK_SIZE + 2 * PAGE_SIZE);
-        ASSERT(!r);
+        SILK_ASSERT(!r);
     }
 }
 
@@ -294,10 +294,10 @@ bool Fiber::initialize(FiberMain * fiberMain_, ParametersDtor * parametersDtor_,
         }
 
         int r = ::mprotect(stack, PAGE_SIZE, PROT_NONE);
-        ASSERT(!r);
+        SILK_ASSERT(!r);
 
         r = ::mprotect(static_cast<uint8_t *>(stack) + PAGE_SIZE + FIBER_STACK_SIZE, PAGE_SIZE, PROT_NONE);
-        ASSERT(!r);
+        SILK_ASSERT(!r);
     }
 
 #if defined(__SANITIZE_ADDRESS__)
@@ -320,7 +320,7 @@ bool Fiber::initialize(FiberMain * fiberMain_, ParametersDtor * parametersDtor_,
 
 void Fiber::deinitialize() noexcept
 {
-    ASSERT(!suspendedEntry.is_linked());
+    SILK_ASSERT(!suspendedEntry.is_linked());
 
     if (parametersDtor)
     {
@@ -355,7 +355,7 @@ void Fiber::switchToFiberContext() noexcept
 
 void Fiber::switchToThreadContext(bool final) noexcept
 {
-    UNUSED(final);
+    SILK_UNUSED(final);
 
 #if defined(__SANITIZE_ADDRESS__)
     __sanitizer_start_switch_fiber(final ? nullptr : &asanFakeStack, asanSchedulerStackBottom, asanSchedulerStackSize);
@@ -391,13 +391,13 @@ void Fiber::fiberContextMain(boost::context::detail::transfer_t transfer) noexce
     fiber->result = fiber->fiberMain(fiber->parameters);
     fiber->changeState(FiberState::RUNNING, FiberState::STOPPED);
     fiber->switchToThreadContext(true);
-    ASSERT(false, "unreachable");
+    SILK_ASSERT(false, "unreachable");
 }
 
 void Fiber::changeState(FiberState expectedState, FiberState newState) noexcept
 {
     FiberState prevState = state.exchange(newState, std::memory_order_acq_rel);
-    ASSERT(
+    SILK_ASSERT(
         prevState == expectedState,
         "invalid fiber state: expected={}, actual={}",
         static_cast<int>(expectedState),
@@ -423,7 +423,7 @@ bool Fiber::tryChangeStateToSuspended() noexcept
                 // runFiber will enqueue the fiber after the callback returns.
                 return false;
             default:
-                ASSERT(false, "Unexpected fiber state: {}", static_cast<int>(currentState));
+                SILK_ASSERT(false, "Unexpected fiber state: {}", static_cast<int>(currentState));
         }
     }
 }
@@ -450,7 +450,7 @@ bool Fiber::tryChangeStateToReady() noexcept
                 }
                 break;
             default:
-                ASSERT(false, "Unexpected fiber state: {}", static_cast<int>(currentState));
+                SILK_ASSERT(false, "Unexpected fiber state: {}", static_cast<int>(currentState));
         }
     }
 }
@@ -460,7 +460,7 @@ void Fiber::wakeThread() noexcept
     Perf::getSimpleCounter(simpleCounters[PROXY_FIBER_WAKED]).increment();
 
     int r = ::sem_post(&threadSemaphore);
-    ASSERT(!r);
+    SILK_ASSERT(!r);
 }
 
 void Fiber::parkThread() noexcept
@@ -473,7 +473,7 @@ void Fiber::parkThread() noexcept
         if (r < 0)
         {
             r = errno;
-            ASSERT(r == EINTR);
+            SILK_ASSERT(r == EINTR);
             continue;
         }
         break;
@@ -603,24 +603,24 @@ void FiberScheduler::ProcessorState::initialize(uint32_t cpu) noexcept
     number = cpu;
 
     eventFd = ::eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
-    ASSERT(eventFd >= 0);
+    SILK_ASSERT(eventFd >= 0);
 
     io_uring_params params{};
     int r = ::io_uring_queue_init_params(IO_URING_QUEUE_SIZE, &ring, &params);
-    ASSERT(!r);
+    SILK_ASSERT(!r);
 
-    ASSERT(params.features & IORING_FEAT_NODROP);
+    SILK_ASSERT(params.features & IORING_FEAT_NODROP);
 
     // Submit a persistent poll for the wakeup fd.  IORING_POLL_ADD_MULTI keeps
     // the SQE active indefinitely; each eventfd_write produces one CQE.
     io_uring_sqe * sqe = ::io_uring_get_sqe(&ring);
-    ASSERT(sqe);
+    SILK_ASSERT(sqe);
 
     ::io_uring_prep_poll_multishot(sqe, eventFd, POLLIN);
     ::io_uring_sqe_set_data64(sqe, CQE_TAG_DOORBELL);
 
     r = ::io_uring_submit(&ring);
-    ASSERT(r >= 0);
+    SILK_ASSERT(r >= 0);
 }
 
 void FiberScheduler::ProcessorState::destroy() noexcept
@@ -639,7 +639,7 @@ void FiberScheduler::ProcessorState::wakeThread() noexcept
         Perf::getSimpleCounter(simpleCounters[SCHEDULER_THREAD_WAKED], number).increment();
 
         int r = ::eventfd_write(eventFd, 1);
-        ASSERT(!r);
+        SILK_ASSERT(!r);
     }
 }
 
@@ -670,7 +670,7 @@ void FiberScheduler::ProcessorState::parkThread(uint64_t waitNs, CpuTimer * time
         {
             // io_uring_enter2 returns -errno directly; it does not set errno.
             // ETIME: timeout expired with no CQE (normal); EINTR: signal interrupted (normal).
-            ASSERT(-r == ETIME || -r == EINTR);
+            SILK_ASSERT(-r == ETIME || -r == EINTR);
         }
 
         timer->reset(simpleCounters[SCHEDULER_SYSTEM_TIME], number);
@@ -804,7 +804,7 @@ void FiberScheduler::ProcessorState::submitIo() noexcept
         TSAN_RELEASE(this);
 
         int r = ::io_uring_submit(&ring);
-        ASSERT(r >= 0);
+        SILK_ASSERT(r >= 0);
 
         Perf::getSimpleCounter(simpleCounters[IO_ENQUEUED], number).increment(count);
     }
@@ -859,13 +859,13 @@ struct FiberScheduler::SchedulerState
 FiberScheduler::SchedulerState::SchedulerState() noexcept
 {
     int r = ::sem_init(&threadSemaphore, 0, 0);
-    ASSERT(!r);
+    SILK_ASSERT(!r);
 }
 
 FiberScheduler::SchedulerState::~SchedulerState() noexcept
 {
     int r = ::sem_destroy(&threadSemaphore);
-    ASSERT(!r);
+    SILK_ASSERT(!r);
 }
 
 void FiberScheduler::SchedulerState::wakeThread() noexcept
@@ -873,7 +873,7 @@ void FiberScheduler::SchedulerState::wakeThread() noexcept
     Perf::getSimpleCounter(simpleCounters[THREAD_WORKER_WAKED]).increment();
 
     int r = ::sem_post(&threadSemaphore);
-    ASSERT(!r);
+    SILK_ASSERT(!r);
 }
 
 void FiberScheduler::SchedulerState::parkThread() noexcept
@@ -886,7 +886,7 @@ void FiberScheduler::SchedulerState::parkThread() noexcept
         if (r < 0)
         {
             r = errno;
-            ASSERT(r == EINTR);
+            SILK_ASSERT(r == EINTR);
             continue;
         }
         break;
@@ -895,14 +895,14 @@ void FiberScheduler::SchedulerState::parkThread() noexcept
 
 void FiberScheduler::initialize() noexcept
 {
-    ASSERT(!scheduler);
+    SILK_ASSERT(!scheduler);
 
     REGISTER_SIMPLE_COUNTERS(&simpleCounters, FIBER_SIMPLE_COUNTERS);
 
     scheduler = new SchedulerState();
 
     scheduler->processorCount = getProcessorCount();
-    ASSERT(
+    SILK_ASSERT(
         scheduler->processorCount < MAX_PROCESSOR_NUMBER,
         "system has {} CPUs; silk caps at {}",
         scheduler->processorCount,
@@ -1010,7 +1010,7 @@ void FiberScheduler::buildStealCandidates() noexcept
 
 void FiberScheduler::destroy() noexcept
 {
-    ASSERT(scheduler);
+    SILK_ASSERT(scheduler);
 
     scheduler->stopping.store(true, std::memory_order_release);
 
@@ -1151,7 +1151,7 @@ void FiberScheduler::yield() noexcept
 
 void FiberScheduler::yieldSuspendCallback(Fiber * fiber, void * context) noexcept
 {
-    UNUSED(context);
+    SILK_UNUSED(context);
     schedule(fiber);
 }
 
@@ -1162,9 +1162,9 @@ void FiberScheduler::enterThreadMode() noexcept
 
 void FiberScheduler::enterThreadModeSuspendCallback(Fiber * fiber, void * context) noexcept
 {
-    UNUSED(context);
+    SILK_UNUSED(context);
 
-    ASSERT(!fiber->inThreadMode);
+    SILK_ASSERT(!fiber->inThreadMode);
     fiber->inThreadMode = true;
 
     schedule(fiber);
@@ -1177,9 +1177,9 @@ void FiberScheduler::exitThreadMode() noexcept
 
 void FiberScheduler::exitThreadModeSuspendCallback(Fiber * fiber, void * context) noexcept
 {
-    UNUSED(context);
+    SILK_UNUSED(context);
 
-    ASSERT(fiber->inThreadMode);
+    SILK_ASSERT(fiber->inThreadMode);
     fiber->inThreadMode = false;
 
     schedule(fiber);
@@ -1211,7 +1211,7 @@ void FiberScheduler::suspend(SuspendCallback * callback, void * context) noexcep
     }
 
     FiberState fiberState = fiber->state.load(std::memory_order_acquire);
-    ASSERT(fiberState == FiberState::RUNNING);
+    SILK_ASSERT(fiberState == FiberState::RUNNING);
 }
 
 void FiberScheduler::enqueueWaiter(uint64_t key, Fiber * fiber) noexcept
@@ -1571,7 +1571,7 @@ bool FiberScheduler::handleCompletionQueue(ProcessorState * processor) noexcept
         // list. Flush them back to the ring so they are processed on the next
         // iteration.
         int r = ::io_uring_get_events(&processor->ring);
-        ASSERT(r >= 0);
+        SILK_ASSERT(r >= 0);
     }
 
     return didWork;
@@ -1711,7 +1711,7 @@ void FiberScheduler::runFiber(Fiber * fiber, CpuTimer * timer) noexcept
         return;
     }
 
-    ASSERT(fiberState == FiberState::STOPPED);
+    SILK_ASSERT(fiberState == FiberState::STOPPED);
 
     if (fiber->waitingFuture)
     {

@@ -174,7 +174,7 @@ bool FiberSequencer::acquireCombiner() noexcept
         }
         else
         {
-            ASSERT(state == PENDING);
+            SILK_ASSERT(state == PENDING);
             return false;
         }
     }
@@ -194,7 +194,7 @@ bool FiberSequencer::releaseCombiner() noexcept
         }
         else
         {
-            ASSERT(state == PENDING);
+            SILK_ASSERT(state == PENDING);
             combinerState.store(BUSY, std::memory_order_relaxed);
             return false;
         }

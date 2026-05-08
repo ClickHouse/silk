@@ -14,7 +14,7 @@ void QueueBase::initialize() noexcept
     }
 
     pool = new MemoryPool();
-    ASSERT(pool);
+    SILK_ASSERT(pool);
 }
 
 void QueueBase::destroy() noexcept
@@ -25,7 +25,7 @@ void QueueBase::destroy() noexcept
 
 QueueBase::QueueBase(QueueNode * dummy) noexcept
 {
-    ASSERT(dummy);
+    SILK_ASSERT(dummy);
 
     dummy->value.store(nullptr, std::memory_order_relaxed);
     dummy->next.store(nullptr, std::memory_order_relaxed);

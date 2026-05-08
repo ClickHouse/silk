@@ -27,7 +27,7 @@ class BoundedQueue
 public:
     explicit BoundedQueue(uint64_t capacity) noexcept
     {
-        ASSERT(capacity >= 2 && (capacity & (capacity - 1)) == 0);
+        SILK_ASSERT(capacity >= 2 && (capacity & (capacity - 1)) == 0);
         mask = capacity - 1;
         slots = std::make_unique<Slot[]>(capacity);
         for (uint64_t i = 0; i < capacity; ++i)

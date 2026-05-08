@@ -18,7 +18,7 @@ enum class LogLevel
 /**
  * Minimalistic thread-safe logger with a global log level filter.
  *
- * Use the LOG_DEBUG / LOG_INFO / LOG_WARN / LOG_ERROR macros for structured
+ * Use the SILK_DEBUG / SILK_INFO / SILK_WARN / SILK_ERROR macros for structured
  * logging with automatic file and line capture. The level check is inlined at
  * the call site so disabled levels have no formatting overhead.
  */
@@ -48,8 +48,8 @@ private:
 } // namespace silk
 
 // clang-format off
-#define LOG_DEBUG(...) do { if (silk::Logger::isEnabled(silk::LogLevel::DEBUG)) silk::Logger::log(silk::LogLevel::DEBUG, __FILE__, __LINE__, __VA_ARGS__); } while (0)
-#define LOG_INFO(...)  do { if (silk::Logger::isEnabled(silk::LogLevel::INFO))  silk::Logger::log(silk::LogLevel::INFO,  __FILE__, __LINE__, __VA_ARGS__); } while (0)
-#define LOG_WARN(...)  do { if (silk::Logger::isEnabled(silk::LogLevel::WARN))  silk::Logger::log(silk::LogLevel::WARN,  __FILE__, __LINE__, __VA_ARGS__); } while (0)
-#define LOG_ERROR(...) do { if (silk::Logger::isEnabled(silk::LogLevel::ERROR)) silk::Logger::log(silk::LogLevel::ERROR, __FILE__, __LINE__, __VA_ARGS__); } while (0)
+#define SILK_DEBUG(...) do { if (silk::Logger::isEnabled(silk::LogLevel::DEBUG)) silk::Logger::log(silk::LogLevel::DEBUG, __FILE__, __LINE__, __VA_ARGS__); } while (0)
+#define SILK_INFO(...)  do { if (silk::Logger::isEnabled(silk::LogLevel::INFO))  silk::Logger::log(silk::LogLevel::INFO,  __FILE__, __LINE__, __VA_ARGS__); } while (0)
+#define SILK_WARN(...)  do { if (silk::Logger::isEnabled(silk::LogLevel::WARN))  silk::Logger::log(silk::LogLevel::WARN,  __FILE__, __LINE__, __VA_ARGS__); } while (0)
+#define SILK_ERROR(...) do { if (silk::Logger::isEnabled(silk::LogLevel::ERROR)) silk::Logger::log(silk::LogLevel::ERROR, __FILE__, __LINE__, __VA_ARGS__); } while (0)
 // clang-format on

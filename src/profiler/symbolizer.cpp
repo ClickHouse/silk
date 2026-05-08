@@ -21,7 +21,7 @@ static int parseMapsFile(const char * path, Callback callback) noexcept
     if (!f)
     {
         int r = errno;
-        LOG_ERROR("open {}: {}", path, ::strerror(r));
+        SILK_ERROR("open {}: {}", path, ::strerror(r));
         return r;
     }
 
@@ -71,7 +71,7 @@ int Symbolizer::readSelfMappings() noexcept
         [this](uint64_t start, uint64_t end, uint64_t fileOffset, const char * mapPath)
         {
             // Record only the first (lowest) executable mapping per path.
-            UNUSED(end);
+            SILK_UNUSED(end);
             selfBase.emplace(mapPath, start - fileOffset);
         });
 }
@@ -82,7 +82,7 @@ int Symbolizer::readKallsyms() noexcept
     if (!f)
     {
         int r = errno;
-        LOG_ERROR("open /proc/kallsyms: {}", ::strerror(r));
+        SILK_ERROR("open /proc/kallsyms: {}", ::strerror(r));
         return r;
     }
 
@@ -172,7 +172,7 @@ const std::string & Symbolizer::resolve(uint64_t addr)
 
         if (!state)
         {
-            LOG_WARN("0x{:x}: no backtrace state for {}", addr, m.path);
+            SILK_WARN("0x{:x}: no backtrace state for {}", addr, m.path);
             break;
         }
 
@@ -232,7 +232,7 @@ const std::string & Symbolizer::resolve(uint64_t addr)
     {
         if (mappingFound)
         {
-            LOG_DEBUG("0x{:x}: in mapping but not symbolized (elfAddr=0x{:x} {})", addr, mappingElfAddr, mappingPath);
+            SILK_DEBUG("0x{:x}: in mapping but not symbolized (elfAddr=0x{:x} {})", addr, mappingElfAddr, mappingPath);
             std::string_view base = mappingPath;
             if (auto slash = base.rfind('/'); slash != std::string_view::npos)
             {
@@ -242,7 +242,7 @@ const std::string & Symbolizer::resolve(uint64_t addr)
         }
         else
         {
-            LOG_DEBUG("0x{:x}: no mapping (library loaded after readMappings?)", addr);
+            SILK_DEBUG("0x{:x}: no mapping (library loaded after readMappings?)", addr);
             result = std::format("0x{:x}", addr);
         }
     }
@@ -253,23 +253,23 @@ const std::string & Symbolizer::resolve(uint64_t addr)
 
 void Symbolizer::backtraceErrorCb(void * data, const char * msg, int errnum)
 {
-    UNUSED(data);
+    SILK_UNUSED(data);
 
     if (errnum)
     {
-        LOG_ERROR("libbacktrace: {} ({})", msg, ::strerror(errnum));
+        SILK_ERROR("libbacktrace: {} ({})", msg, ::strerror(errnum));
     }
     else
     {
-        LOG_ERROR("libbacktrace: {}", msg);
+        SILK_ERROR("libbacktrace: {}", msg);
     }
 }
 
 int Symbolizer::pcinfoCallback(void * data, uintptr_t pc, const char * filename, int lineno, const char * function)
 {
-    UNUSED(pc);
-    UNUSED(filename);
-    UNUSED(lineno);
+    SILK_UNUSED(pc);
+    SILK_UNUSED(filename);
+    SILK_UNUSED(lineno);
 
     SymResult * result = static_cast<SymResult *>(data);
     if (function)
@@ -283,9 +283,9 @@ int Symbolizer::pcinfoCallback(void * data, uintptr_t pc, const char * filename,
 
 void Symbolizer::syminfoCallback(void * data, uintptr_t pc, const char * symname, uintptr_t symval, uintptr_t symsize)
 {
-    UNUSED(pc);
-    UNUSED(symval);
-    UNUSED(symsize);
+    SILK_UNUSED(pc);
+    SILK_UNUSED(symval);
+    SILK_UNUSED(symsize);
 
     SymResult * result = static_cast<SymResult *>(data);
     if (symname)

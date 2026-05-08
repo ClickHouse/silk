@@ -73,9 +73,9 @@ BENCHMARK_F(FiberFutexBench, RoundTrip)(benchmark::State & state)
 
     FiberFuture responder, driver;
     int r = FiberScheduler::run(Responder::fiberMain, {&request, &reply, &stop}, &responder);
-    ASSERT(!r);
+    SILK_ASSERT(!r);
     r = FiberScheduler::run(Driver::fiberMain, {&state, &request, &reply}, &driver);
-    ASSERT(!r);
+    SILK_ASSERT(!r);
 
     driver.wait();
     stop.store(true, std::memory_order_relaxed);

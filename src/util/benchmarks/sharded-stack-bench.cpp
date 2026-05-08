@@ -76,7 +76,7 @@ BENCHMARK_DEFINE_F(ShardedStackBench, PushPop)(benchmark::State & state)
     for (auto _ : state)
     {
         Entry * entry = shared->stack.pop();
-        ASSERT(entry);
+        SILK_ASSERT(entry);
 
         shared->stack.push(entry);
     }

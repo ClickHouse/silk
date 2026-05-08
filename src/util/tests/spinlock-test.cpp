@@ -92,7 +92,7 @@ TEST(SpinWait, returnsTrueWhenPredicateSatisfied)
 
     // Either the spin caught it or the predicate was satisfied — the flag is true.
     EXPECT_TRUE(flag.load());
-    UNUSED(result);
+    SILK_UNUSED(result);
 }
 
 TEST(SpinWait, returnsFalseWhenExhausted)

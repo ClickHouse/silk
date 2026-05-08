@@ -23,7 +23,7 @@ bool FiberMutex::try_lock() noexcept
 
         State newState;
         newState.owner = reinterpret_cast<uint64_t>(FiberScheduler::getCurrentFiber());
-        ASSERT(!newState.hasWaiters);
+        SILK_ASSERT(!newState.hasWaiters);
 
         if (state.compare_exchange_weak(currentState.raw, newState.raw, std::memory_order_acquire, std::memory_order_relaxed))
         {
@@ -40,7 +40,7 @@ void FiberMutex::lock() noexcept
     State currentState;
     currentState.raw = state.load(std::memory_order_relaxed);
 
-    ASSERT_DEBUG(currentState.owner != reinterpret_cast<uint64_t>(FiberScheduler::getCurrentFiber()), "FiberMutex is not reentrant");
+    SILK_ASSERT_DEBUG(currentState.owner != reinterpret_cast<uint64_t>(FiberScheduler::getCurrentFiber()), "FiberMutex is not reentrant");
 
     // Spin briefly before suspending: if the owner is on another CPU and releases
     // within ~500 ns, we avoid the full scheduler wakeup path.
@@ -73,13 +73,13 @@ void FiberMutex::unlock() noexcept
     State currentState;
     currentState.raw = state.load(std::memory_order_relaxed);
 
-    ASSERT_DEBUG(
+    SILK_ASSERT_DEBUG(
         currentState.owner == reinterpret_cast<uint64_t>(FiberScheduler::getCurrentFiber()),
         "FiberMutex::unlock called by non-owner fiber");
 
     for (;;)
     {
-        ASSERT(currentState.raw);
+        SILK_ASSERT(currentState.raw);
 
         if (state.compare_exchange_weak(currentState.raw, 0, std::memory_order_release, std::memory_order_relaxed))
         {
@@ -102,7 +102,7 @@ bool FiberMutex::lockHelper() noexcept
         {
             State newState;
             newState.owner = reinterpret_cast<uint64_t>(FiberScheduler::getCurrentFiber());
-            ASSERT(!newState.hasWaiters);
+            SILK_ASSERT(!newState.hasWaiters);
 
             if (state.compare_exchange_weak(currentState.raw, newState.raw, std::memory_order_acquire, std::memory_order_relaxed))
             {

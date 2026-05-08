@@ -36,7 +36,7 @@ BENCHMARK_F(FiberMutexBench, Uncontended)(benchmark::State & state)
 
     FiberMutex mutex;
     int r = FiberScheduler::run(Params::fiberMain, {&state, &mutex});
-    ASSERT(!r);
+    SILK_ASSERT(!r);
 }
 
 // Measures the contended handoff cost: two fibers compete for the same mutex.
@@ -82,9 +82,9 @@ BENCHMARK_F(FiberMutexBench, Contended)(benchmark::State & state)
 
     FiberFuture contender, driver;
     int r = FiberScheduler::run(Contender::fiberMain, {&mutex, &stop}, &contender);
-    ASSERT(!r);
+    SILK_ASSERT(!r);
     r = FiberScheduler::run(Driver::fiberMain, {&state, &mutex}, &driver);
-    ASSERT(!r);
+    SILK_ASSERT(!r);
 
     driver.wait();
     stop.store(true, std::memory_order_relaxed);
@@ -142,9 +142,9 @@ BENCHMARK_F(FiberMutexBench, RoundTrip)(benchmark::State & state)
     std::atomic<bool> stop{false};
     FiberFuture responder, driver;
     int r = FiberScheduler::run(Responder::fiberMain, {&req, &rep, &stop}, &responder);
-    ASSERT(!r);
+    SILK_ASSERT(!r);
     r = FiberScheduler::run(Driver::fiberMain, {&state, &req, &rep}, &driver);
-    ASSERT(!r);
+    SILK_ASSERT(!r);
 
     driver.wait();
     stop.store(true, std::memory_order_relaxed);
