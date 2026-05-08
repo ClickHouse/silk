@@ -201,7 +201,7 @@ void Client::runLoop(Connection * conn) noexcept
         }
         catch (const Poco::Exception & e)
         {
-            if (!isExpectedShutdown(e.code()))
+            if (!stopping.load(std::memory_order_relaxed) && !isExpectedShutdown(e.code()))
             {
                 LOG_ERROR("HTTP request failed: {}", e.displayText());
             }
