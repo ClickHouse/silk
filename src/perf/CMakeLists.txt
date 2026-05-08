@@ -7,6 +7,9 @@ target_link_libraries(file-perf PRIVATE silk-perf Boost::program_options)
 add_executable(net-perf net-perf.cpp)
 target_link_libraries(net-perf PRIVATE silk-perf Boost::program_options)
 
+add_executable(net-perf-epoll net-perf-epoll.cpp)
+target_link_libraries(net-perf-epoll PRIVATE silk-perf Boost::program_options)
+
 # asio::awaitable requires Boost >= 1.75
 if(Boost_VERSION_STRING VERSION_GREATER_EQUAL "1.75")
     add_executable(net-perf-asio net-perf-asio.cpp)

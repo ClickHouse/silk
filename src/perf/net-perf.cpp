@@ -41,21 +41,29 @@
 class TcpConnection
 {
 public:
+    TcpConnection() noexcept = default;
     explicit TcpConnection(int connFd) noexcept;
     ~TcpConnection() noexcept;
 
-    static int listen(const char * host, uint16_t port, int backlog, TcpConnection ** listener) noexcept;
-    static int connect(const char * host, uint16_t port, TcpConnection ** conn) noexcept;
+    TcpConnection(TcpConnection && other) noexcept;
+    TcpConnection & operator=(TcpConnection && other) noexcept;
+    TcpConnection(const TcpConnection &) = delete;
+    TcpConnection & operator=(const TcpConnection &) = delete;
+
+    static int listen(const char * host, uint16_t port, int backlog, TcpConnection * out) noexcept;
+    static int connect(const char * host, uint16_t port, TcpConnection * out) noexcept;
 
     void close() noexcept;
-    int accept(TcpConnection ** conn) noexcept;
+    int accept(TcpConnection * out) noexcept;
     int write(const void * buf, uint64_t len, uint64_t * bytesWritten = nullptr) noexcept;
     int writeAll(const void * buf, uint64_t len) noexcept;
     int read(void * buf, uint64_t maxLen, uint64_t * bytesRead) noexcept;
     int readAll(void * buf, uint64_t len) noexcept;
 
+    int getFd() const noexcept { return connFd; }
+
 private:
-    int connFd;
+    int connFd = -1;
 };
 
 TcpConnection::TcpConnection(int connFd_) noexcept
@@ -68,8 +76,27 @@ TcpConnection::~TcpConnection() noexcept
     if (connFd >= 0)
     {
         ::close(connFd);
-        connFd = -1;
     }
+}
+
+TcpConnection::TcpConnection(TcpConnection && other) noexcept
+    : connFd(other.connFd)
+{
+    other.connFd = -1;
+}
+
+TcpConnection & TcpConnection::operator=(TcpConnection && other) noexcept
+{
+    if (this != &other)
+    {
+        if (connFd >= 0)
+        {
+            ::close(connFd);
+        }
+        connFd = other.connFd;
+        other.connFd = -1;
+    }
+    return *this;
 }
 
 void TcpConnection::close() noexcept
@@ -80,7 +107,7 @@ void TcpConnection::close() noexcept
     }
 }
 
-int TcpConnection::connect(const char * host, uint16_t port, TcpConnection ** conn) noexcept
+int TcpConnection::connect(const char * host, uint16_t port, TcpConnection * out) noexcept
 {
     sockaddr_in addr{};
     addr.sin_family = AF_INET;
@@ -145,11 +172,11 @@ int TcpConnection::connect(const char * host, uint16_t port, TcpConnection ** co
         return r;
     }
 
-    *conn = new TcpConnection(fd);
+    *out = TcpConnection(fd);
     return 0;
 }
 
-int TcpConnection::listen(const char * host, uint16_t port, int backlog, TcpConnection ** listener) noexcept
+int TcpConnection::listen(const char * host, uint16_t port, int backlog, TcpConnection * out) noexcept
 {
     sockaddr_in addr{};
     addr.sin_family = AF_INET;
@@ -206,11 +233,11 @@ int TcpConnection::listen(const char * host, uint16_t port, int backlog, TcpConn
         return r;
     }
 
-    *listener = new TcpConnection(fd);
+    *out = TcpConnection(fd);
     return 0;
 }
 
-int TcpConnection::accept(TcpConnection ** conn) noexcept
+int TcpConnection::accept(TcpConnection * out) noexcept
 {
     int fd;
     for (;;)
@@ -242,7 +269,7 @@ int TcpConnection::accept(TcpConnection ** conn) noexcept
         return r;
     }
 
-    *conn = new TcpConnection(fd);
+    *out = TcpConnection(fd);
     return 0;
 }
 
@@ -379,7 +406,7 @@ private:
     struct Connection
     {
         silk::ListEntry listEntry;
-        TcpConnection * conn;
+        TcpConnection conn;
         silk::FiberFuture future;
     };
 
@@ -405,7 +432,7 @@ private:
     //
 
     ServerConfig cfg;
-    TcpConnection * listener;
+    TcpConnection listener;
     bool acceptStarted = false;
     silk::FiberFuture acceptFuture;
     silk::List<Connection, &Connection::listEntry> connections;
@@ -418,10 +445,7 @@ Server::Server(const ServerConfig & cfg)
     ASSERT(!r, "listen failed: {}", std::strerror(r));
 }
 
-Server::~Server()
-{
-    delete listener;
-}
+Server::~Server() = default;
 
 void Server::start()
 {
@@ -433,7 +457,7 @@ void Server::start()
 
 void Server::stop()
 {
-    listener->close();
+    listener.close();
 
     if (acceptStarted)
     {
@@ -443,15 +467,11 @@ void Server::stop()
 
     while (Connection * connection = connections.pop_front())
     {
-        if (connection->conn)
-        {
-            connection->conn->close();
-        }
+        connection->conn.close();
 
         int r = connection->future.wait();
         ASSERT(!r);
 
-        delete connection->conn;
         delete connection;
     }
 }
@@ -462,10 +482,11 @@ int Server::acceptFiberMain(AcceptFiberParams * params) noexcept
 
     for (;;)
     {
-        TcpConnection * conn = nullptr;
-        int r = server->listener->accept(&conn);
+        Connection * connection = new Connection();
+        int r = server->listener.accept(&connection->conn);
         if (r)
         {
+            delete connection;
             if (!isExpectedShutdown(r))
             {
                 LOG_ERROR("accept failed: {}", strerror(r));
@@ -473,8 +494,6 @@ int Server::acceptFiberMain(AcceptFiberParams * params) noexcept
             break;
         }
 
-        Connection * connection = new Connection();
-        connection->conn = conn;
         server->connections.push_back(connection);
 
         r = silk::FiberScheduler::run(serverFiberMain, {server, connection}, &connection->future);
@@ -491,13 +510,13 @@ int Server::acceptFiberMain(AcceptFiberParams * params) noexcept
 int Server::serverFiberMain(ServerFiberParams * params) noexcept
 {
     Server * server = params->server;
-    TcpConnection * conn = params->connection->conn;
+    TcpConnection & conn = params->connection->conn;
 
     auto buf = std::make_unique<char[]>(server->cfg.msgSize);
 
     for (;;)
     {
-        int r = conn->readAll(buf.get(), server->cfg.msgSize);
+        int r = conn.readAll(buf.get(), server->cfg.msgSize);
         if (r)
         {
             if (!isExpectedShutdown(r))
@@ -512,7 +531,7 @@ int Server::serverFiberMain(ServerFiberParams * params) noexcept
             silk::FiberScheduler::sleep(server->cfg.delayNs);
         }
 
-        r = conn->writeAll(buf.get(), server->cfg.msgSize);
+        r = conn.writeAll(buf.get(), server->cfg.msgSize);
         if (r)
         {
             if (!isExpectedShutdown(r))
@@ -522,9 +541,6 @@ int Server::serverFiberMain(ServerFiberParams * params) noexcept
             break;
         }
     }
-
-    delete conn;
-    params->connection->conn = nullptr;
 
     return 0;
 }
@@ -552,7 +568,7 @@ public:
 private:
     struct Connection
     {
-        TcpConnection * conn = nullptr;
+        TcpConnection conn;
         silk::FiberFuture future;
         std::vector<uint64_t> latencies;
     };
@@ -605,15 +621,13 @@ void Client::stop()
 {
     for (Connection & connection : connections)
     {
-        connection.conn->close();
+        connection.conn.close();
     }
 
     for (Connection & connection : connections)
     {
         int r = connection.future.wait();
         ASSERT(!r);
-
-        delete connection.conn;
     }
 }
 
@@ -639,7 +653,7 @@ int Client::clientFiberMain(ClientFiberParams * params) noexcept
     {
         uint64_t start = silk::Tsc::getCycles();
 
-        int r = connection->conn->writeAll(buf.get(), client->cfg.msgSize);
+        int r = connection->conn.writeAll(buf.get(), client->cfg.msgSize);
         if (r)
         {
             if (!isExpectedShutdown(r))
@@ -649,7 +663,7 @@ int Client::clientFiberMain(ClientFiberParams * params) noexcept
             break;
         }
 
-        r = connection->conn->readAll(buf.get(), client->cfg.msgSize);
+        r = connection->conn.readAll(buf.get(), client->cfg.msgSize);
         if (r)
         {
             if (!isExpectedShutdown(r))
