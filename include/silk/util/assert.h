@@ -24,7 +24,7 @@ static constexpr bool DebugAssertionsEnabled = false;
 
 // Assertion active in all builds unless DISABLE_ASSERTIONS is defined.
 // Use for invariants that must hold in release -- hard internal contract violations.
-#define ASSERT(condition, ...) \
+#define SILK_ASSERT(condition, ...) \
     do \
     { \
         if (silk::ReleaseAssertionsEnabled && !(condition)) [[unlikely]] \
@@ -35,7 +35,7 @@ static constexpr bool DebugAssertionsEnabled = false;
 
 // Assertion active only in debug builds (DEBUG defined).
 // Use for expensive checks or invariants only relevant during development.
-#define ASSERT_DEBUG(condition, ...) \
+#define SILK_ASSERT_DEBUG(condition, ...) \
     do \
     { \
         if (silk::DebugAssertionsEnabled && !(condition)) [[unlikely]] \

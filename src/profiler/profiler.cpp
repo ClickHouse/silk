@@ -98,7 +98,7 @@ int Profiler::start() noexcept
     skel = profiler_bpf__open();
     if (!skel)
     {
-        LOG_ERROR("failed to open BPF skeleton");
+        SILK_ERROR("failed to open BPF skeleton");
         return EINVAL;
     }
 
@@ -116,14 +116,14 @@ int Profiler::start() noexcept
 
     if (profiler_bpf__load(skel))
     {
-        LOG_ERROR("failed to load BPF programs");
+        SILK_ERROR("failed to load BPF programs");
         stop();
         return EINVAL;
     }
 
     if (profiler_bpf__attach(skel))
     {
-        LOG_ERROR("failed to attach BPF programs");
+        SILK_ERROR("failed to attach BPF programs");
         stop();
         return EINVAL;
     }
@@ -148,7 +148,7 @@ int Profiler::start() noexcept
                     // CPU offline
                     continue;
                 }
-                LOG_WARN("perf_event_open cpu {}: {}", cpu, strerror(r));
+                SILK_WARN("perf_event_open cpu {}: {}", cpu, strerror(r));
                 continue;
             }
 
@@ -156,7 +156,7 @@ int Profiler::start() noexcept
             if (!link)
             {
                 int r = errno;
-                LOG_WARN("attach perf_event cpu {}: {}", cpu, strerror(r));
+                SILK_WARN("attach perf_event cpu {}: {}", cpu, strerror(r));
                 ::close(fd);
                 continue;
             }
@@ -166,7 +166,7 @@ int Profiler::start() noexcept
 
         if (perfLinks.empty())
         {
-            LOG_ERROR("failed to attach to any CPU");
+            SILK_ERROR("failed to attach to any CPU");
             stop();
             return ENODEV;
         }
@@ -186,7 +186,7 @@ void Profiler::stop() noexcept
 
 void Profiler::emitFoldedStacks(Symbolizer * symbolizer)
 {
-    ASSERT(skel);
+    SILK_ASSERT(skel);
 
     int stackFd = bpf_map__fd(skel->maps.stack_map);
     int oncpuFd = bpf_map__fd(skel->maps.oncpu);

@@ -70,7 +70,7 @@ BENCHMARK_DEFINE_F(MemoryPoolBench, AllocFree)(benchmark::State & state)
     for (auto _ : state)
     {
         PoolObject * obj = shared->pool.allocate();
-        ASSERT(obj);
+        SILK_ASSERT(obj);
 
         shared->pool.deallocate(obj);
     }

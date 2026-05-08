@@ -86,7 +86,7 @@ int FiberFuture::suspend() noexcept
 
     State currentState;
     currentState.raw = state.load(std::memory_order_acquire);
-    ASSERT(currentState.isSet);
+    SILK_ASSERT(currentState.isSet);
 
     return error;
 }
@@ -111,7 +111,7 @@ void FiberFuture::suspendCallback(Fiber * fiber, FiberFuture * future) noexcept
 
         State newState;
         newState.waiter = reinterpret_cast<uint64_t>(fiber);
-        ASSERT(!newState.isSet);
+        SILK_ASSERT(!newState.isSet);
 
         if (future->state.compare_exchange_weak(currentState.raw, newState.raw, std::memory_order_acq_rel, std::memory_order_relaxed))
         {
@@ -217,7 +217,7 @@ bool FiberFuture::attachWaiter(MultipleWaitState * waitState) noexcept
         State newState;
         newState.waiter = reinterpret_cast<uint64_t>(waitState);
         newState.multipleWait = 1;
-        ASSERT(!newState.isSet);
+        SILK_ASSERT(!newState.isSet);
 
         if (state.compare_exchange_weak(currentState.raw, newState.raw, std::memory_order_acq_rel, std::memory_order_relaxed))
         {
@@ -239,8 +239,8 @@ bool FiberFuture::detachWaiter(MultipleWaitState * waitState) noexcept
             return false;
         }
 
-        ASSERT(currentState.multipleWait);
-        ASSERT(reinterpret_cast<MultipleWaitState *>(currentState.waiter) == waitState);
+        SILK_ASSERT(currentState.multipleWait);
+        SILK_ASSERT(reinterpret_cast<MultipleWaitState *>(currentState.waiter) == waitState);
 
         if (state.compare_exchange_weak(currentState.raw, 0, std::memory_order_acq_rel, std::memory_order_relaxed))
         {

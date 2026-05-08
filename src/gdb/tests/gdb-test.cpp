@@ -69,7 +69,7 @@ struct WaiterParams
 {
     static int fiberMain(WaiterParams * p) noexcept
     {
-        UNUSED(p);
+        SILK_UNUSED(p);
         g_mutex.lock();
         g_mutex.unlock();
         return 0;
@@ -82,7 +82,7 @@ struct SpinnerParams
 {
     static int fiberMain(SpinnerParams * p) noexcept
     {
-        UNUSED(p);
+        SILK_UNUSED(p);
         for (;;)
         {
             if (g_stop.load(std::memory_order_relaxed))
@@ -112,14 +112,14 @@ int main()
     // Spinner stays RUNNING on a CPU.
     silk::FiberFuture spinner;
     int r = silk::FiberScheduler::run(SpinnerParams::fiberMain, SpinnerParams{}, &spinner);
-    ASSERT(!r);
+    SILK_ASSERT(!r);
 
     // Holder acquires the mutex and suspends on g_release.
     sem_t ready;
     sem_init(&ready, 0, 0);
     silk::FiberFuture holder;
     r = silk::FiberScheduler::run(HolderParams::fiberMain, HolderParams{&ready}, &holder);
-    ASSERT(!r);
+    SILK_ASSERT(!r);
     sem_wait(&ready); // wait until holder holds the mutex
 
     // Waiters block on the held mutex -> SUSPENDED in waiterTable.
@@ -127,7 +127,7 @@ int main()
     for (int i = 0; i < N_WAITERS; ++i)
     {
         r = silk::FiberScheduler::run(WaiterParams::fiberMain, WaiterParams{}, &waiters[i]);
-        ASSERT(!r);
+        SILK_ASSERT(!r);
     }
 
     // Give waiters time to enter the silk::FiberMutex slow path and suspend.

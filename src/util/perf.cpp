@@ -42,7 +42,7 @@ void Perf::destroy() noexcept
 
 int Perf::registerSimpleCounters(CounterGroup * group, const char ** names, uint32_t count) noexcept
 {
-    ASSERT(group->count == 0);
+    SILK_ASSERT(group->count == 0);
 
     uint32_t base = simpleCounterCount.load(std::memory_order_relaxed);
     for (;;)
@@ -96,7 +96,7 @@ uint32_t Perf::getSimpleCounters(uint32_t index, SimpleCounter * counterArray, u
 
 int Perf::registerMemCounters(CounterGroup * group, const char ** names, uint32_t count) noexcept
 {
-    ASSERT(group->count == 0);
+    SILK_ASSERT(group->count == 0);
 
     uint32_t base = memCounterCount.load(std::memory_order_relaxed);
     for (;;)

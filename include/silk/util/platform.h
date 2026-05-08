@@ -13,7 +13,7 @@
 #include <sys/rseq.h>
 
 /** Suppress unused-variable warnings. */
-#define UNUSED(x) (void)(x)
+#define SILK_UNUSED(x) (void)(x)
 
 namespace silk
 {
@@ -28,7 +28,7 @@ static constexpr uint64_t CACHELINE_SIZE = 64;
 template <typename T>
 static constexpr T alignUp(T value, T align) noexcept
 {
-    ASSERT_DEBUG(align != 0 && (align & (align - 1)) == 0);
+    SILK_ASSERT_DEBUG(align != 0 && (align & (align - 1)) == 0);
     return (value + align - 1) & ~(align - 1);
 }
 
@@ -36,7 +36,7 @@ static constexpr T alignUp(T value, T align) noexcept
 template <typename T>
 static constexpr T alignDown(T value, T align) noexcept
 {
-    ASSERT_DEBUG(align != 0 && (align & (align - 1)) == 0);
+    SILK_ASSERT_DEBUG(align != 0 && (align & (align - 1)) == 0);
     return value & ~(align - 1);
 }
 

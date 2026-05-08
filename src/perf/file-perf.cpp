@@ -204,7 +204,7 @@ void Benchmark::start()
 
         // O_DIRECT requires 512-byte-aligned buffers.
         void * rawBufs = std::aligned_alloc(512, static_cast<uint64_t>(cfg.iodepth) * cfg.blockSize);
-        ASSERT(rawBufs);
+        SILK_ASSERT(rawBufs);
         std::memset(rawBufs, 0xAB, static_cast<uint64_t>(cfg.iodepth) * cfg.blockSize);
 
         job.bufs = {static_cast<char *>(rawBufs), std::free};
@@ -220,7 +220,7 @@ void Benchmark::start()
     for (Job & job : jobs)
     {
         int r = silk::FiberScheduler::run(workerFiberMain, {this, &job}, &job.future);
-        ASSERT(!r, "cannot start fiber: {}", std::strerror(r));
+        SILK_ASSERT(!r, "cannot start fiber: {}", std::strerror(r));
     }
 
     warmupEndCycles.store(silk::Tsc::getCycles() + silk::Tsc::nanosecondsToCycles(cfg.warmupNs), std::memory_order_relaxed);
@@ -279,7 +279,7 @@ int Benchmark::workerFiberMain(WorkerFiberParams * params) noexcept
         int r = slot->future.wait();
         if (r)
         {
-            LOG_ERROR("request failed: {}", std::strerror(r));
+            SILK_ERROR("request failed: {}", std::strerror(r));
             break;
         }
 
@@ -299,7 +299,7 @@ int Benchmark::workerFiberMain(WorkerFiberParams * params) noexcept
     for (uint32_t i = 0; i < benchmark->cfg.iodepth; ++i)
     {
         int r = job->slots[i].future.wait();
-        LOG_ERROR("request failed: {}", std::strerror(r));
+        SILK_ERROR("request failed: {}", std::strerror(r));
     }
 
     return 0;
@@ -390,26 +390,26 @@ int main(int argc, char ** argv)
     cfg.fileSize = parseSize(sizeStr);
     cfg.durationNs = parseDuration(runtimeStr);
     cfg.warmupNs = parseDuration(warmupStr);
-    ASSERT(cfg.fileSize >= cfg.blockSize);
-    ASSERT(cfg.fileSize / cfg.blockSize >= cfg.numJobs);
+    SILK_ASSERT(cfg.fileSize >= cfg.blockSize);
+    SILK_ASSERT(cfg.fileSize / cfg.blockSize >= cfg.numJobs);
 
     int openFlags = O_RDWR | O_CREAT | O_TRUNC | O_CLOEXEC | (cfg.direct ? O_DIRECT : 0);
     int fd = ::open(cfg.filename.c_str(), openFlags, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH | S_IWOTH);
-    ASSERT(fd >= 0, "open failed: {}", std::strerror(errno));
+    SILK_ASSERT(fd >= 0, "open failed: {}", std::strerror(errno));
 
     struct stat st;
     int r = ::fstat(fd, &st);
-    ASSERT(!r, "fstat failed: {}", std::strerror(errno));
+    SILK_ASSERT(!r, "fstat failed: {}", std::strerror(errno));
 
     r = ::fallocate(fd, 0, 0, static_cast<off_t>(cfg.fileSize));
-    ASSERT(!r, "fallocate failed: {}", std::strerror(errno));
+    SILK_ASSERT(!r, "fallocate failed: {}", std::strerror(errno));
 
     sigset_t mask = blockSignals();
 
     silk::initialize();
     silk::FiberScheduler::initialize();
 
-    LOG_INFO(
+    SILK_INFO(
         "starting benchmark on: {}  size={:.1f}GiB{}",
         cfg.filename,
         static_cast<double>(cfg.fileSize) / (1024.0 * 1024 * 1024),
@@ -417,26 +417,26 @@ int main(int argc, char ** argv)
 
     Benchmark benchmark(cfg, fd);
 
-    LOG_INFO("starting benchmark");
+    SILK_INFO("starting benchmark");
     benchmark.start();
 
     bool signalled = false;
 
     if (cfg.warmupNs > 0)
     {
-        LOG_INFO("warming up for {}...", formatDuration(cfg.warmupNs));
+        SILK_INFO("warming up for {}...", formatDuration(cfg.warmupNs));
         signalled = sigwaitFor(mask, cfg.warmupNs);
     }
 
     if (!signalled)
     {
-        LOG_INFO("measuring for {}...", formatDuration(cfg.durationNs));
+        SILK_INFO("measuring for {}...", formatDuration(cfg.durationNs));
         sigwaitFor(mask, cfg.durationNs);
     }
 
     pthread_sigmask(SIG_UNBLOCK, &mask, nullptr);
 
-    LOG_INFO("stopping benchmark");
+    SILK_INFO("stopping benchmark");
     benchmark.stop();
 
     std::vector<uint64_t> allLat = benchmark.collectLatencies();

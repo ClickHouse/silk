@@ -22,7 +22,7 @@ MemoryPoolBase::MemoryPoolBase(
     for (uint32_t i = 0; i < processorCount; ++i)
     {
         Chunk * chunk = allocateChunk();
-        ASSERT(chunk);
+        SILK_ASSERT(chunk);
     }
 }
 

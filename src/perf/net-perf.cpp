@@ -115,7 +115,7 @@ int TcpConnection::connect(const char * host, uint16_t port, TcpConnection * out
 
     if (::inet_pton(AF_INET, host, &addr.sin_addr) != 1)
     {
-        LOG_ERROR("inet_pton failed: invalid address {}", host);
+        SILK_ERROR("inet_pton failed: invalid address {}", host);
         return EINVAL;
     }
 
@@ -123,7 +123,7 @@ int TcpConnection::connect(const char * host, uint16_t port, TcpConnection * out
     if (fd < 0)
     {
         int r = errno;
-        LOG_ERROR("socket failed: {}", std::strerror(r));
+        SILK_ERROR("socket failed: {}", std::strerror(r));
         return r;
     }
 
@@ -131,7 +131,7 @@ int TcpConnection::connect(const char * host, uint16_t port, TcpConnection * out
     if (::setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &value, sizeof(value)))
     {
         int r = errno;
-        LOG_ERROR("setsockopt TCP_NODELAY failed: {}", std::strerror(r));
+        SILK_ERROR("setsockopt TCP_NODELAY failed: {}", std::strerror(r));
         ::close(fd);
         return r;
     }
@@ -142,7 +142,7 @@ int TcpConnection::connect(const char * host, uint16_t port, TcpConnection * out
         r = errno;
         if (r != EINPROGRESS)
         {
-            LOG_ERROR("connect failed: {}", std::strerror(r));
+            SILK_ERROR("connect failed: {}", std::strerror(r));
             ::close(fd);
             return r;
         }
@@ -150,7 +150,7 @@ int TcpConnection::connect(const char * host, uint16_t port, TcpConnection * out
         r = silk::FiberScheduler::poll(fd, POLLOUT);
         if (r)
         {
-            LOG_ERROR("poll failed: {}", std::strerror(r));
+            SILK_ERROR("poll failed: {}", std::strerror(r));
             ::close(fd);
             return r;
         }
@@ -161,13 +161,13 @@ int TcpConnection::connect(const char * host, uint16_t port, TcpConnection * out
     if (::getsockopt(fd, SOL_SOCKET, SO_ERROR, &r, &len))
     {
         r = errno;
-        LOG_ERROR("getsockopt SO_ERROR failed: {}", std::strerror(r));
+        SILK_ERROR("getsockopt SO_ERROR failed: {}", std::strerror(r));
         ::close(fd);
         return r;
     }
     if (r)
     {
-        LOG_ERROR("connect error: {}", std::strerror(r));
+        SILK_ERROR("connect error: {}", std::strerror(r));
         ::close(fd);
         return r;
     }
@@ -188,7 +188,7 @@ int TcpConnection::listen(const char * host, uint16_t port, int backlog, TcpConn
     }
     else if (::inet_pton(AF_INET, host, &addr.sin_addr) != 1)
     {
-        LOG_ERROR("inet_pton failed: invalid address {}", host);
+        SILK_ERROR("inet_pton failed: invalid address {}", host);
         return EINVAL;
     }
 
@@ -196,7 +196,7 @@ int TcpConnection::listen(const char * host, uint16_t port, int backlog, TcpConn
     if (fd < 0)
     {
         int r = errno;
-        LOG_ERROR("socket failed: {}", std::strerror(r));
+        SILK_ERROR("socket failed: {}", std::strerror(r));
         return r;
     }
 
@@ -204,7 +204,7 @@ int TcpConnection::listen(const char * host, uint16_t port, int backlog, TcpConn
     if (::setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &value, sizeof(value)))
     {
         int r = errno;
-        LOG_ERROR("setsockopt TCP_NODELAY failed: {}", std::strerror(r));
+        SILK_ERROR("setsockopt TCP_NODELAY failed: {}", std::strerror(r));
         ::close(fd);
         return r;
     }
@@ -212,7 +212,7 @@ int TcpConnection::listen(const char * host, uint16_t port, int backlog, TcpConn
     if (::setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &value, sizeof(value)))
     {
         int r = errno;
-        LOG_ERROR("setsockopt SO_REUSEADDR failed: {}", std::strerror(r));
+        SILK_ERROR("setsockopt SO_REUSEADDR failed: {}", std::strerror(r));
         ::close(fd);
         return r;
     }
@@ -220,7 +220,7 @@ int TcpConnection::listen(const char * host, uint16_t port, int backlog, TcpConn
     if (::bind(fd, reinterpret_cast<sockaddr *>(&addr), sizeof(addr)))
     {
         int r = errno;
-        LOG_ERROR("bind failed: {}", std::strerror(r));
+        SILK_ERROR("bind failed: {}", std::strerror(r));
         ::close(fd);
         return r;
     }
@@ -228,7 +228,7 @@ int TcpConnection::listen(const char * host, uint16_t port, int backlog, TcpConn
     if (::listen(fd, backlog))
     {
         int r = errno;
-        LOG_ERROR("listen failed: {}", std::strerror(r));
+        SILK_ERROR("listen failed: {}", std::strerror(r));
         ::close(fd);
         return r;
     }
@@ -264,7 +264,7 @@ int TcpConnection::accept(TcpConnection * out) noexcept
     if (::setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &value, sizeof(value)))
     {
         int r = errno;
-        LOG_ERROR("setsockopt TCP_NODELAY failed: {}", std::strerror(r));
+        SILK_ERROR("setsockopt TCP_NODELAY failed: {}", std::strerror(r));
         ::close(fd);
         return r;
     }
@@ -442,7 +442,7 @@ Server::Server(const ServerConfig & cfg)
     : cfg(cfg)
 {
     int r = TcpConnection::listen(cfg.host.c_str(), cfg.port, LISTEN_BACKLOG, &listener);
-    ASSERT(!r, "listen failed: {}", std::strerror(r));
+    SILK_ASSERT(!r, "listen failed: {}", std::strerror(r));
 }
 
 Server::~Server() = default;
@@ -450,7 +450,7 @@ Server::~Server() = default;
 void Server::start()
 {
     int r = silk::FiberScheduler::run(acceptFiberMain, {this}, &acceptFuture);
-    ASSERT(!r, "cannot start fiber: {}", std::strerror(r));
+    SILK_ASSERT(!r, "cannot start fiber: {}", std::strerror(r));
 
     acceptStarted = true;
 }
@@ -462,7 +462,7 @@ void Server::stop()
     if (acceptStarted)
     {
         int r = acceptFuture.wait();
-        ASSERT(!r);
+        SILK_ASSERT(!r);
     }
 
     while (Connection * connection = connections.pop_front())
@@ -470,7 +470,7 @@ void Server::stop()
         connection->conn.close();
 
         int r = connection->future.wait();
-        ASSERT(!r);
+        SILK_ASSERT(!r);
 
         delete connection;
     }
@@ -489,7 +489,7 @@ int Server::acceptFiberMain(AcceptFiberParams * params) noexcept
             delete connection;
             if (!isExpectedShutdown(r))
             {
-                LOG_ERROR("accept failed: {}", strerror(r));
+                SILK_ERROR("accept failed: {}", strerror(r));
             }
             break;
         }
@@ -499,7 +499,7 @@ int Server::acceptFiberMain(AcceptFiberParams * params) noexcept
         r = silk::FiberScheduler::run(serverFiberMain, {server, connection}, &connection->future);
         if (r)
         {
-            LOG_ERROR("cannot start fiber: {}", std::strerror(r));
+            SILK_ERROR("cannot start fiber: {}", std::strerror(r));
             break;
         }
     }
@@ -521,7 +521,7 @@ int Server::serverFiberMain(ServerFiberParams * params) noexcept
         {
             if (!isExpectedShutdown(r))
             {
-                LOG_ERROR("read failed: {}", strerror(r));
+                SILK_ERROR("read failed: {}", strerror(r));
             }
             break;
         }
@@ -536,7 +536,7 @@ int Server::serverFiberMain(ServerFiberParams * params) noexcept
         {
             if (!isExpectedShutdown(r))
             {
-                LOG_ERROR("write failed: {}", strerror(r));
+                SILK_ERROR("write failed: {}", strerror(r));
             }
             break;
         }
@@ -605,13 +605,13 @@ void Client::start()
     for (Connection & connection : connections)
     {
         int r = TcpConnection::connect(cfg.host.c_str(), cfg.port, &connection.conn);
-        ASSERT(!r, "connect failed: {}", std::strerror(r));
+        SILK_ASSERT(!r, "connect failed: {}", std::strerror(r));
     }
 
     for (Connection & connection : connections)
     {
         int r = silk::FiberScheduler::run(clientFiberMain, {this, &connection}, &connection.future);
-        ASSERT(!r, "cannot start fiber: {}", std::strerror(r));
+        SILK_ASSERT(!r, "cannot start fiber: {}", std::strerror(r));
     }
 
     warmupEndCycles.store(silk::Tsc::getCycles() + silk::Tsc::nanosecondsToCycles(cfg.warmupNs), std::memory_order_relaxed);
@@ -627,7 +627,7 @@ void Client::stop()
     for (Connection & connection : connections)
     {
         int r = connection.future.wait();
-        ASSERT(!r);
+        SILK_ASSERT(!r);
     }
 }
 
@@ -658,7 +658,7 @@ int Client::clientFiberMain(ClientFiberParams * params) noexcept
         {
             if (!isExpectedShutdown(r))
             {
-                LOG_ERROR("write failed: {}", strerror(r));
+                SILK_ERROR("write failed: {}", strerror(r));
             }
             break;
         }
@@ -668,7 +668,7 @@ int Client::clientFiberMain(ClientFiberParams * params) noexcept
         {
             if (!isExpectedShutdown(r))
             {
-                LOG_ERROR("read failed: {}", strerror(r));
+                SILK_ERROR("read failed: {}", strerror(r));
             }
             break;
         }
@@ -755,7 +755,7 @@ static void runServer(int argc, char ** argv)
     silk::initialize();
     silk::FiberScheduler::initialize();
 
-    LOG_INFO("starting server on {}:{}", cfg.host, cfg.port);
+    SILK_INFO("starting server on {}:{}", cfg.host, cfg.port);
 
     Server server(cfg);
     server.start();
@@ -764,7 +764,7 @@ static void runServer(int argc, char ** argv)
     sigwait(&mask, &sig);
     pthread_sigmask(SIG_UNBLOCK, &mask, nullptr);
 
-    LOG_INFO("stopping server");
+    SILK_INFO("stopping server");
     server.stop();
 
     silk::FiberScheduler::destroy();
@@ -826,7 +826,7 @@ static void runClient(int argc, char ** argv)
     silk::initialize();
     silk::FiberScheduler::initialize();
 
-    LOG_INFO("starting client on {}:{}", cfg.host, cfg.port);
+    SILK_INFO("starting client on {}:{}", cfg.host, cfg.port);
 
     Client client(cfg);
     client.start();
@@ -835,19 +835,19 @@ static void runClient(int argc, char ** argv)
 
     if (cfg.warmupNs > 0)
     {
-        LOG_INFO("warming up for {}...", formatDuration(cfg.warmupNs));
+        SILK_INFO("warming up for {}...", formatDuration(cfg.warmupNs));
         signalled = sigwaitFor(mask, cfg.warmupNs);
     }
 
     if (!signalled)
     {
-        LOG_INFO("measuring for {}...", formatDuration(cfg.durationNs));
+        SILK_INFO("measuring for {}...", formatDuration(cfg.durationNs));
         sigwaitFor(mask, cfg.durationNs);
     }
 
     pthread_sigmask(SIG_UNBLOCK, &mask, nullptr);
 
-    LOG_INFO("stopping client");
+    SILK_INFO("stopping client");
     client.stop();
 
     std::vector<uint64_t> allLat = client.collectLatencies();

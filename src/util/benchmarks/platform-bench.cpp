@@ -99,7 +99,7 @@ BENCHMARK_F(PlatformBench, SemRoundTrip)(benchmark::State & state)
 BENCHMARK_F(PlatformBench, EventFdWriteRead)(benchmark::State & state)
 {
     int fd = ::eventfd(0, EFD_NONBLOCK);
-    ASSERT(fd >= 0);
+    SILK_ASSERT(fd >= 0);
 
     for (auto _ : state)
     {
@@ -118,7 +118,7 @@ BENCHMARK_F(PlatformBench, EventFdRoundTrip)(benchmark::State & state)
 {
     int request = ::eventfd(0, 0);
     int response = ::eventfd(0, 0);
-    ASSERT(request >= 0 && response >= 0);
+    SILK_ASSERT(request >= 0 && response >= 0);
 
     std::atomic<bool> stop{false};
     std::thread helper(

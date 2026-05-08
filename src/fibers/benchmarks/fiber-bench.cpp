@@ -32,7 +32,7 @@ BENCHMARK_F(FiberBench, RunJoin)(benchmark::State & state)
     for (auto _ : state)
     {
         int r = FiberScheduler::run(Params::fiberMain, {});
-        ASSERT(!r);
+        SILK_ASSERT(!r);
     }
 }
 
@@ -56,7 +56,7 @@ BENCHMARK_F(FiberBench, ContextSwitch)(benchmark::State & state)
     };
 
     int r = FiberScheduler::run(Params::fiberMain, {&state});
-    ASSERT(!r);
+    SILK_ASSERT(!r);
 }
 
 // Pipe round-trip using blocking io_uring read/write.
@@ -82,14 +82,14 @@ BENCHMARK_F(FiberBench, PipeRoundTripBlocking)(benchmark::State & state)
             {
                 uint64_t n = 0;
                 int r = FiberScheduler::read(p->readFd, &byte, 1, 0, &n);
-                ASSERT(r == 0);
+                SILK_ASSERT(r == 0);
                 if (n == 0)
                 {
                     // EOF: thread closed its write end
                     break;
                 }
                 r = FiberScheduler::write(p->writeFd, &byte, 1, 0);
-                ASSERT(r == 0);
+                SILK_ASSERT(r == 0);
             }
             return 0;
         }
@@ -97,15 +97,15 @@ BENCHMARK_F(FiberBench, PipeRoundTripBlocking)(benchmark::State & state)
 
     FiberFuture future;
     int r = FiberScheduler::run(Params::fiberMain, {reqFds[0], respFds[1]}, &future);
-    ASSERT(!r);
+    SILK_ASSERT(!r);
 
     char byte = 0;
     for (auto _ : state)
     {
         ssize_t w = ::write(reqFds[1], &byte, 1);
-        ASSERT(w == 1);
+        SILK_ASSERT(w == 1);
         ssize_t n = ::read(respFds[0], &byte, 1);
-        ASSERT(n == 1);
+        SILK_ASSERT(n == 1);
     }
 
     ::close(reqFds[1]); // signal EOF to fiber
@@ -142,9 +142,9 @@ BENCHMARK_F(FiberBench, PipeRoundTripNonBlocking)(benchmark::State & state)
                 ssize_t n;
                 while ((n = ::read(p->readFd, &byte, 1)) < 0)
                 {
-                    ASSERT(errno == EAGAIN);
+                    SILK_ASSERT(errno == EAGAIN);
                     int r = FiberScheduler::poll(p->readFd, POLLIN);
-                    ASSERT(r == 0);
+                    SILK_ASSERT(r == 0);
                 }
                 if (n == 0)
                 {
@@ -153,9 +153,9 @@ BENCHMARK_F(FiberBench, PipeRoundTripNonBlocking)(benchmark::State & state)
                 }
                 while (::write(p->writeFd, &byte, 1) < 0)
                 {
-                    ASSERT(errno == EAGAIN);
+                    SILK_ASSERT(errno == EAGAIN);
                     int r = FiberScheduler::poll(p->writeFd, POLLOUT);
-                    ASSERT(r == 0);
+                    SILK_ASSERT(r == 0);
                 }
             }
             return 0;
@@ -164,15 +164,15 @@ BENCHMARK_F(FiberBench, PipeRoundTripNonBlocking)(benchmark::State & state)
 
     FiberFuture future;
     int r = FiberScheduler::run(Params::fiberMain, {reqFds[0], respFds[1]}, &future);
-    ASSERT(!r);
+    SILK_ASSERT(!r);
 
     char byte = 0;
     for (auto _ : state)
     {
         ssize_t w = ::write(reqFds[1], &byte, 1);
-        ASSERT(w == 1);
+        SILK_ASSERT(w == 1);
         ssize_t n = ::read(respFds[0], &byte, 1);
-        ASSERT(n == 1);
+        SILK_ASSERT(n == 1);
     }
 
     ::close(reqFds[1]); // signal EOF to fiber
@@ -206,14 +206,14 @@ BENCHMARK_F(FiberBench, IoUringFiberPingPong)(benchmark::State & state)
             {
                 uint64_t n = 0;
                 int r = FiberScheduler::read(p->readFd, &byte, 1, 0, &n);
-                ASSERT(r == 0);
+                SILK_ASSERT(r == 0);
                 if (n == 0)
                 {
                     // EOF: thread closed its write end
                     break;
                 }
                 r = FiberScheduler::write(p->writeFd, &byte, 1, 0);
-                ASSERT(r == 0);
+                SILK_ASSERT(r == 0);
             }
             return 0;
         }
@@ -231,10 +231,10 @@ BENCHMARK_F(FiberBench, IoUringFiberPingPong)(benchmark::State & state)
             for (auto _ : *p->state)
             {
                 int r = FiberScheduler::write(p->writeFd, &byte, 1, 0);
-                ASSERT(r == 0);
+                SILK_ASSERT(r == 0);
                 uint64_t n = 0;
                 r = FiberScheduler::read(p->readFd, &byte, 1, 0, &n);
-                ASSERT(r == 0);
+                SILK_ASSERT(r == 0);
             }
             return 0;
         }
@@ -242,11 +242,11 @@ BENCHMARK_F(FiberBench, IoUringFiberPingPong)(benchmark::State & state)
 
     FiberFuture pong;
     int r = FiberScheduler::run(Pong::fiberMain, {pingFds[0], pongFds[1]}, &pong);
-    ASSERT(!r);
+    SILK_ASSERT(!r);
 
     FiberFuture ping;
     r = FiberScheduler::run(Ping::fiberMain, {&state, pingFds[1], pongFds[0]}, &ping);
-    ASSERT(!r);
+    SILK_ASSERT(!r);
     ping.wait();
 
     ::close(pingFds[1]);
@@ -277,7 +277,7 @@ BENCHMARK_F(FiberBench, Sleep)(benchmark::State & state)
     };
 
     int r = FiberScheduler::run(Params::fiberMain, {&state});
-    ASSERT(!r);
+    SILK_ASSERT(!r);
 }
 
 // Sleep wakeup latency: measures real elapsed time per 100us sleep, exercising
@@ -306,7 +306,7 @@ BENCHMARK_DEFINE_F(FiberBench, SleepWakeup)(benchmark::State & state)
     };
 
     int r = FiberScheduler::run(Params::fiberMain, {&state});
-    ASSERT(!r);
+    SILK_ASSERT(!r);
 }
 BENCHMARK_REGISTER_F(FiberBench, SleepWakeup)->UseManualTime();
 
@@ -334,7 +334,7 @@ BENCHMARK_F(FiberBench, SleepCancel)(benchmark::State & state)
     };
 
     int r = FiberScheduler::run(Params::fiberMain, {&state});
-    ASSERT(!r);
+    SILK_ASSERT(!r);
 }
 
 // Work-stealing throughput: main thread schedules fibers that land on its CPU;
@@ -355,7 +355,7 @@ BENCHMARK_DEFINE_F(FiberBench, WorkStealingThreadProducer)(benchmark::State & st
     for (uint64_t i = 0; i < numberOfFibers; ++i)
     {
         int r = FiberScheduler::run(Params::fiberMain, {}, &futures[i]);
-        ASSERT(!r);
+        SILK_ASSERT(!r);
     }
 
     uint64_t pos = 0;
@@ -364,7 +364,7 @@ BENCHMARK_DEFINE_F(FiberBench, WorkStealingThreadProducer)(benchmark::State & st
         futures[pos % numberOfFibers].wait();
         futures[pos % numberOfFibers].reset();
         int r = FiberScheduler::run(Params::fiberMain, {}, &futures[pos % numberOfFibers]);
-        ASSERT(!r);
+        SILK_ASSERT(!r);
         ++pos;
     }
 
@@ -409,7 +409,7 @@ BENCHMARK_DEFINE_F(FiberBench, WorkStealingFiberProducer)(benchmark::State & sta
             for (uint64_t i = 0; i < p->numberOfFibers; ++i)
             {
                 int r = FiberScheduler::run(Child::fiberMain, {p->spinCount}, &futures[i]);
-                ASSERT(!r);
+                SILK_ASSERT(!r);
             }
 
             uint64_t pos = 0;
@@ -418,7 +418,7 @@ BENCHMARK_DEFINE_F(FiberBench, WorkStealingFiberProducer)(benchmark::State & sta
                 futures[pos % p->numberOfFibers].wait();
                 futures[pos % p->numberOfFibers].reset();
                 int r = FiberScheduler::run(Child::fiberMain, {p->spinCount}, &futures[pos % p->numberOfFibers]);
-                ASSERT(!r);
+                SILK_ASSERT(!r);
                 ++pos;
             }
 
@@ -435,7 +435,7 @@ BENCHMARK_DEFINE_F(FiberBench, WorkStealingFiberProducer)(benchmark::State & sta
     uint64_t spinCount = static_cast<uint64_t>(state.range(1));
 
     int r = FiberScheduler::run(Driver::fiberMain, {&state, numberOfFibers, spinCount});
-    ASSERT(!r);
+    SILK_ASSERT(!r);
 
     state.SetItemsProcessed(state.iterations());
 }

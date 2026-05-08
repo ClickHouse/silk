@@ -22,7 +22,7 @@ TEST(Fiber, run)
     {
         static int fiberMain(Params * p) noexcept
         {
-            UNUSED(p);
+            SILK_UNUSED(p);
             return 42;
         }
     };
@@ -37,14 +37,14 @@ TEST(Fiber, suspend)
     {
         static int fiberMain(Params * p) noexcept
         {
-            UNUSED(p);
+            SILK_UNUSED(p);
             FiberScheduler::suspend(reinterpret_cast<FiberScheduler::SuspendCallback *>(suspendCallback), nullptr);
             return 0;
         }
 
         static void suspendCallback(Fiber * fiber, void * context)
         {
-            UNUSED(context);
+            SILK_UNUSED(context);
             FiberScheduler::schedule(fiber);
         }
     };
@@ -59,7 +59,7 @@ TEST(Fiber, yield)
     {
         static int fiberMain(Params * p) noexcept
         {
-            UNUSED(p);
+            SILK_UNUSED(p);
             FiberScheduler::yield();
             return 0;
         }
@@ -78,7 +78,7 @@ TEST(Fiber, completionRace)
     {
         static int fiberMain(Params * p) noexcept
         {
-            UNUSED(p);
+            SILK_UNUSED(p);
             return 42;
         }
     };
@@ -114,9 +114,9 @@ TEST(Fiber, getCurrent)
     {
         static int fiberMain(Params * p) noexcept
         {
-            UNUSED(p);
+            SILK_UNUSED(p);
             Fiber * fiber = FiberScheduler::getCurrentFiber();
-            UNUSED(fiber);
+            SILK_UNUSED(fiber);
             return 0;
         }
     };

@@ -24,7 +24,7 @@ ShardedStackBase::ShardedStackBase(uint32_t batchSize) noexcept
     for (uint32_t i = 0; i < processorCount; ++i)
     {
         FreeList * freeList = acquireFreeList();
-        ASSERT(freeList);
+        SILK_ASSERT(freeList);
         emptyFreeLists.push(freeList);
     }
 }
@@ -229,7 +229,7 @@ void ShardedStackBase::pushBatch(StackEntry * head, StackEntry * tail) noexcept
     if (!freeList) [[unlikely]]
     {
         freeList = acquireFreeList();
-        ASSERT(freeList);
+        SILK_ASSERT(freeList);
     }
     freeList->entries.pushAll(head, tail);
     fullFreeLists.push(freeList);

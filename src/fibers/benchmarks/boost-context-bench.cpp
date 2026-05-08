@@ -22,7 +22,7 @@ BENCHMARK_F(BoostContextBench, ContextSwitch)(benchmark::State & state)
     static constexpr uint64_t STACK_SIZE = 65536;
 
     void * stack = ::mmap(nullptr, STACK_SIZE, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-    ASSERT(stack != MAP_FAILED);
+    SILK_ASSERT(stack != MAP_FAILED);
 
     // Bounce context: just jump back to the caller on every activation.
     fcontext_t ctx = make_fcontext(

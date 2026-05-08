@@ -127,14 +127,14 @@ public:
 
     void InitBuiltInParameters(const Aws::S3::S3ClientConfiguration & config) override
     {
-        UNUSED(config);
+        SILK_UNUSED(config);
         buildCachedOutcome();
     }
 
     void InitBuiltInParameters(const Aws::S3::S3ClientConfiguration & config, const Aws::String & serviceName) override
     {
-        UNUSED(config);
-        UNUSED(serviceName);
+        SILK_UNUSED(config);
+        SILK_UNUSED(serviceName);
         buildCachedOutcome();
     }
 
@@ -223,7 +223,7 @@ static void printJson(std::vector<uint64_t> & latNs, const ClientConfig & cfg, u
 class PocoHttpClient : public Aws::Http::HttpClient
 {
 public:
-    explicit PocoHttpClient(const Aws::Client::ClientConfiguration & config) { UNUSED(config); }
+    explicit PocoHttpClient(const Aws::Client::ClientConfiguration & config) { SILK_UNUSED(config); }
     ~PocoHttpClient();
 
     std::shared_ptr<Aws::Http::HttpResponse> MakeRequest(
@@ -316,7 +316,7 @@ const char * PocoHttpClient::getMethod(Aws::Http::HttpMethod method)
         case Aws::Http::HttpMethod::HTTP_TRACE:
             return "TRACE";
     }
-    ASSERT(false);
+    SILK_ASSERT(false);
 }
 
 void PocoHttpClient::writeHeaders(Poco::Net::HTTPRequest & pocoReq, const Aws::Http::HeaderValueCollection & headers)
@@ -354,8 +354,8 @@ std::shared_ptr<Aws::Http::HttpResponse> PocoHttpClient::MakeRequest(
     Aws::Utils::RateLimits::RateLimiterInterface * readLimiter,
     Aws::Utils::RateLimits::RateLimiterInterface * writeLimiter) const
 {
-    UNUSED(readLimiter);
-    UNUSED(writeLimiter);
+    SILK_UNUSED(readLimiter);
+    SILK_UNUSED(writeLimiter);
 
     if (!IsRequestProcessingEnabled())
     {
@@ -507,7 +507,7 @@ int FiberExecutor::execFiberMain(ExecParams * params) noexcept
         // The SDK wraps tasks in std::packaged_task, which captures exceptions
         // into the promise before rethrowing. The session thread sees the error
         // via callable.get(). We catch here only to satisfy noexcept.
-        LOG_ERROR("fiber executor task exception: {}", e.what());
+        SILK_ERROR("fiber executor task exception: {}", e.what());
     }
     return 0;
 }
@@ -696,7 +696,7 @@ void S3Bench::runSession(Session * session)
             // endpoint or a transient failure every session exits after one bad outcome,
             // and the run produces no useful latency data. failedSessions exposes the
             // count so the caller can warn.
-            LOG_ERROR("S3 request failed: {}", slots[head].error->GetMessage());
+            SILK_ERROR("S3 request failed: {}", slots[head].error->GetMessage());
             session->failed = true;
             head = (head + 1) % cfg.ioDepth;
             break;
@@ -811,7 +811,7 @@ int main(int argc, char ** argv)
 
     S3Bench bench(cfg, s3.get());
 
-    LOG_INFO("starting benchmark");
+    SILK_INFO("starting benchmark");
     bench.start();
 
     sigset_t mask = blockSignals();
@@ -820,25 +820,25 @@ int main(int argc, char ** argv)
 
     if (cfg.warmupNs > 0)
     {
-        LOG_INFO("warming up for {}...", formatDuration(cfg.warmupNs));
+        SILK_INFO("warming up for {}...", formatDuration(cfg.warmupNs));
         signalled = sigwaitFor(mask, cfg.warmupNs);
     }
 
     if (!signalled)
     {
-        LOG_INFO("measuring for {}...", formatDuration(cfg.durationNs));
+        SILK_INFO("measuring for {}...", formatDuration(cfg.durationNs));
         sigwaitFor(mask, cfg.durationNs);
     }
 
     pthread_sigmask(SIG_UNBLOCK, &mask, nullptr);
 
-    LOG_INFO("stopping benchmark");
+    SILK_INFO("stopping benchmark");
     bench.stop();
 
     uint32_t failedSessions = bench.failedSessions();
     if (failedSessions > 0)
     {
-        LOG_WARN("{}/{} sessions exited early due to S3 errors", failedSessions, cfg.numJobs);
+        SILK_WARN("{}/{} sessions exited early due to S3 errors", failedSessions, cfg.numJobs);
     }
 
     auto latencies = bench.collectLatencies();

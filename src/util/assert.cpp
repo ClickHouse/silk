@@ -21,7 +21,7 @@ static constexpr const char * COLOR_GREEN = "\033[0;32m";
 
 static void btCreateErrorCallback(void * data, const char * msg, int err) noexcept
 {
-    UNUSED(data);
+    SILK_UNUSED(data);
     std::fprintf(stderr, "backtrace_create_state error %d: %s\n", err, msg);
 }
 

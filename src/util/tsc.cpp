@@ -110,7 +110,7 @@ void Tsc::initialize() noexcept
     }
 
 #if defined(__x86_64__)
-    ASSERT(hasInvariantTsc(), "CPU does not advertise Invariant TSC; silk requires a stable cross-core counter");
+    SILK_ASSERT(hasInvariantTsc(), "CPU does not advertise Invariant TSC; silk requires a stable cross-core counter");
     frequency = getTscFrequencyCpuid();
 #elif defined(__aarch64__)
     // ARMv8 cntvct_el0 is anchored to a system counter that is invariant by
@@ -120,7 +120,7 @@ void Tsc::initialize() noexcept
 #    error Unsupported platform
 #endif
 
-    ASSERT(frequency != 0, "failed to determine TSC frequency");
+    SILK_ASSERT(frequency != 0, "failed to determine TSC frequency");
     nsPerCycleFp = (1ULL << SHIFT) * 1'000'000'000 / frequency;
     cyclesPerNsFp = frequency * (1ULL << SHIFT) / 1'000'000'000;
 }

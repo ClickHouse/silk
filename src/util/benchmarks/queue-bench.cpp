@@ -49,7 +49,7 @@ protected:
             for (Item & item : items)
             {
                 bool b = queue.enqueue(&item);
-                ASSERT(b);
+                SILK_ASSERT(b);
             }
         }
     };
@@ -62,10 +62,10 @@ BENCHMARK_DEFINE_F(QueueBench, EnqueueDequeue)(benchmark::State & state)
     for (auto _ : state)
     {
         Item * item = shared->queue.dequeue();
-        ASSERT(item);
+        SILK_ASSERT(item);
 
         bool b = shared->queue.enqueue(item);
-        ASSERT(b);
+        SILK_ASSERT(b);
     }
 }
 BENCHMARK_REGISTER_F(QueueBench, EnqueueDequeue)->ThreadRange(1, getAvailableProcessorCount());
@@ -120,7 +120,7 @@ BENCHMARK_DEFINE_F(IntrusiveQueueBench, EnqueueDequeue)(benchmark::State & state
     for (auto _ : state)
     {
         Item * item = shared->queue.dequeue();
-        ASSERT(item);
+        SILK_ASSERT(item);
 
         shared->queue.enqueue(item);
     }
