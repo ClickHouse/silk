@@ -78,4 +78,8 @@ target_compile_options(_jemalloc PRIVATE
     -Wno-redundant-decls
     -Wno-ignored-attributes)
 
-add_library(jemalloc::jemalloc ALIAS _jemalloc)
+# jemalloc overrides malloc/free/etc.; without --whole-archive the linker only
+# pulls objects that satisfy unresolved symbols, leaving glibc malloc in place.
+add_library(_jemalloc_whole INTERFACE)
+target_link_libraries(_jemalloc_whole INTERFACE "$<LINK_LIBRARY:WHOLE_ARCHIVE,_jemalloc>")
+add_library(jemalloc::jemalloc ALIAS _jemalloc_whole)
