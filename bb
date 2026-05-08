@@ -60,11 +60,13 @@ def run_capture(*args: str, **kwargs: Any) -> subprocess.CompletedProcess[str]:
 def start_process(*args: str, **kwargs: Any) -> subprocess.Popen[str]:
     proc = subprocess.Popen(args, cwd=ROOT, text=True, **kwargs)
     log.debug("run command: %s", " ".join(args))
-    time.sleep(0.5)
-    if proc.poll() is not None:
-        raise RuntimeError(
-            f"process exited prematurely (code {proc.returncode}): {' '.join(args)}"
-        )
+    deadline = time.monotonic() + 0.1
+    while time.monotonic() < deadline:
+        if proc.poll() is not None:
+            raise RuntimeError(
+                f"process exited prematurely (code {proc.returncode}): {' '.join(args)}"
+            )
+        time.sleep(0.01)
     return proc
 
 
@@ -88,11 +90,35 @@ def cmd_clean() -> None:
         log.info("nothing to clean")
 
 
+_CLANG_FORMAT_REQUIRED_MAJOR = 21
+
+
+def _find_clang_format() -> str:
+    """Locate a clang-format binary matching the required major version."""
+    for cmd in (f"clang-format-{_CLANG_FORMAT_REQUIRED_MAJOR}", "clang-format"):
+        path = shutil.which(cmd)
+        if not path:
+            continue
+        try:
+            result = subprocess.run(
+                [path, "--version"], capture_output=True, text=True, check=True
+            )
+        except subprocess.CalledProcessError:
+            continue
+        m = re.search(r"clang-format version (\d+)", result.stdout)
+        if m and int(m.group(1)) == _CLANG_FORMAT_REQUIRED_MAJOR:
+            return path
+    raise RuntimeError(
+        f"clang-format {_CLANG_FORMAT_REQUIRED_MAJOR} not found; "
+        f"install clang-format-{_CLANG_FORMAT_REQUIRED_MAJOR}"
+    )
+
+
 def cmd_fmt(check: bool = False) -> None:
     sources = glob.glob(
         os.path.join(ROOT, "src/**/*.[ch]"), recursive=True
     ) + glob.glob(os.path.join(ROOT, "src/**/*.cpp"), recursive=True)
-    args = ["clang-format-21"]
+    args = [_find_clang_format()]
     args += ["--dry-run", "--Werror"] if check else ["-i"]
     run(*args, *sources)
 
@@ -136,12 +162,16 @@ def cmd_test(
     extra: list[str] | None = None,
 ) -> None:
     profiles_dir: str | None = None
+    env: dict[str, str] | None = None
     if coverage:
         profiles_dir = os.path.join(ROOT, f"build/{preset}/profiles")
         if os.path.exists(profiles_dir):
             shutil.rmtree(profiles_dir)
         os.makedirs(profiles_dir)
-        os.environ["LLVM_PROFILE_FILE"] = os.path.join(profiles_dir, "%p.profraw")
+        env = {
+            **os.environ,
+            "LLVM_PROFILE_FILE": os.path.join(profiles_dir, "%p.profraw"),
+        }
 
     args = ["ctest", "--preset", preset, "--parallel", str(os.cpu_count())]
     if tests_regex:
@@ -152,10 +182,9 @@ def cmd_test(
         args += ["--timeout", str(timeout)]
     if extra:
         args += extra
-    run(*args)
+    run(*args, env=env)
 
     if coverage:
-        del os.environ["LLVM_PROFILE_FILE"]
         assert profiles_dir is not None
         _gen_coverage_report(preset, profiles_dir)
 
@@ -572,6 +601,7 @@ def cmd_net_perf(preset: str, params: NetPerfParams) -> None:
             str(params.delay),
             *verbose_flag,
         )
+        wait_for_tcp_port(params.host, params.port)
 
     try:
         if params.flamegraph:
@@ -904,6 +934,7 @@ def cmd_sockperf_perf(params: NetPerfParams) -> None:
             str(params.port),
             "--tcp",
         )
+        wait_for_tcp_port(params.host, params.port)
 
     try:
         print(_perf_row(_SP_HEADERS, _SP_WIDTHS))
@@ -1308,8 +1339,7 @@ def cmd_s3_perf(preset: str, params: S3PerfParams) -> None:
     )
 
     try:
-        # Give MinIO a moment to finish initializing beyond start_process's 0.5s.
-        time.sleep(1)
+        wait_for_tcp_port(parsed.hostname or "127.0.0.1", parsed.port or 9000)
 
         run(
             mcli_bin,
