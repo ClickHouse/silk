@@ -1,7 +1,7 @@
 # Performance Results
 
 Measurements on an AWS instance (32-CPU Intel Xeon Platinum 8488C, Linux 6.17, release build `-O3`).
-Results are reproducible with `./bb -b release perf --file --fio --net --net-asio --http --http-threads --http-nginx --s3 --s3-threads`.
+Results are reproducible with `./bb -b release perf --file --fio --net --net-asio --net-epoll --http --http-threads --http-nginx --s3 --s3-threads`.
 
 ---
 
@@ -90,6 +90,34 @@ Same workload as net-perf above, reimplemented with Boost.Asio C++20 coroutines 
 The gap has two structural causes. First, net-perf uses io_uring for all socket I/O while Asio uses epoll; io_uring avoids the per-operation `epoll_ctl` + `epoll_wait` + `recv`/`send` syscall chain. Second, the fiber scheduler's work-stealing threads spin and pick up completions in nanoseconds, while Asio's reactor threads sleep in `epoll_wait` and require a wakeup write + pthread wake per completion.
 
 The gap is largest at 1 connection (~15x) where per-operation scheduling overhead dominates with no parallelism to hide it, and narrows to ~4x at high connection counts where I/O bandwidth is the bottleneck. Asio's io_uring backend (`BOOST_ASIO_HAS_IO_URING`) was also tested and performed ~2.5x worse than epoll, ruling out the I/O backend as a factor. Linking with jemalloc had no effect. The bottleneck is entirely in Asio's handler dispatch path.
+
+---
+
+## net-perf-epoll -- TCP echo (raw epoll, multi-threaded)
+
+Same workload as net-perf above, reimplemented as the simplest efficient epoll loop: edge-triggered `recv`/`send` per connection, one worker thread per available CPU (auto-detected via `silk::getAvailableProcessorCount`), `SO_REUSEPORT` listener per worker on the server, no fibers, no io_uring. Each worker owns its epoll instance and round-robins its connections through a per-fd state machine. Reproduced with `./bb -b release net-perf-epoll`.
+
+| connections | RPS | BW | avg | p50 | p95 | p99 | p99.9 |
+|---|---|---|---|---|---|---|---|
+| 1 | 39k | 2 MiB/s | 25 µs | 25 µs | 30 µs | 35 µs | 45 µs |
+| 256 | 2254k | 138 MiB/s | 114 µs | 101 µs | 168 µs | 190 µs | 3091 µs |
+| 512 | 2260k | 138 MiB/s | 227 µs | 210 µs | 292 µs | 327 µs | 3257 µs |
+| 1024 | 2203k | 134 MiB/s | 465 µs | 446 µs | 579 µs | 749 µs | 3528 µs |
+
+**Comparison with net-perf (fibers + io_uring), same-run measurements:**
+
+| connections | net-perf RPS | net-perf-epoll RPS | RPS ratio | net-perf p99 | net-perf-epoll p99 | p99 ratio |
+|---|---|---|---|---|---|---|
+| 1 | 41k | 39k | 0.95x | 39 µs | 35 µs | 0.90x |
+| 256 | 1729k | 2254k | **1.30x** | 485 µs | 190 µs | **0.39x** |
+| 512 | 1759k | 2260k | **1.28x** | 1512 µs | 327 µs | **0.22x** |
+| 1024 | 1714k | 2203k | **1.29x** | 2404 µs | 749 µs | **0.31x** |
+
+At 1 connection both are equivalent — the host has spare CPU and engine overhead is invisible. Past saturation (~32-64 connections) raw epoll wins ~30% on throughput and 3-5x on p99 tail latency. Per-cpu rate at saturation: fibers ≈ 110k req/cpu (9.1 µs CPU/req), epoll ≈ 145k req/cpu (6.9 µs CPU/req); the 2.2 µs/req gap is the cost of the fiber abstraction in this workload — fiber suspend/resume + io_uring SQE/CQE submission + ready-queue bookkeeping per round-trip. The tail-latency difference is a separate phenomenon: silk's scheduler is selectively unfair (some fibers run hot while others starve for thousands of requests at a time), which keeps p50 low (130 µs at 1024 conns) but inflates p99 dramatically. The epoll loop services its connections in round-robin within each worker, so per-connection treatment is uniform — p99 stays close to p50 (749 µs vs 446 µs at 1024 conns).
+
+The gap holds across message sizes (1.3-1.6x at 64 B – 16 KiB at 256 connections), so it scales with the abstraction cost rather than amortizing over per-byte work. Disabling `USE_IO_URING_RW` (falling back to `recv`/`send` + `FiberScheduler::poll`) does not close it — io_uring on loopback is roughly a wash compared to direct syscalls in this workload.
+
+What raw epoll gives up: composability. The state machine can't naturally accommodate sleeps (no `--delay` support), multi-step protocols, or branching control flow without growing into a small interpreter. net-perf-epoll is the throughput floor; net-perf is the structure you'd actually program against.
 
 ---
 

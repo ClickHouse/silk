@@ -19,6 +19,7 @@ import time
 import xml.etree.ElementTree as ET
 from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
+from enum import Enum
 from typing import Any, TypedDict
 from urllib.parse import urlparse
 
@@ -506,8 +507,15 @@ def _cpu_split() -> tuple[str, str]:
     return f"0-{half - 1}", f"{half}-{ncpus - 1}"
 
 
+class NetPerfEngine(Enum):
+    FIBERS = "net-perf"  # silk fibers + io_uring
+    ASIO = "net-perf-asio"  # boost.asio C++20 coroutines
+    EPOLL = "net-perf-epoll"  # raw epoll
+
+
 @dataclass
 class NetPerfParams:
+    engine: NetPerfEngine = NetPerfEngine.FIBERS
     host: str = "127.0.0.1"
     port: int = 17777
     msg_size: int = 64
@@ -533,7 +541,8 @@ _NP_HEADERS: list[str] = [
 _NP_WIDTH: list[int] = [11, 8, 10, 8, 8, 8, 8, 8]
 
 
-def _cmd_net_perf_impl(preset: str, params: NetPerfParams, binary: str) -> None:
+def cmd_net_perf(preset: str, params: NetPerfParams) -> None:
+    binary = params.engine.value
     print()
     print(f"## {binary} -- async network I/O")
     print()
@@ -636,14 +645,6 @@ def _cmd_net_perf_impl(preset: str, params: NetPerfParams, binary: str) -> None:
         if server:
             server.terminate()
             server.wait()
-
-
-def cmd_net_perf(preset: str, params: NetPerfParams) -> None:
-    _cmd_net_perf_impl(preset, params, "net-perf")
-
-
-def cmd_net_perf_asio(preset: str, params: NetPerfParams) -> None:
-    _cmd_net_perf_impl(preset, params, "net-perf-asio")
 
 
 @dataclass
@@ -1524,6 +1525,9 @@ def _build_parser() -> argparse.ArgumentParser:
     perf_parser.add_argument(
         "--net-asio", action="store_true", help="run net-perf-asio"
     )
+    perf_parser.add_argument(
+        "--net-epoll", action="store_true", help="run net-perf-epoll"
+    )
     perf_parser.add_argument("--file", action="store_true", help="run file-perf")
     perf_parser.add_argument(
         "--http", action="store_true", help="run http-perf (internal server, fibers)"
@@ -1748,6 +1752,12 @@ def _build_parser() -> argparse.ArgumentParser:
         help="build then run net-perf-asio (Boost.Asio C++20 coroutines)",
     )
     _add_net_args(net_perf_asio_parser)
+
+    net_perf_epoll_parser = sub.add_parser(
+        "net-perf-epoll",
+        help="build then run net-perf-epoll (raw epoll)",
+    )
+    _add_net_args(net_perf_epoll_parser)
 
     #
     # sockperf-perf
@@ -2016,11 +2026,18 @@ def main() -> None:
     elif args.command == "net-perf":
         _check_no_extra(extra)
         cmd_build(preset, ["net-perf"])
-        cmd_net_perf(preset, _params_from_args(args, "net", NetPerfParams))
+        params = _params_from_args(args, "net", NetPerfParams)
+        cmd_net_perf(preset, replace(params, engine=NetPerfEngine.FIBERS))
     elif args.command == "net-perf-asio":
         _check_no_extra(extra)
         cmd_build(preset, ["net-perf-asio"])
-        cmd_net_perf_asio(preset, _params_from_args(args, "net", NetPerfParams))
+        params = _params_from_args(args, "net", NetPerfParams)
+        cmd_net_perf(preset, replace(params, engine=NetPerfEngine.ASIO))
+    elif args.command == "net-perf-epoll":
+        _check_no_extra(extra)
+        cmd_build(preset, ["net-perf-epoll"])
+        params = _params_from_args(args, "net", NetPerfParams)
+        cmd_net_perf(preset, replace(params, engine=NetPerfEngine.EPOLL))
     elif args.command == "sockperf-perf":
         _check_no_extra(extra)
         cmd_sockperf_perf(_params_from_args(args, "sockperf", NetPerfParams))
@@ -2050,10 +2067,13 @@ def main() -> None:
         )
         if args.net or args.all:
             cmd_build(preset, ["net-perf"])
-            cmd_net_perf(preset, net_params)
+            cmd_net_perf(preset, replace(net_params, engine=NetPerfEngine.FIBERS))
         if args.net_asio or args.all:
             cmd_build(preset, ["net-perf-asio"])
-            cmd_net_perf_asio(preset, net_params)
+            cmd_net_perf(preset, replace(net_params, engine=NetPerfEngine.ASIO))
+        if args.net_epoll or args.all:
+            cmd_build(preset, ["net-perf-epoll"])
+            cmd_net_perf(preset, replace(net_params, engine=NetPerfEngine.EPOLL))
         if args.sockperf or args.all:
             cmd_sockperf_perf(net_params)
         http_params = HttpPerfParams(
