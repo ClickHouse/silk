@@ -28,3 +28,9 @@
 [submodule "contrib/librseq"]
 	path = contrib/librseq
 	url = https://github.com/compudj/librseq.git
+[submodule "contrib/libbpf"]
+	path = contrib/libbpf
+	url = https://github.com/libbpf/libbpf.git
+[submodule "contrib/bpftool"]
+	path = contrib/bpftool
+	url = https://github.com/libbpf/bpftool.git

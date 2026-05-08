@@ -1,12 +1,16 @@
-find_program(BPFTOOL bpftool)
-find_program(LLVM_STRIP NAMES llvm-strip llvm-strip-21)
-find_program(CLANG NAMES clang clang-21)
-find_path(BPF_INCLUDE bpf/bpf_core_read.h)
-
-if(NOT BPFTOOL OR NOT LLVM_STRIP OR NOT CLANG OR NOT BPF_INCLUDE)
-    message(STATUS "Skipping profiler: missing bpftool=${BPFTOOL} llvm-strip=${LLVM_STRIP} clang=${CLANG} libbpf-dev=${BPF_INCLUDE}")
+if(NOT TARGET Libbpf::Libbpf OR NOT TARGET bpftool)
+    message(STATUS "Skipping profiler: bundled libbpf/bpftool unavailable (libelf-dev missing?)")
     return()
 endif()
+
+find_program(LLVM_STRIP NAMES llvm-strip llvm-strip-21)
+find_program(CLANG NAMES clang clang-21)
+if(NOT LLVM_STRIP OR NOT CLANG)
+    message(STATUS "Skipping profiler: missing llvm-strip=${LLVM_STRIP} clang=${CLANG}")
+    return()
+endif()
+
+set(BPFTOOL "$<TARGET_FILE:bpftool>")
 
 file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
 
@@ -23,28 +27,37 @@ set(BPF_OBJ ${CMAKE_CURRENT_BINARY_DIR}/profiler.bpf.o)
 set(BPF_SKEL ${CMAKE_CURRENT_BINARY_DIR}/profiler.skel.h)
 
 # Use cmake -P scripts to avoid shell redirect escaping issues in ninja rules.
-file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/gen_vmlinux.cmake"
-    "execute_process(\n"
-    "    COMMAND \"${BPFTOOL}\" btf dump file /sys/kernel/btf/vmlinux format c\n"
-    "    OUTPUT_FILE \"${VMLINUX_H}\"\n"
-    "    COMMAND_ERROR_IS_FATAL ANY\n"
-    ")\n"
+# file(GENERATE) (vs WRITE) so $<TARGET_FILE:bpftool> resolves at generate time.
+file(GENERATE
+    OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/gen_vmlinux.cmake"
+    CONTENT
+"execute_process(
+    COMMAND \"${BPFTOOL}\" btf dump file /sys/kernel/btf/vmlinux format c
+    OUTPUT_FILE \"${VMLINUX_H}\"
+    COMMAND_ERROR_IS_FATAL ANY
 )
+")
 
-file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/gen_skeleton.cmake"
-    "execute_process(\n"
-    "    COMMAND \"${BPFTOOL}\" gen skeleton \"${BPF_OBJ}\"\n"
-    "    OUTPUT_FILE \"${BPF_SKEL}\"\n"
-    "    COMMAND_ERROR_IS_FATAL ANY\n"
-    ")\n"
+file(GENERATE
+    OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/gen_skeleton.cmake"
+    CONTENT
+"execute_process(
+    COMMAND \"${BPFTOOL}\" gen skeleton \"${BPF_OBJ}\"
+    OUTPUT_FILE \"${BPF_SKEL}\"
+    COMMAND_ERROR_IS_FATAL ANY
 )
+")
 
 add_custom_command(
     OUTPUT ${VMLINUX_H}
     COMMAND ${CMAKE_COMMAND} -P ${CMAKE_CURRENT_BINARY_DIR}/gen_vmlinux.cmake
+    DEPENDS bpftool
     COMMENT "Generating vmlinux.h"
 )
 
+# usdt.bpf.h transitively pulls in <linux/errno.h> -> <asm/errno.h>, which
+# lives in the multiarch include path on Debian/Ubuntu. Probe both x86_64 and
+# aarch64 multiarch dirs; the architecture mismatch path is harmless if absent.
 add_custom_command(
     OUTPUT ${BPF_OBJ}
     COMMAND ${CLANG}
@@ -52,7 +65,9 @@ add_custom_command(
     -g -O2
     -D__TARGET_ARCH_${BPF_ARCH}
     -I${CMAKE_CURRENT_BINARY_DIR}
-    -I/usr/include/bpf
+    -I${CMAKE_BINARY_DIR}/libbpf-generated/include
+    -I/usr/include/x86_64-linux-gnu
+    -I/usr/include/aarch64-linux-gnu
     -c ${CMAKE_CURRENT_SOURCE_DIR}/profiler.bpf.c
     -o ${BPF_OBJ}
     DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/profiler.bpf.c ${VMLINUX_H}
@@ -65,7 +80,7 @@ add_custom_command(
     # Strip DWARF in-place (keeps BTF); bpftool then derives struct name from profiler.bpf.o -> profiler_bpf.
     COMMAND ${LLVM_STRIP} -g ${BPF_OBJ}
     COMMAND ${CMAKE_COMMAND} -P ${CMAKE_CURRENT_BINARY_DIR}/gen_skeleton.cmake
-    DEPENDS ${BPF_OBJ}
+    DEPENDS ${BPF_OBJ} bpftool
     COMMENT "Generating BPF skeleton"
     VERBATIM
 )
@@ -79,6 +94,6 @@ add_executable(profiler main.cpp profiler.cpp)
 add_dependencies(profiler profiler-skel)
 
 target_include_directories(profiler PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
-target_link_libraries(profiler PRIVATE bpf elf z symbolizer Boost::program_options)
+target_link_libraries(profiler PRIVATE Libbpf::Libbpf symbolizer Boost::program_options)
 
 add_subdirectory(tests)
