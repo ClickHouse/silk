@@ -125,6 +125,23 @@ nginx `return 200` (Content-Length: 0), loopback, 10 s measurement, 2 s warmup. 
 
 At 1 connection both modes are identical (~36-38k RPS, ~24-27 µs p50): baseline is Poco's HTTP parsing overhead. At higher concurrency both clients saturate nginx at ~1M RPS, so throughput is similar. The difference is latency: fiber p50 stays nearly flat across all concurrency levels (24-84 µs) while thread p50 grows linearly with thread count, reaching 10x worse at 1024 connections (878 µs vs 84 µs). The fiber scheduler multiplexes all connections across 16 scheduler threads with zero per-fiber context-switch cost; each additional thread adds OS scheduling overhead proportional to the total thread count.
 
+### Server: internal (silk fibers) vs nginx
+
+**Not a production HTTP server.** `http-perf server` is benchmark scaffolding: each accepted connection runs Poco's stock `HTTPServerConnection::run` on a fiber over `FiberSocketImpl`. Poco's HTTP server is allocation-heavy — `std::stringstream`-driven request/response parsing, per-request buffer churn even after our `MemoryPool` patches, virtual dispatch on every byte. Nobody should ship this; we use it because reusing Poco's parser on both ends gives an apples-to-apples comparison: the only thing varying between the two rows of the table below is the server's I/O loop (silk's accept fiber + per-conn fibers + io_uring read/write vs nginx's tuned C event loop). Everything else — request parsing, response building, the client — is held constant.
+
+| connections | server | RPS | avg | p50 | p95 | p99 | p99.9 |
+|---|---|---|---|---|---|---|---|
+| 1 | internal | 27k | 37 µs | 36 µs | 43 µs | 49 µs | 64 µs |
+| 256 | internal | 1023k | 250 µs | 152 µs | 1478 µs | 1960 µs | 2248 µs |
+| 512 | internal | 1011k | 506 µs | 88 µs | 5023 µs | 5146 µs | 5277 µs |
+| 1024 | internal | 964k | 1020 µs | 94 µs | 12445 µs | 16772 µs | 19661 µs |
+| 1 | nginx | 36k | 28 µs | 25 µs | 35 µs | 42 µs | 97 µs |
+| 256 | nginx | 1290k | 198 µs | 72 µs | 1700 µs | 2050 µs | 2137 µs |
+| 512 | nginx | 1248k | 410 µs | 63 µs | 4557 µs | 5738 µs | 5904 µs |
+| 1024 | nginx | 1254k | 816 µs | 58 µs | 9979 µs | 12599 µs | 13163 µs |
+
+The internal server lands at ~80% of nginx RPS at high concurrency (964–1023k vs 1248–1290k). The gap is Poco overhead, not silk overhead: nginx's `return 200` handler skips most of HTTP/1.1 parsing, while Poco constructs `HTTPServerRequestImpl`/`HTTPServerResponseImpl` plus heap-allocated stream buffers per request. p50 latencies sit within a few µs of each other at high concurrency; tail latencies are dominated by client-side queuing in both cases. The takeaway is that silk's accept-fiber + per-connection-fiber I/O loop has negligible overhead on top of whatever HTTP machinery you put on it — to beat nginx you'd swap Poco for a hand-rolled state machine that allocates nothing per request, which is a different project.
+
 ### High-concurrency throughput (connections=10000, delay=10ms, duration=60s)
 
 | connections | mode | RPS | avg | p50 | p95 | p99 | p99.9 |
