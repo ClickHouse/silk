@@ -8,6 +8,7 @@
 #include <Poco/Net/StreamSocket.h>
 
 #include <cerrno>
+#include <format>
 
 #include <poll.h>
 #include <unistd.h>
@@ -128,7 +129,8 @@ bool FiberSocketImpl::poll(const Poco::Timespan & timeout, int mode)
 
 int FiberSocketImpl::sendBytes(const void * buffer, int length, int flags)
 {
-    UNUSED(flags);
+    // Poco flags (MSG_NOSIGNAL, MSG_PEEK, etc.) are not plumbed through to io_uring read/write.
+    ASSERT(flags == 0, "FiberSocketImpl::sendBytes does not support flags (got {})", flags);
 
     int total = 0;
     const char * ptr = static_cast<const char *>(buffer);
@@ -165,48 +167,10 @@ int FiberSocketImpl::sendBytes(const void * buffer, int length, int flags)
     return total;
 }
 
-void FiberSocketImpl::shutdown()
-{
-    int fd = atomicFd.load(std::memory_order_relaxed);
-    if (fd < 0)
-    {
-        return;
-    }
-
-    int r = ::shutdown(fd, SHUT_RDWR);
-    if (r < 0)
-    {
-        r = errno;
-        error(r, "shutdown");
-    }
-}
-
-Poco::Net::SocketImpl * FiberServerSocketImpl::acceptConnection(Poco::Net::SocketAddress & clientAddr)
-{
-    silk::FiberScheduler::IoFuture pollFuture;
-    silk::FiberScheduler::poll(sockfd(), POLLIN, nullptr, &pollFuture);
-    int r = pollFuture.wait();
-    if (r)
-    {
-        error(r, "accept poll");
-    }
-
-    sockaddr_storage storage;
-    socklen_t addrLen = sizeof(storage);
-    int fd = ::accept4(sockfd(), reinterpret_cast<sockaddr *>(&storage), &addrLen, SOCK_NONBLOCK | SOCK_CLOEXEC);
-    if (fd < 0)
-    {
-        r = errno;
-        error(r, "accept");
-    }
-
-    clientAddr = Poco::Net::SocketAddress(reinterpret_cast<sockaddr *>(&storage), addrLen);
-    return new FiberSocketImpl(fd);
-}
-
 int FiberSocketImpl::receiveBytes(void * buffer, int length, int flags)
 {
-    UNUSED(flags);
+    // Poco flags (MSG_NOSIGNAL, MSG_PEEK, etc.) are not plumbed through to io_uring read/write.
+    ASSERT(flags == 0, "FiberSocketImpl::receiveBytes does not support flags (got {})", flags);
 
 #if defined(USE_IO_URING_RW)
     uint64_t bytesRead = 0;
@@ -236,4 +200,41 @@ int FiberSocketImpl::receiveBytes(void * buffer, int length, int flags)
         error(r, "recv");
     }
 #endif
+}
+
+Poco::Net::SocketImpl * FiberServerSocketImpl::acceptConnection(Poco::Net::SocketAddress & clientAddr)
+{
+    int r = silk::FiberScheduler::poll(sockfd(), POLLIN);
+    if (r)
+    {
+        error(r, "accept poll");
+    }
+
+    sockaddr_storage storage;
+    socklen_t addrLen = sizeof(storage);
+    int fd = ::accept4(sockfd(), reinterpret_cast<sockaddr *>(&storage), &addrLen, SOCK_NONBLOCK | SOCK_CLOEXEC);
+    if (fd < 0)
+    {
+        r = errno;
+        error(r, "accept");
+    }
+
+    clientAddr = Poco::Net::SocketAddress(reinterpret_cast<sockaddr *>(&storage), addrLen);
+    return new FiberSocketImpl(fd);
+}
+
+void FiberSocketImpl::shutdown()
+{
+    int fd = atomicFd.load(std::memory_order_relaxed);
+    if (fd < 0)
+    {
+        return;
+    }
+
+    int r = ::shutdown(fd, SHUT_RDWR);
+    if (r < 0)
+    {
+        r = errno;
+        error(r, "shutdown");
+    }
 }
