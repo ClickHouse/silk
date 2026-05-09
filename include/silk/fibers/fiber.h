@@ -52,16 +52,53 @@ union FiberId
 static_assert(sizeof(FiberId) == 8);
 
 /**
+ * Kind of a profile event emitted by the scheduler.
+ */
+enum class ProfileEventKind : uint8_t
+{
+    SUSPEND_WAIT = 0, // suspended -> enqueueReady: blocked-on-condition latency
+    IO_SUBMIT = 1, // submitIo: io_uring_submit cost per fiber-suspend flush
+    IO_WAIT = 2, // enqueueIo -> handleCompletion: IO latency
+    READY_WAIT = 3, // enqueueReady -> runFiber: ready-queue dwell
+    FIBER_RUN = 4, // switchToFiberContext -> return: on-CPU time per slice
+    MAX
+};
+
+/**
+ * Percentile latency report returned by FiberScheduler::reportLatency.
+ * All values are in nanoseconds.
+ */
+struct LatencyReport
+{
+    uint64_t p50;
+    uint64_t p90;
+    uint64_t p99;
+    uint64_t p999;
+    uint64_t count;
+};
+
+/**
  * Cooperative fiber scheduler with per-CPU threads, async IO, and work-stealing.
  */
 class FiberScheduler
 {
 public:
     /**
+     * Optional knobs passed to initialize.  Add fields with defaults to extend
+     * without changing the API.
+     */
+    struct Options
+    {
+        // Allocate per-CPU latency profilers.
+        bool enableProfiler = false;
+    };
+
+    /**
      * Initialize the scheduler and start per-CPU scheduler threads.
      * Must be called once before any other FiberScheduler method.
+     * @param options  Optional configuration; defaults are used when null.
      */
-    static void initialize() noexcept;
+    static void initialize(const Options * options = nullptr) noexcept;
 
     /**
      * Stop all scheduler threads and release all resources.
@@ -194,7 +231,7 @@ public:
     /**
      * Suspend the current fiber and invoke callback.
      *
-     * The callback is responsible for arranging wakeup — typically by registering
+     * The callback is responsible for arranging wakeup - typically by registering
      * the fiber as a waiter and calling schedule() when the condition is met.
      * The callback must handle the race where the wakeup arrives before the fiber
      * is fully suspended.
@@ -235,6 +272,8 @@ public:
     private:
         friend class FiberScheduler;
         uint64_t * result = nullptr;
+        uint64_t submitTimestamp = 0;
+        uint8_t category = 0;
     };
 
     /**
@@ -373,6 +412,14 @@ public:
      * @param future       Completion handle.
      */
     static void sleep(uint64_t nanoseconds, SleepFuture * future) noexcept;
+
+    /**
+     * Return latency percentiles for the given event kind and fiber category,
+     * aggregated across all per-CPU profilers.
+     * @param kind      Profile event kind.
+     * @param category  Fiber category (FiberId::category).
+     */
+    static LatencyReport reportLatency(ProfileEventKind kind, uint8_t category) noexcept;
 
 private:
     struct SchedulerState;

@@ -167,6 +167,7 @@ struct ClientConfig
     uint64_t durationNs = 10'000'000'000ULL;
     uint64_t warmupNs = 2'000'000'000ULL;
     bool useThreads = false;
+    bool printCounters = false;
 };
 
 static std::unique_ptr<Aws::S3::S3Client>
@@ -213,7 +214,13 @@ static void printJson(std::vector<uint64_t> & latNs, const ClientConfig & cfg, u
     printf("  \"rps\": %.1f,\n", opsPerSec);
     printf("  \"errors\": %u,\n", failedSessions);
     printLatencyUs(latNs);
-    printCounters();
+    if (cfg.printCounters)
+    {
+        printf(",");
+        printSchedulerLatency();
+        printf(",");
+        printCounters();
+    }
     printf("}\n");
 }
 
@@ -751,6 +758,7 @@ int main(int argc, char ** argv)
         ("threads",      po::bool_switch(&cfg.useThreads),  "use SDK thread executor instead of FiberExecutor")
         ("duration",     po::value(&durationStr),            "measurement duration (e.g. 10s, 500ms)")
         ("warmup",       po::value(&warmupStr),             "warmup duration (e.g. 2s, 500ms)")
+        ("print-counters", po::bool_switch(&cfg.printCounters), "enable per-CPU profiler and include counters in the JSON report")
         ("verbose,v",    po::bool_switch(&verbose),         "enable debug logging")
         ;
     // clang-format on
@@ -792,7 +800,8 @@ int main(int argc, char ** argv)
     silk::initialize();
     if (!cfg.useThreads)
     {
-        silk::FiberScheduler::initialize();
+        silk::FiberScheduler::Options options{.enableProfiler = cfg.printCounters};
+        silk::FiberScheduler::initialize(&options);
     }
 
     if (cfg.useThreads)

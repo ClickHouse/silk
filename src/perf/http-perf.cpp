@@ -56,6 +56,7 @@ struct ClientConfig
     uint64_t durationNs = 10'000'000'000ULL;
     uint64_t warmupNs = 2'000'000'000ULL;
     bool useThreads = false;
+    bool printCounters = false;
 };
 
 class Client
@@ -236,7 +237,13 @@ static void printJson(std::vector<uint64_t> & latNs, const ClientConfig & cfg)
     printf("  \"total\": %lu,\n", total);
     printf("  \"rps\": %.1f,\n", rps);
     printLatencyUs(latNs);
-    printCounters();
+    if (cfg.printCounters)
+    {
+        printf(",");
+        printSchedulerLatency();
+        printf(",");
+        printCounters();
+    }
     printf("}\n");
 }
 
@@ -262,6 +269,7 @@ static void runClient(int argc, char ** argv)
         ("threads",     po::bool_switch(&cfg.useThreads), "use OS threads instead of fibers")
         ("duration",    po::value(&durationStr),          "measurement duration (e.g. 10s, 500ms)")
         ("warmup",      po::value(&warmupStr),            "warmup duration (e.g. 2s, 500ms)")
+        ("print-counters", po::bool_switch(&cfg.printCounters), "enable per-CPU profiler and include counters in the JSON report")
         ("verbose,v",   po::bool_switch(&verbose),        "enable debug logging")
         ;
     // clang-format on
@@ -295,7 +303,8 @@ static void runClient(int argc, char ** argv)
     silk::initialize();
     if (!cfg.useThreads)
     {
-        silk::FiberScheduler::initialize();
+        silk::FiberScheduler::Options options{.enableProfiler = cfg.printCounters};
+        silk::FiberScheduler::initialize(&options);
     }
 
     SILK_INFO(
@@ -345,6 +354,7 @@ struct ServerConfig
     uint32_t maxQueued = 0;
     uint64_t delayNs = 0;
     bool useThreads = false;
+    bool printCounters = false;
 };
 
 struct EchoHandlerConfig
@@ -607,6 +617,7 @@ static void runServer(int argc, char ** argv)
         ("queued",    po::value(&cfg.maxQueued),  "max queued connections (default: 4 * available CPUs)")
         ("delay",     po::value(&delayStr),       "per-request response delay (e.g. 5ms, 100us)")
         ("threads",   po::bool_switch(&cfg.useThreads), "use OS threads instead of fibers")
+        ("print-counters", po::bool_switch(&cfg.printCounters), "enable per-CPU profiler and include counters in the JSON report")
         ("verbose,v", po::bool_switch(&verbose),  "enable debug logging")
         ;
     // clang-format on
@@ -644,7 +655,8 @@ static void runServer(int argc, char ** argv)
     silk::initialize();
     if (!cfg.useThreads)
     {
-        silk::FiberScheduler::initialize();
+        silk::FiberScheduler::Options options{.enableProfiler = cfg.printCounters};
+        silk::FiberScheduler::initialize(&options);
     }
 
     Poco::Net::HTTPServerParams::Ptr params = new Poco::Net::HTTPServerParams();
