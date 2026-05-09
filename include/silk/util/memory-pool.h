@@ -5,6 +5,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <type_traits>
 
 namespace silk
 {
