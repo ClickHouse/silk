@@ -48,7 +48,7 @@ namespace silk
 
 static constexpr uint64_t FIBER_STACK_SIZE = 64 * 1024;
 static constexpr uint64_t READY_QUEUE_CAPACITY = 1024;
-static constexpr uint64_t IO_URING_QUEUE_SIZE = 128;
+static constexpr uint64_t IO_URING_QUEUE_SIZE = 256;
 static constexpr uint64_t WAITER_TABLE_SIZE = 4096;
 static constexpr uint64_t INITIAL_WAIT_NS = 1'000;
 static constexpr uint64_t MAX_WAIT_NS = 10'000'000;
