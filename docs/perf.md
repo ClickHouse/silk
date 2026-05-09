@@ -216,3 +216,44 @@ The write `16x1` p50 (776 µs fibers / 994 µs threads) is much lower than the a
 | 100 | 100 | read | threads | 44046 | 223812 µs | 217035 µs | 290433 µs | 440547 µs | 957205 µs |
 
 At 10,000 concurrent requests (100 jobs x iodepth 100) throughput is identical (~45k OPS) -- MinIO is fully saturated. The difference is tail latency: fiber p99.9 is 580 ms vs 957 ms for threads (1.65x). p95 and p99 are close (283 ms vs 290 ms and 425 ms vs 441 ms); the gap widens at p99.9 where OS scheduler jitter under 10,000 OS threads causes occasional long stalls that the fiber scheduler avoids.
+
+---
+
+## Latency profiler
+
+Per-CPU profiler (opted in via `--print-counters`) emits log2 histograms for five intervals in the fiber/IO lifecycle, listed below in lifetime order. Producer is the per-CPU scheduler thread (sole producer of its SPSC ring); consumer is the same CPU's service loop, drained on every iteration.
+
+| event | interval |
+|---|---|
+| `suspend_wait` | suspended -> next `enqueueReady` (blocked-on-condition latency) |
+| `io_submit` | `io_uring_submit` syscall per fiber-suspend flush |
+| `io_wait` | `enqueueIo` -> CQE handled (kernel IO latency) |
+| `ready_wait` | `enqueueReady` -> dispatch (ready-queue dwell) |
+| `fiber_run` | `switchToFiberContext` -> return (on-CPU time per slice) |
+
+### Per-IO breakdown (net-perf, 1000 connections, 60 s, 1853k RPS)
+
+| event | p50 | p90 | p99 | p99.9 |
+|---|---|---|---|---|
+| `suspend_wait` | 72.8 µs | 441.7 µs | 1.8 ms | 3.8 ms |
+| `io_submit` | 4.1 µs | 7.8 µs | 15.4 µs | 26.8 µs |
+| `io_wait` | 78.0 µs | 445.2 µs | 1.8 ms | 3.8 ms |
+| `ready_wait` | 54.3 µs | 251.2 µs | 927.3 µs | 1.0 ms |
+| `fiber_run` | 206 ns | 395 ns | 503 ns | 3.2 µs |
+
+Per request (~2 IOs): summed p50 components total ~273 µs vs 301 µs observed p50; summed mean components total ~490 µs vs 540 µs observed avg. Self-consistent within 10%.
+
+`fiber_run` p50 = 206 ns confirms the dispatch loop itself is essentially free; this workload is entirely IO-bound. `SchedulerSystemTime` totals 1057 CPU-s (55% of 32 cores x 60 s) -- almost entirely `io_uring_submit`: 257 M syscalls x 4.1 µs = 1057 s. User-mode fiber work consumes 54 s (3%); idle time is 147 s (8%).
+
+The profile pinpoints `io_uring_submit` as the dominant lever. SQPOLL is incompatible with the per-CPU pinned scheduler (kernel poller would compete on the same CPU). The next optimization is batching submits at the `handleReadyQueue` boundary instead of per-fiber-suspend: with 4-16 ready fibers per dispatch pass typical, that's a 4-16x reduction in syscall count.
+
+### Profiler overhead (net-perf, 1000 connections, 60 s)
+
+| metric | off | on | Δ |
+|---|---|---|---|
+| RPS | 1889k | 1853k | -1.9% |
+| p50 | 210 µs | 301 µs | +43% |
+| p99 | 3404 µs | 2299 µs | **-32%** |
+| p99.9 | 3607 µs | 2649 µs | **-27%** |
+
+~2% RPS cost; tail latency *improves* substantially -- the per-suspend TSC reads + ring writes inject a small fixed cost into the dispatch loop that damps the bursty kernel-side contention driving the long tail.

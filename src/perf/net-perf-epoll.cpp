@@ -828,6 +828,7 @@ struct ClientConfig
     uint32_t threads = 0; // 0 = auto-detect via silk::getAvailableProcessorCount
     uint64_t durationNs = 10'000'000'000ULL;
     uint64_t warmupNs = 2'000'000'000ULL;
+    bool printCounters = false;
 };
 
 class Client
@@ -1145,7 +1146,11 @@ static void printJson(std::vector<uint64_t> & latNs, const ClientConfig & cfg)
     printf("  \"rps\": %.1f,\n", rps);
     printf("  \"bw_bytes\": %.0f,\n", bwBytesS);
     printLatencyUs(latNs);
-    printCounters();
+    if (cfg.printCounters)
+    {
+        printf(",");
+        printCounters();
+    }
     printf("}\n");
 }
 
@@ -1246,6 +1251,7 @@ static void runClient(int argc, char ** argv)
         ("msg-size",    po::value(&cfg.msgSize),        "message size in bytes")
         ("duration",    po::value(&durationStr),        "measurement duration (e.g. 10s, 500ms)")
         ("warmup",      po::value(&warmupStr),          "warmup duration (e.g. 2s, 500ms)")
+        ("print-counters", po::bool_switch(&cfg.printCounters), "include counters in the JSON report")
         ("verbose,v",   po::bool_switch(&verbose),      "enable debug logging")
         ;
     // clang-format on

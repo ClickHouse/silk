@@ -389,6 +389,7 @@ struct ServerConfig
     uint16_t port = 7777;
     uint32_t msgSize = 64;
     uint64_t delayNs = 0;
+    bool printCounters = false;
 };
 
 class Server
@@ -553,6 +554,7 @@ struct ClientConfig
     uint32_t msgSize = 64;
     uint64_t durationNs = 10'000'000'000ULL;
     uint64_t warmupNs = 2'000'000'000ULL;
+    bool printCounters = false;
 };
 
 class Client
@@ -700,7 +702,13 @@ static void printJson(std::vector<uint64_t> & latNs, const ClientConfig & cfg)
     printf("  \"rps\": %.1f,\n", rps);
     printf("  \"bw_bytes\": %.0f,\n", bwBytesS);
     printLatencyUs(latNs);
-    printCounters();
+    if (cfg.printCounters)
+    {
+        printf(",");
+        printSchedulerLatency();
+        printf(",");
+        printCounters();
+    }
     printf("}\n");
 }
 
@@ -724,6 +732,7 @@ static void runServer(int argc, char ** argv)
         ("port",     po::value(&cfg.port),    "listen port")
         ("msg-size", po::value(&cfg.msgSize), "echo message size in bytes")
         ("delay",    po::value(&delayStr),    "server-side delay per message (e.g. 1ms, 100us)")
+        ("print-counters", po::bool_switch(&cfg.printCounters), "enable per-CPU profiler and include counters in the JSON report")
         ("verbose,v", po::bool_switch(&verbose), "enable debug logging")
         ;
     // clang-format on
@@ -753,7 +762,8 @@ static void runServer(int argc, char ** argv)
     sigset_t mask = blockSignals();
 
     silk::initialize();
-    silk::FiberScheduler::initialize();
+    silk::FiberScheduler::Options options{.enableProfiler = cfg.printCounters};
+    silk::FiberScheduler::initialize(&options);
 
     SILK_INFO("starting server on {}:{}", cfg.host, cfg.port);
 
@@ -794,6 +804,7 @@ static void runClient(int argc, char ** argv)
         ("msg-size",    po::value(&cfg.msgSize),        "message size in bytes")
         ("duration",    po::value(&durationStr),        "measurement duration (e.g. 10s, 500ms)")
         ("warmup",      po::value(&warmupStr),          "warmup duration (e.g. 2s, 500ms)")
+        ("print-counters", po::bool_switch(&cfg.printCounters), "enable per-CPU profiler and include counters in the JSON report")
         ("verbose,v",   po::bool_switch(&verbose),      "enable debug logging")
         ;
     // clang-format on
@@ -824,7 +835,8 @@ static void runClient(int argc, char ** argv)
     sigset_t mask = blockSignals();
 
     silk::initialize();
-    silk::FiberScheduler::initialize();
+    silk::FiberScheduler::Options options{.enableProfiler = cfg.printCounters};
+    silk::FiberScheduler::initialize(&options);
 
     SILK_INFO("starting client on {}:{}", cfg.host, cfg.port);
 

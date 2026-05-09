@@ -20,13 +20,19 @@ sigset_t blockSignals() noexcept;
 bool sigwaitFor(const sigset_t & mask, uint64_t ns) noexcept;
 
 /**
- * Sort latNs, compute latency statistics, and print the "latency_us" JSON
- * section. Outputs a trailing comma; must be followed by printCounters().
+ * Sort latNs, compute latency statistics, and print the "latency_us" JSON section.
  */
 void printLatencyUs(std::vector<uint64_t> & latNs) noexcept;
 
 /**
- * Print the "counters" JSON section (no trailing comma; closes the object).
+ * Print the "scheduler_latency" JSON section, aggregating per-CPU profiler
+ * histograms by event kind and fiber category.
+ */
+void printSchedulerLatency() noexcept;
+
+/**
+ * Print the "counters" JSON section: scheduler-wide simple counters.
+ * Outputs no trailing comma; intended as the last field of the JSON object.
  */
 void printCounters() noexcept;
 

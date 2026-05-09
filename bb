@@ -475,7 +475,29 @@ def _run_flamegraph(preset: str, name: str, client_args: list[str]) -> None:
     log.info("flamegraph: %s", out_svg)
 
 
+def _fmt_ns(ns: int) -> str:
+    if ns >= 1_000_000:
+        return f"{ns / 1_000_000:.1f} ms"
+    if ns >= 1_000:
+        return f"{ns / 1_000:.1f} us"
+    return f"{ns} ns"
+
+
 def _print_counters(data: dict[str, Any]) -> None:
+    sched = data.get("scheduler_latency", {})
+    if sched:
+        print()
+        for kind_name, cats in sched.items():
+            print(f"  {kind_name}")
+            for cat_name, r in cats.items():
+                print(
+                    f"    {cat_name}  count: {r['count']:>10,}"
+                    f"  p50: {_fmt_ns(r['p50_ns']):>10}"
+                    f"  p90: {_fmt_ns(r['p90_ns']):>10}"
+                    f"  p99: {_fmt_ns(r['p99_ns']):>10}"
+                    f"  p999: {_fmt_ns(r['p999_ns']):>10}"
+                )
+
     counters = data.get("counters", {})
     if not counters:
         return
@@ -584,6 +606,7 @@ def cmd_net_perf(preset: str, params: NetPerfParams) -> None:
     server_cpus, client_cpus = _cpu_split()
     local = params.host in ("127.0.0.1", "localhost")
     verbose_flag = ["--verbose"] if log.isEnabledFor(logging.DEBUG) else []
+    print_counters_flag = ["--print-counters"] if params.print_counters else []
 
     server = None
     if local:
@@ -652,6 +675,7 @@ def cmd_net_perf(preset: str, params: NetPerfParams) -> None:
                     str(params.duration),
                     "--warmup",
                     str(params.warmup),
+                    *print_counters_flag,
                     *verbose_flag,
                     timeout=params.timeout or None,
                 )
@@ -724,6 +748,7 @@ def cmd_file_perf(preset: str, params: FilePerfParams) -> None:
 
     file_perf = os.path.join(ROOT, f"build/{preset}/bin/file-perf")
     verbose_flag = ["--verbose"] if log.isEnabledFor(logging.DEBUG) else []
+    print_counters_flag = ["--print-counters"] if params.print_counters else []
 
     try:
         if params.flamegraph:
@@ -775,6 +800,7 @@ def cmd_file_perf(preset: str, params: FilePerfParams) -> None:
                     str(params.warmup),
                     "--filename",
                     params.file,
+                    *print_counters_flag,
                     *verbose_flag,
                     timeout=params.timeout or None,
                 )
@@ -1119,6 +1145,7 @@ def cmd_http_perf(preset: str, params: HttpPerfParams) -> None:
     http_perf = os.path.join(ROOT, f"build/{preset}/bin/http-perf")
     threads_flag = ["--threads"] if params.threads else []
     verbose_flag = ["--verbose"] if log.isEnabledFor(logging.DEBUG) else []
+    print_counters_flag = ["--print-counters"] if params.print_counters else []
 
     try:
         if params.flamegraph:
@@ -1167,6 +1194,7 @@ def cmd_http_perf(preset: str, params: HttpPerfParams) -> None:
                     "--warmup",
                     str(params.warmup),
                     *threads_flag,
+                    *print_counters_flag,
                     *verbose_flag,
                     timeout=params.timeout or None,
                 )
@@ -1290,6 +1318,7 @@ def cmd_s3_perf(preset: str, params: S3PerfParams) -> None:
 
     threads_flag = ["--threads"] if params.threads else []
     verbose_flag = ["--verbose"] if log.isEnabledFor(logging.DEBUG) else []
+    print_counters_flag = ["--print-counters"] if params.print_counters else []
 
     def make_cmd(jobs: int, depth: int, mode: str) -> list[str]:
         return [
@@ -1319,6 +1348,7 @@ def cmd_s3_perf(preset: str, params: S3PerfParams) -> None:
             "--warmup",
             str(params.warmup),
             *threads_flag,
+            *print_counters_flag,
             *verbose_flag,
         ]
 

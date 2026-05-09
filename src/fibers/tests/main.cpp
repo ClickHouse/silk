@@ -12,7 +12,8 @@ int main(int argc, char ** argv)
     }
 
     silk::initialize();
-    silk::FiberScheduler::initialize();
+    silk::FiberScheduler::Options options{.enableProfiler = true};
+    silk::FiberScheduler::initialize(&options);
 
     int r = RUN_ALL_TESTS();
 

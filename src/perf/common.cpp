@@ -1,5 +1,6 @@
 #include "common.h"
 
+#include <silk/fibers/fiber.h>
 #include <silk/util/assert.h>
 #include <silk/util/perf.h>
 #include <silk/util/platform.h>
@@ -102,7 +103,26 @@ void printLatencyUs(std::vector<uint64_t> & latNs) noexcept
     printf("    \"p99\":   %.2f,\n", percentileUs(latNs, 99.0));
     printf("    \"p99_9\": %.2f,\n", percentileUs(latNs, 99.9));
     printf("    \"p99_99\":%.2f\n", percentileUs(latNs, 99.99));
-    printf("  },\n");
+    printf("  }\n");
+}
+
+static const char * profileEventKindName(silk::ProfileEventKind kind) noexcept
+{
+    switch (kind)
+    {
+        case silk::ProfileEventKind::SUSPEND_WAIT:
+            return "suspend_wait";
+        case silk::ProfileEventKind::IO_SUBMIT:
+            return "io_submit";
+        case silk::ProfileEventKind::IO_WAIT:
+            return "io_wait";
+        case silk::ProfileEventKind::READY_WAIT:
+            return "ready_wait";
+        case silk::ProfileEventKind::FIBER_RUN:
+            return "fiber_run";
+        default:
+            return "unknown";
+    }
 }
 
 void printCounters() noexcept
@@ -116,6 +136,56 @@ void printCounters() noexcept
     {
         uint64_t value = out[i].value.load(std::memory_order_relaxed);
         printf("    \"%s\": %lu%s\n", silk::Perf::getSimpleCounterInfo(i).name, value, i + 1 < count ? "," : "");
+    }
+    printf("  }\n");
+}
+
+void printSchedulerLatency() noexcept
+{
+    printf("  \"scheduler_latency\": {\n");
+
+    bool firstKind = true;
+    for (uint32_t k = 0; k < static_cast<uint32_t>(silk::ProfileEventKind::MAX); ++k)
+    {
+        auto kind = static_cast<silk::ProfileEventKind>(k);
+
+        // Collect non-zero categories.
+        bool firstCat = true;
+        for (uint32_t cat = 0; cat < 256; ++cat)
+        {
+            silk::LatencyReport report = silk::FiberScheduler::reportLatency(kind, static_cast<uint8_t>(cat));
+            if (report.count == 0)
+            {
+                continue;
+            }
+            if (firstCat)
+            {
+                if (!firstKind)
+                {
+                    printf(",\n");
+                }
+                printf("    \"%s\": {\n", profileEventKindName(kind));
+                firstKind = false;
+            }
+            printf(
+                "      %s\"%u#\": { \"count\": %lu, \"p50_ns\": %lu, \"p90_ns\": %lu, \"p99_ns\": %lu, \"p999_ns\": %lu }",
+                firstCat ? "" : ",\n      ",
+                cat,
+                report.count,
+                report.p50,
+                report.p90,
+                report.p99,
+                report.p999);
+            firstCat = false;
+        }
+        if (!firstCat)
+        {
+            printf("\n    }");
+        }
+    }
+    if (!firstKind)
+    {
+        printf("\n");
     }
     printf("  }\n");
 }
