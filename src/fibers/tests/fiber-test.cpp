@@ -128,6 +128,85 @@ TEST(Fiber, getCurrent)
     ASSERT_EQ(r, 0);
 }
 
+// getCurrentFiberId returns 0 outside a fiber context (proxy fiber thread).
+TEST(Fiber, getCurrentFiberIdOutsideFiber)
+{
+    EXPECT_EQ(FiberScheduler::getCurrentFiberId().raw, 0);
+}
+
+// getCurrentFiberId returns a non-zero id inside a fiber, encoding cpu+counter.
+TEST(Fiber, getCurrentFiberIdInsideFiber)
+{
+    struct Params
+    {
+        FiberId * out;
+
+        static int fiberMain(Params * p) noexcept
+        {
+            *p->out = FiberScheduler::getCurrentFiberId();
+            return 0;
+        }
+    };
+
+    FiberId id = {};
+    int r = FiberScheduler::run(Params::fiberMain, {&id});
+    ASSERT_EQ(r, 0);
+
+    EXPECT_NE(id.raw, 0u) << "non-zero id distinguishes fiber context from no-fiber sentinel";
+    EXPECT_EQ(id.category, 0u) << "default category is 0";
+    EXPECT_LT(id.cpu, getProcessorCount()) << "cpu must be a valid processor index";
+    EXPECT_GE(id.counter, 1u) << "fiberCounter starts at 1 to avoid the all-zero sentinel";
+}
+
+// Two fibers run back-to-back get distinct ids; counter advances within the same CPU.
+TEST(Fiber, getCurrentFiberIdMonotonic)
+{
+    struct Params
+    {
+        FiberId * out;
+
+        static int fiberMain(Params * p) noexcept
+        {
+            *p->out = FiberScheduler::getCurrentFiberId();
+            return 0;
+        }
+    };
+
+    FiberId first = {};
+    FiberId second = {};
+    ASSERT_EQ(FiberScheduler::run(Params::fiberMain, {&first}), 0);
+    ASSERT_EQ(FiberScheduler::run(Params::fiberMain, {&second}), 0);
+
+    EXPECT_NE(first.raw, second.raw) << "back-to-back fibers must have distinct ids";
+    if (first.cpu == second.cpu)
+    {
+        EXPECT_GT(second.counter, first.counter) << "counter is per-CPU monotonic";
+    }
+}
+
+// FiberScheduler::run with explicit category stamps the byte into the high 8 bits of fiberId.
+TEST(Fiber, runWithCategoryStampsUpperByte)
+{
+    struct Params
+    {
+        FiberId * out;
+
+        static int fiberMain(Params * p) noexcept
+        {
+            *p->out = FiberScheduler::getCurrentFiberId();
+            return 0;
+        }
+    };
+
+    FiberId id = {};
+    int r = FiberScheduler::run(Params::fiberMain, {&id}, uint8_t{0xAB});
+    ASSERT_EQ(r, 0);
+
+    EXPECT_EQ(id.category, 0xABu);
+    EXPECT_LT(id.cpu, getProcessorCount());
+    EXPECT_GE(id.counter, 1u);
+}
+
 // Async IO from a non-fiber thread (proxy fiber): enqueueIo must call
 // submitIo immediately since there is no runFiber to flush the SQE.
 TEST(Fiber, asyncIoFromThread)

@@ -58,7 +58,7 @@ static constexpr uint64_t CQE_TAG_TIMEOUT = 1;
 static constexpr uint64_t CQE_TAG_DOORBELL = 2;
 
 // Hard cap on CPU index (largest known socket: 384 cores).
-static constexpr uint16_t MAX_PROCESSOR_NUMBER = UINT16_MAX;
+static constexpr uint16_t INVALID_PROCESSOR_NUMBER = (1 << 10);
 
 // Table size must be a power of two.
 static_assert((WAITER_TABLE_SIZE & (WAITER_TABLE_SIZE - 1)) == 0);
@@ -122,7 +122,7 @@ public:
     Fiber(bool isProxyFiber = false) noexcept;
     ~Fiber() noexcept;
 
-    bool initialize(FiberMain * fiberMain, ParametersDtor * parametersDtor, FiberFuture * waitingFuture) noexcept;
+    bool initialize(FiberId fiberId, FiberMain * fiberMain, ParametersDtor * parametersDtor, FiberFuture * waitingFuture) noexcept;
     void deinitialize() noexcept;
 
     void switchToFiberContext() noexcept;
@@ -159,10 +159,10 @@ public:
         bool inThreadMode = false;
 
         // CPU this fiber is assigned to.
-        uint16_t processorNumber = MAX_PROCESSOR_NUMBER;
+        uint16_t processorNumber = INVALID_PROCESSOR_NUMBER;
 
         // Processor whose suspendedList this fiber is currently in.
-        uint16_t suspendedProcessorNumber = MAX_PROCESSOR_NUMBER;
+        uint16_t suspendedProcessorNumber = INVALID_PROCESSOR_NUMBER;
 
         // Suspend callback set by suspend, invoked by runFiber after the
         // context switch back to the scheduler or thread worker.
@@ -174,6 +174,9 @@ public:
 
         // Node ready for the next enqueue to the shared ready queue.
         QueueBase::QueueNode * reservedNode = nullptr;
+
+        // Fiber identity.
+        FiberId fiberId{};
     };
 
     // Cache line 1: context-switch state + per-fiber-once start/stop state.
@@ -272,15 +275,16 @@ Fiber::~Fiber() noexcept
     }
 }
 
-bool Fiber::initialize(FiberMain * fiberMain_, ParametersDtor * parametersDtor_, FiberFuture * waitingFuture_) noexcept
+bool Fiber::initialize(FiberId fiberId_, FiberMain * fiberMain_, ParametersDtor * parametersDtor_, FiberFuture * waitingFuture_) noexcept
 {
     state.store(FiberState::SUSPENDED, std::memory_order_relaxed);
 
     inThreadMode = false;
-    processorNumber = MAX_PROCESSOR_NUMBER;
-    suspendedProcessorNumber = MAX_PROCESSOR_NUMBER;
+    processorNumber = INVALID_PROCESSOR_NUMBER;
+    suspendedProcessorNumber = INVALID_PROCESSOR_NUMBER;
     suspendCallback = nullptr;
     suspendContext = nullptr;
+    fiberId = fiberId_;
     result = 0;
     waitingFuture = waitingFuture_;
 
@@ -516,6 +520,8 @@ struct FiberScheduler::ProcessorState
     void initialize(uint32_t cpu) noexcept;
     void destroy() noexcept;
 
+    FiberId allocateFiberId(uint8_t category) noexcept;
+
     void wakeThread() noexcept;
     void parkThread(uint64_t waitNs, CpuTimer * timer) noexcept;
 
@@ -532,19 +538,8 @@ struct FiberScheduler::ProcessorState
     // Cache line 0: scheduling hot path.
     struct alignas(CACHELINE_SIZE)
     {
-        // Deadline of the in-flight io_uring timeout SQE; 0 when none is pending.
-        uint64_t wakeupDeadlineCycles = 0;
-
-        // Neighboring CPUs sorted by estimated steal cost (topology-aware).
-        std::unique_ptr<StealCandidate[]> stealCandidates;
-
         // CPU index this processor is pinned to.
-        uint32_t number = MAX_PROCESSOR_NUMBER;
-
-        // eventfd used as a wakeup doorbell.  wakeThread() writes to it;
-        // a persistent IORING_OP_POLL_ADD_MULTI SQE delivers a CQE to the
-        // ring each time it becomes readable, waking io_uring_enter2.
-        int eventFd = -1;
+        uint16_t number = INVALID_PROCESSOR_NUMBER;
 
         // Set to true by runScheduler after initialization completes.
         // The steal loop checks this before accessing the ring,
@@ -555,6 +550,11 @@ struct FiberScheduler::ProcessorState
         // wakeThread() checks this before writing to eventFd so that
         // eventfd_write is only called when the thread is actually parked.
         std::atomic<bool> sleeping{};
+
+        // eventfd used as a wakeup doorbell.  wakeThread() writes to it;
+        // a persistent IORING_OP_POLL_ADD_MULTI SQE delivers a CQE to the
+        // ring each time it becomes readable, waking io_uring_enter2.
+        int eventFd = -1;
 
         // Serializes the service loop (CQ draining, sleep insertion/expiry) so
         // that steal loops on neighboring CPUs can assist without races.
@@ -572,6 +572,12 @@ struct FiberScheduler::ProcessorState
         // Per-CPU suspended list for GDB observability. Co-located with
         // suspendedLock so that insert/remove touch only this cache line.
         SuspendedList suspendedList;
+
+        // Deadline of the in-flight io_uring timeout SQE; 0 when none is pending.
+        uint64_t wakeupDeadlineCycles = 0;
+
+        // Neighboring CPUs sorted by estimated steal cost (topology-aware).
+        std::unique_ptr<StealCandidate[]> stealCandidates;
     };
 
     // Cache lines 1-3: ready queue.
@@ -595,11 +601,18 @@ struct FiberScheduler::ProcessorState
         // Must be a member: the SQPOLL thread reads the pointer from the SQE
         // asynchronously after enqueueWakeup() returns.
         __kernel_timespec wakeupTs{};
+
+        // Per-CPU monotonic counter feeding the counter field of FiberId.
+        // Initialized to 1 so the first allocated fiber (cpu=0, counter=0) does
+        // not collide with the all-zero sentinel that getCurrentFiberId returns
+        // for "no fiber".
+        std::atomic<uint64_t> fiberCounter{1};
     };
 };
 
 void FiberScheduler::ProcessorState::initialize(uint32_t cpu) noexcept
 {
+    SILK_ASSERT(cpu < INVALID_PROCESSOR_NUMBER);
     number = cpu;
 
     eventFd = ::eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
@@ -630,6 +643,15 @@ void FiberScheduler::ProcessorState::destroy() noexcept
         ::io_uring_queue_exit(&ring);
         ::close(eventFd);
     }
+}
+
+FiberId FiberScheduler::ProcessorState::allocateFiberId(uint8_t category) noexcept
+{
+    FiberId fiberId;
+    fiberId.counter = fiberCounter.fetch_add(1, std::memory_order_relaxed);
+    fiberId.cpu = number;
+    fiberId.category = category;
+    return fiberId;
 }
 
 void FiberScheduler::ProcessorState::wakeThread() noexcept
@@ -902,11 +924,6 @@ void FiberScheduler::initialize() noexcept
     scheduler = new SchedulerState();
 
     scheduler->processorCount = getProcessorCount();
-    SILK_ASSERT(
-        scheduler->processorCount < MAX_PROCESSOR_NUMBER,
-        "system has {} CPUs; silk caps at {}",
-        scheduler->processorCount,
-        MAX_PROCESSOR_NUMBER);
     scheduler->processorState = std::make_unique<ProcessorState[]>(scheduler->processorCount);
 
     cpu_set_t processCpuSet;
@@ -967,7 +984,7 @@ void FiberScheduler::buildStealCandidates() noexcept
     for (uint32_t cpu = 0; cpu < scheduler->processorCount; ++cpu)
     {
         ProcessorState * processor = &scheduler->processorState[cpu];
-        if (processor->number == MAX_PROCESSOR_NUMBER)
+        if (processor->number == INVALID_PROCESSOR_NUMBER)
         {
             continue;
         }
@@ -983,7 +1000,7 @@ void FiberScheduler::buildStealCandidates() noexcept
                 continue;
             }
             uint64_t cost = UINT64_MAX;
-            if (scheduler->processorState[other].number != MAX_PROCESSOR_NUMBER)
+            if (scheduler->processorState[other].number != INVALID_PROCESSOR_NUMBER)
             {
                 cost = topologyCostCycles(topologies[cpu], topologies[other]);
             }
@@ -1017,7 +1034,7 @@ void FiberScheduler::destroy() noexcept
     for (uint32_t cpu = 0; cpu < scheduler->processorCount; ++cpu)
     {
         ProcessorState * processor = &scheduler->processorState[cpu];
-        if (processor->number != MAX_PROCESSOR_NUMBER)
+        if (processor->number != INVALID_PROCESSOR_NUMBER)
         {
             processor->wakeThread();
         }
@@ -1047,6 +1064,11 @@ void FiberScheduler::destroy() noexcept
     delete scheduler;
 }
 
+FiberId FiberScheduler::getCurrentFiberId() noexcept
+{
+    return threadFiber ? threadFiber->fiberId : FiberId{};
+}
+
 Fiber * FiberScheduler::getCurrentFiber() noexcept
 {
     if (threadFiber)
@@ -1070,14 +1092,18 @@ void * FiberScheduler::getFiberParameters(Fiber * fiber) noexcept
     return fiber->parameters;
 }
 
-Fiber * FiberScheduler::allocateFiber(FiberMain * fiberMain, ParametersDtor * parametersDtor, FiberFuture * future) noexcept
+Fiber *
+FiberScheduler::allocateFiber(FiberMain * fiberMain, ParametersDtor * parametersDtor, uint8_t category, FiberFuture * future) noexcept
 {
     Fiber * fiber = scheduler->fiberPool.allocate();
     if (fiber)
     {
-        if (fiber->initialize(fiberMain, parametersDtor, future))
+        ProcessorState * processor = &scheduler->processorState[getCurrentProcessor()];
+        FiberId fiberId = processor->allocateFiberId(category);
+
+        if (fiber->initialize(fiberId, fiberMain, parametersDtor, future))
         {
-            Perf::getSimpleCounter(simpleCounters[FIBER_STARTED]).increment();
+            Perf::getSimpleCounter(simpleCounters[FIBER_STARTED], processor->number).increment();
             return fiber;
         }
 
@@ -1112,7 +1138,7 @@ void FiberScheduler::enqueueReady(Fiber * fiber) noexcept
     {
         if (!fiber->inThreadMode)
         {
-            if (fiber->processorNumber == MAX_PROCESSOR_NUMBER)
+            if (fiber->processorNumber == INVALID_PROCESSOR_NUMBER)
             {
                 fiber->processorNumber = getCurrentProcessor();
             }
@@ -1653,11 +1679,11 @@ void FiberScheduler::runFiber(Fiber * fiber, CpuTimer * timer) noexcept
     // two lock round-trips keep that line warm for the rest of the scheduling
     // hot path.  Benchmarking showed no net cost; the cache warming effect
     // outweighs the lock overhead on uncontested paths.
-    if (fiber->suspendedProcessorNumber != MAX_PROCESSOR_NUMBER)
+    if (fiber->suspendedProcessorNumber != INVALID_PROCESSOR_NUMBER)
     {
         ProcessorState * processor = &scheduler->processorState[fiber->suspendedProcessorNumber];
         processor->removeSuspended(fiber);
-        fiber->suspendedProcessorNumber = MAX_PROCESSOR_NUMBER;
+        fiber->suspendedProcessorNumber = INVALID_PROCESSOR_NUMBER;
     }
 
     threadFiber = fiber;
