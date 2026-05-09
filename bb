@@ -14,7 +14,6 @@ import socket
 import subprocess
 import sys
 import tempfile
-import threading
 import time
 import xml.etree.ElementTree as ET
 from collections.abc import Sequence
@@ -908,118 +907,6 @@ def cmd_fio_perf(params: FilePerfParams) -> None:
             os.unlink(params.file)
 
 
-def _parse_sockperf(output: str) -> dict[str, Any]:
-    result: dict[str, Any] = {}
-
-    m = re.search(r"Summary: Round trip is ([\d.]+) usec", output)
-    if m:
-        result["avg"] = round(float(m.group(1)), 2)
-
-    for pct_str, key in [("99.900", "p999"), ("99.000", "p99"), ("50.000", "p50")]:
-        m = re.search(rf"percentile {re.escape(pct_str)}\s*=\s*([\d.]+)", output)
-        if m:
-            result[key] = round(float(m.group(1)), 2)
-
-    m = re.search(
-        r"\[Valid Duration\] RunTime=([\d.]+) sec; SentMessages=(\d+)", output
-    )
-    if m:
-        runtime = float(m.group(1))
-        sent = int(m.group(2))
-        if runtime > 0:
-            result["iops_raw"] = round(sent / runtime)
-
-    return result
-
-
-_SP_HEADERS: list[str] = ["connections", "IOPS", "avg", "p50", "p99", "p99.9"]
-_SP_WIDTHS: list[int] = [11, 8, 8, 8, 8, 8]
-
-
-def cmd_sockperf_perf(params: NetPerfParams) -> None:
-    print()
-    print("## sockperf comparison -- TCP echo")
-    print()
-    print(
-        f"{params.host}:{params.port}, msg_size={params.msg_size}, duration={params.duration}"
-    )
-    print()
-
-    server_cpus, client_cpus = _cpu_split()
-    local = params.host in ("127.0.0.1", "localhost")
-
-    server = None
-    if local:
-        server = start_process(
-            "taskset",
-            "-c",
-            server_cpus,
-            "sockperf",
-            "server",
-            "-p",
-            str(params.port),
-            "--tcp",
-        )
-        wait_for_tcp_port(params.host, params.port)
-
-    try:
-        print(_perf_row(_SP_HEADERS, _SP_WIDTHS))
-        print(_perf_sep(_SP_WIDTHS))
-
-        for conns in params.connections:
-            outputs: list[str] = [""] * conns
-
-            def run_client(i: int) -> None:
-                result = run_capture(
-                    "taskset",
-                    "-c",
-                    client_cpus,
-                    "sockperf",
-                    "ping-pong",
-                    "-i",
-                    params.host,
-                    "-p",
-                    str(params.port),
-                    "--tcp",
-                    "-m",
-                    str(params.msg_size),
-                    "-t",
-                    str(int(_parse_duration_s(params.duration))),
-                    "--full-rtt",
-                    timeout=params.timeout or None,
-                )
-                outputs[i] = result.stderr + result.stdout
-
-            threads = [
-                threading.Thread(target=run_client, args=(i,)) for i in range(conns)
-            ]
-            for t in threads:
-                t.start()
-            for t in threads:
-                t.join()
-
-            parsed = [_parse_sockperf(o) for o in outputs]
-            total_iops = sum(p.get("iops_raw", 0) for p in parsed)
-
-            def avg_metric(key: str, _parsed: list[dict[str, Any]] = parsed) -> str:
-                vals = [p[key] for p in _parsed if key in p]
-                return _us(round(sum(vals) / len(vals), 2)) if vals else "?"
-
-            cells: list[str | int] = [
-                conns,
-                f"{round(total_iops / 1000)}k" if total_iops else "?",
-                avg_metric("avg"),
-                avg_metric("p50"),
-                avg_metric("p99"),
-                avg_metric("p999"),
-            ]
-            print(_perf_row(cells, _SP_WIDTHS))
-    finally:
-        if server:
-            server.terminate()
-            server.wait()
-
-
 @dataclass
 class HttpPerfParams:
     host: str = "127.0.0.1"
@@ -1572,7 +1459,27 @@ def _build_parser() -> argparse.ArgumentParser:
     #
 
     perf_parser = sub.add_parser(
-        "perf", help="build release then run net-perf and file-perf"
+        "perf",
+        help="build release then run a set of perf benchmarks",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        description=(
+            "Run one or more perf benchmarks in a single invocation.\n\n"
+            "Targets (positional, repeatable):\n"
+            "  file          file-perf\n"
+            "  fio           fio comparison\n"
+            "  net           net-perf\n"
+            "  net-asio      net-perf-asio\n"
+            "  net-epoll     net-perf-epoll\n"
+            "  http          http-perf (internal server, fibers)\n"
+            "  http-threads  http-perf (internal server, thread client)\n"
+            "  http-nginx    http-perf against nginx (fiber client)\n"
+            "  s3            s3-perf (fibers)\n"
+            "  s3-threads    s3-perf (threads)\n"
+            "  all           run every target above\n\n"
+            "Examples:\n"
+            "  ./bb -b release perf --duration 60s --warmup 10s file net net-asio\n"
+            "  ./bb -b release perf all --duration 60s --warmup 10s\n"
+        ),
     )
     perf_parser.add_argument(
         "--timeout",
@@ -1581,34 +1488,37 @@ def _build_parser() -> argparse.ArgumentParser:
         metavar="SECONDS",
         help="per-run timeout in seconds (default: 180, 0=none)",
     )
-    perf_parser.add_argument("--net", action="store_true", help="run net-perf")
     perf_parser.add_argument(
-        "--net-asio", action="store_true", help="run net-perf-asio"
+        "--duration",
+        default=None,
+        metavar="DURATION",
+        help="measurement duration applied to every benchmark (e.g. 60s); per-binary defaults are used when omitted",
     )
     perf_parser.add_argument(
-        "--net-epoll", action="store_true", help="run net-perf-epoll"
-    )
-    perf_parser.add_argument("--file", action="store_true", help="run file-perf")
-    perf_parser.add_argument(
-        "--http", action="store_true", help="run http-perf (internal server, fibers)"
-    )
-    perf_parser.add_argument(
-        "--http-threads",
-        action="store_true",
-        help="run http-perf (internal server, thread client)",
+        "--warmup",
+        default=None,
+        metavar="DURATION",
+        help="warmup duration applied to every benchmark (e.g. 10s); per-binary defaults are used when omitted",
     )
     perf_parser.add_argument(
-        "--http-nginx", action="store_true", help="run http-perf against nginx"
+        "targets",
+        nargs="+",
+        metavar="TARGET",
+        choices=[
+            "file",
+            "fio",
+            "net",
+            "net-asio",
+            "net-epoll",
+            "http",
+            "http-threads",
+            "http-nginx",
+            "s3",
+            "s3-threads",
+            "all",
+        ],
+        help="benchmarks to run (see list above; use 'all' for every target)",
     )
-    perf_parser.add_argument("--fio", action="store_true", help="run fio comparison")
-    perf_parser.add_argument(
-        "--sockperf", action="store_true", help="run sockperf comparison"
-    )
-    perf_parser.add_argument("--s3", action="store_true", help="run s3-perf")
-    perf_parser.add_argument(
-        "--s3-threads", action="store_true", help="run s3-perf (threads)"
-    )
-    perf_parser.add_argument("--all", action="store_true", help="run everything")
 
     #
     # file-perf
@@ -1818,55 +1728,6 @@ def _build_parser() -> argparse.ArgumentParser:
         help="build then run net-perf-epoll (raw epoll)",
     )
     _add_net_args(net_perf_epoll_parser)
-
-    #
-    # sockperf-perf
-    #
-
-    sockperf_perf_parser = sub.add_parser(
-        "sockperf-perf", help="run sockperf comparison"
-    )
-    sockperf_perf_parser.add_argument(
-        "--host", dest="sockperf_host", default=net_params.host
-    )
-    sockperf_perf_parser.add_argument(
-        "--port", dest="sockperf_port", default=net_params.port, type=int
-    )
-    sockperf_perf_parser.add_argument(
-        "--msg-size",
-        dest="sockperf_msg_size",
-        default=net_params.msg_size,
-        type=int,
-        metavar="BYTES",
-    )
-    sockperf_perf_parser.add_argument(
-        "--duration",
-        dest="sockperf_duration",
-        default=net_params.duration,
-        metavar="DURATION",
-    )
-    sockperf_perf_parser.add_argument(
-        "--warmup",
-        dest="sockperf_warmup",
-        default=net_params.warmup,
-        metavar="DURATION",
-    )
-    sockperf_perf_parser.add_argument(
-        "--connections",
-        dest="sockperf_connections",
-        default=net_params.connections,
-        type=int,
-        nargs="+",
-        metavar="N",
-    )
-    sockperf_perf_parser.add_argument(
-        "--timeout",
-        dest="sockperf_timeout",
-        default=180,
-        type=int,
-        metavar="SECONDS",
-        help="per-run timeout in seconds (default: 180, 0=none)",
-    )
 
     #
     # http-perf
@@ -2098,9 +1959,6 @@ def main() -> None:
         cmd_build(preset, ["net-perf-epoll"])
         params = _params_from_args(args, "net", NetPerfParams)
         cmd_net_perf(preset, replace(params, engine=NetPerfEngine.EPOLL))
-    elif args.command == "sockperf-perf":
-        _check_no_extra(extra)
-        cmd_sockperf_perf(_params_from_args(args, "sockperf", NetPerfParams))
     elif args.command == "http-perf":
         _check_no_extra(extra)
         cmd_build(preset, ["http-perf"])
@@ -2111,41 +1969,55 @@ def main() -> None:
         cmd_s3_perf(preset, _params_from_args(args, "s3", S3PerfParams))
     elif args.command == "perf":
         _check_no_extra(extra)
+        timing_overrides: dict[str, str] = {}
+        if args.duration is not None:
+            timing_overrides["duration"] = args.duration
+        if args.warmup is not None:
+            timing_overrides["warmup"] = args.warmup
+        targets = set(args.targets)
+        if "all" in targets:
+            targets = {
+                "file", "fio", "net", "net-asio", "net-epoll",
+                "http", "http-threads", "http-nginx", "s3", "s3-threads",
+            }
         file_params = FilePerfParams(
             numjobs=[1, 16],
             iodepth=[1, 16],
             rw=["randwrite", "randread"],
             timeout=args.timeout,
+            **timing_overrides,
         )
-        if args.file or args.all:
+        if "file" in targets:
             cmd_build(preset, ["file-perf"])
             cmd_file_perf(preset, file_params)
-        if args.fio or args.all:
+        if "fio" in targets:
             cmd_fio_perf(file_params)
         net_params = NetPerfParams(
-            connections=[1, 256, 512, 1024], timeout=args.timeout
+            connections=[1, 256, 512, 1024],
+            timeout=args.timeout,
+            **timing_overrides,
         )
-        if args.net or args.all:
+        if "net" in targets:
             cmd_build(preset, ["net-perf"])
             cmd_net_perf(preset, replace(net_params, engine=NetPerfEngine.FIBERS))
-        if args.net_asio or args.all:
+        if "net-asio" in targets:
             cmd_build(preset, ["net-perf-asio"])
             cmd_net_perf(preset, replace(net_params, engine=NetPerfEngine.ASIO))
-        if args.net_epoll or args.all:
+        if "net-epoll" in targets:
             cmd_build(preset, ["net-perf-epoll"])
             cmd_net_perf(preset, replace(net_params, engine=NetPerfEngine.EPOLL))
-        if args.sockperf or args.all:
-            cmd_sockperf_perf(net_params)
         http_params = HttpPerfParams(
-            connections=[1, 256, 512, 1024], timeout=args.timeout
+            connections=[1, 256, 512, 1024],
+            timeout=args.timeout,
+            **timing_overrides,
         )
-        if args.http or args.all:
+        if "http" in targets:
             cmd_build(preset, ["http-perf"])
             cmd_http_perf(preset, http_params)
-        if args.http_threads or args.all:
+        if "http-threads" in targets:
             cmd_build(preset, ["http-perf"])
             cmd_http_perf(preset, replace(http_params, threads=True))
-        if args.http_nginx or args.all:
+        if "http-nginx" in targets:
             cmd_build(preset, ["http-perf"])
             cmd_http_perf(preset, replace(http_params, nginx=True))
         s3_params = S3PerfParams(
@@ -2153,11 +2025,12 @@ def main() -> None:
             iodepth=[1, 64],
             rw=["read", "write"],
             timeout=args.timeout,
+            **timing_overrides,
         )
-        if args.s3 or args.all:
+        if "s3" in targets:
             cmd_build(preset, ["s3-perf"])
             cmd_s3_perf(preset, s3_params)
-        if args.s3_threads or args.all:
+        if "s3-threads" in targets:
             cmd_build(preset, ["s3-perf"])
             cmd_s3_perf(preset, replace(s3_params, threads=True))
         print()

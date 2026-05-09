@@ -23,7 +23,7 @@ A cooperative fiber scheduler for Linux with per-CPU scheduler threads, io_uring
 
 GTest, Google Benchmark, libbacktrace, liburing, librseq, libbpf, and bpftool are bundled as submodules under `contrib/` and do not need to be installed separately. Poco, the AWS SDK, and jemalloc are built on demand via `--build-poco`, `--build-aws`, and `--build-jemalloc` passed to `configure`.
 
-Runtime dependencies for optional benchmarks: nginx (only for `http-perf --nginx`; the default uses an internal Poco-based server built into the `http-perf` binary), fio (for `fio-perf`), sockperf (for `sockperf-perf`), and MinIO (for `s3-perf`). MinIO is downloaded automatically to `.tools/` if not in PATH; the others must be installed separately.
+Runtime dependencies for optional benchmarks: nginx (only for `http-perf --nginx`; the default uses an internal Poco-based server built into the `http-perf` binary), fio (for `fio-perf`), and MinIO (for `s3-perf`). MinIO is downloaded automatically to `.tools/` if not in PATH; the others must be installed separately.
 
 ## Build
 
@@ -193,15 +193,6 @@ TCP echo benchmark using Boost.Asio C++20 coroutines. Same options as `net-perf`
 ./bb -b release net-perf-asio --flamegraph
 ```
 
-#### `sockperf-perf`
-
-sockperf comparison (ping-pong). Same options as `net-perf` (except `--delay`, `--flamegraph`, and `--print-counters`). Does not build anything.
-
-```
-./bb sockperf-perf
-./bb sockperf-perf --connections 1 4 16
-```
-
 #### `http-perf`
 
 HTTP/1.1 GET benchmark. Defaults to silk's internal HTTP server (Poco's `HTTPServerConnection` over `FiberSocketImpl`, one fiber per connection); pass `--nginx` to run against nginx instead.
@@ -261,23 +252,31 @@ S3 object storage benchmark. Starts a local MinIO server (downloaded automatical
 
 #### `perf`
 
-Run multiple perf benchmarks in one shot.
+Run multiple perf benchmarks in one shot. Targets are positional values, listed after the options.
 
-| Flag | Description |
+| Target | Description |
 |---|---|
-| `--file` | Run file-perf |
-| `--fio` | Run fio comparison |
-| `--net` | Run net-perf |
-| `--net-asio` | Run net-perf-asio |
-| `--sockperf` | Run sockperf comparison |
-| `--http` | Run http-perf (internal server, fiber client) |
-| `--http-threads` | Run http-perf (internal server, thread client) |
-| `--http-nginx` | Run http-perf against nginx |
-| `--s3` | Run s3-perf (fibers) |
-| `--s3-threads` | Run s3-perf (threads) |
-| `--all` | Run everything |
+| `file` | file-perf |
+| `fio` | fio comparison |
+| `net` | net-perf |
+| `net-asio` | net-perf-asio |
+| `net-epoll` | net-perf-epoll |
+| `http` | http-perf (internal server, fiber client) |
+| `http-threads` | http-perf (internal server, thread client) |
+| `http-nginx` | http-perf against nginx (fiber client) |
+| `s3` | s3-perf (fibers) |
+| `s3-threads` | s3-perf (threads) |
+| `all` | run every target above |
+
+| Option | Description |
+|---|---|
+| `--duration DURATION` | Override per-binary measurement duration (e.g. `60s`) |
+| `--warmup DURATION` | Override per-binary warmup duration (e.g. `10s`) |
+| `--timeout SECONDS` | Per-run timeout (default 180, 0 = none) |
 
 ```
-./bb -b release perf --net --file
-./bb -b release perf --all
+./bb -b release perf file net
+./bb -b release perf all
+./bb -b release perf --duration 60s --warmup 10s file net net-asio
+./bb -b release perf --duration 60s --warmup 10s all
 ```
