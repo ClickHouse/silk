@@ -101,6 +101,13 @@ public:
         // rounds up to the nearest supported size.
         uint64_t ioUringQueueSize = 256;
 
+        // Mid-drain submit threshold: submitIo defers io_uring_enter until the SQ
+        // ring holds at least this many entries. Lower values approach per-fiber
+        // submit (better latency on inline-completion workloads); higher values
+        // amortize syscall cost across more SQEs (better throughput on networked
+        // workloads). Must be <= ioUringQueueSize.
+        uint32_t ioUringFlushThreshold = 64;
+
         // Hash-table size for futex-style waiter lookups. Must be a power of two.
         uint64_t waiterTableSize = 4096;
 

@@ -415,7 +415,14 @@ int main(int argc, char ** argv)
     sigset_t mask = blockSignals();
 
     silk::initialize();
-    silk::FiberScheduler::Options options{.enableProfiler = cfg.printCounters};
+    // Disable mid-drain submit batching: file workloads (especially tmpfs)
+    // hit io_uring's inline-completion fast path on submit; deferring the
+    // syscall through a dispatch-batch threshold pushes those completions off
+    // the fast path and costs 25-37% on parallel randread (see docs/perf.md).
+    silk::FiberScheduler::Options options{
+        .ioUringFlushThreshold = 1,
+        .enableProfiler = cfg.printCounters,
+    };
     silk::FiberScheduler::initialize(&options);
 
     SILK_INFO(
