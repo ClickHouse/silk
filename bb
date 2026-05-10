@@ -573,6 +573,8 @@ class NetPerfParams:
     warmup: str = "2s"
     connections: list[int] = field(default_factory=lambda: [1000])
     delay: str = "0"
+    stall_rate: float = 0.0
+    stall_duration: str = "0"
     flamegraph: bool = False
     print_counters: bool = False
     timeout: int = 180
@@ -606,6 +608,12 @@ def cmd_net_perf(preset: str, params: NetPerfParams) -> None:
     local = params.host in ("127.0.0.1", "localhost")
     verbose_flag = ["--verbose"] if log.isEnabledFor(logging.DEBUG) else []
     print_counters_flag = ["--print-counters"] if params.print_counters else []
+    stall_flags: list[str] = []
+    if params.stall_rate > 0:
+        stall_flags = [
+            "--stall-rate", str(params.stall_rate),
+            "--stall-duration", str(params.stall_duration),
+        ]
 
     server = None
     if local:
@@ -648,6 +656,7 @@ def cmd_net_perf(preset: str, params: NetPerfParams) -> None:
                     str(params.duration),
                     "--warmup",
                     str(params.warmup),
+                    *stall_flags,
                     *verbose_flag,
                 ],
             )
@@ -674,6 +683,7 @@ def cmd_net_perf(preset: str, params: NetPerfParams) -> None:
                     str(params.duration),
                     "--warmup",
                     str(params.warmup),
+                    *stall_flags,
                     *print_counters_flag,
                     *verbose_flag,
                     timeout=params.timeout or None,
@@ -1692,6 +1702,21 @@ def _build_parser() -> argparse.ArgumentParser:
             default=net_params.delay,
             metavar="DURATION",
             help="server-side delay per message (e.g. 1ms, 100us)",
+        )
+        parser.add_argument(
+            "--stall-rate",
+            dest="net_stall_rate",
+            default=net_params.stall_rate,
+            type=float,
+            metavar="HZ",
+            help="per-connection Poisson rate of stall messages (Hz, 0 disables)",
+        )
+        parser.add_argument(
+            "--stall-duration",
+            dest="net_stall_duration",
+            default=net_params.stall_duration,
+            metavar="DURATION",
+            help="stall duration per stall event (e.g. 100us, 1ms)",
         )
         parser.add_argument(
             "--print-counters",

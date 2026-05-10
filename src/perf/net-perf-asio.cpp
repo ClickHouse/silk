@@ -133,6 +133,7 @@ asio::awaitable<void> Server::acceptLoop()
 
 asio::awaitable<void> Server::handleConnection(Server * server, std::shared_ptr<tcp::socket> socket)
 {
+    SILK_ASSERT(server->cfg.msgSize >= sizeof(uint32_t));
     auto buf = std::make_unique<char[]>(server->cfg.msgSize);
     boost::system::error_code ec;
     for (;;)
@@ -152,6 +153,11 @@ asio::awaitable<void> Server::handleConnection(Server * server, std::shared_ptr<
             }
             n += got;
         }
+
+        // First 4 bytes carry a per-message stall budget in nanoseconds.
+        // Busy-loop for that long; this thread's executor cannot service
+        // other connections during the stall, demonstrating HOL blocking.
+        busyLoopForStall(buf.get());
 
         if (server->cfg.delayNs)
         {
@@ -198,6 +204,8 @@ struct ClientConfig
     uint32_t msgSize = 64;
     uint64_t durationNs = 10'000'000'000ULL;
     uint64_t warmupNs = 2'000'000'000ULL;
+    double stallRateHz = 0.0;
+    uint64_t stallNs = 0;
     bool printCounters = false;
 };
 
@@ -266,11 +274,18 @@ void Client::stop()
 
 asio::awaitable<void> Client::clientConnection(Client * client, Connection * connection)
 {
+    SILK_ASSERT(client->cfg.msgSize >= sizeof(uint32_t));
     auto buf = std::make_unique<char[]>(client->cfg.msgSize);
     std::memset(buf.get(), 0xAB, client->cfg.msgSize);
     boost::system::error_code ec;
+
+    StallScheduler stalls(client->cfg.stallRateHz, client->cfg.stallNs, static_cast<uint64_t>(reinterpret_cast<uintptr_t>(connection)));
+
     for (;;)
     {
+        uint32_t stallNs = stalls.next();
+        std::memcpy(buf.get(), &stallNs, sizeof(stallNs));
+
         uint64_t start = silk::Tsc::getCycles();
 
         std::size_t n = 0;
@@ -439,6 +454,7 @@ static void runClient(int argc, char ** argv)
 
     std::string durationStr = "10s";
     std::string warmupStr = "2s";
+    std::string stallDurationStr = "0";
 
     // clang-format off
     desc.add_options()
@@ -449,6 +465,8 @@ static void runClient(int argc, char ** argv)
         ("msg-size",    po::value(&cfg.msgSize),        "message size in bytes")
         ("duration",    po::value(&durationStr),        "measurement duration (e.g. 10s, 500ms)")
         ("warmup",      po::value(&warmupStr),          "warmup duration (e.g. 2s, 500ms)")
+        ("stall-rate",     po::value(&cfg.stallRateHz),    "per-connection Poisson rate of stall messages (Hz, 0 disables)")
+        ("stall-duration", po::value(&stallDurationStr),   "stall duration per stall event (e.g. 100us, 1ms)")
         ("print-counters", po::bool_switch(&cfg.printCounters), "include counters in the JSON report")
         ("verbose,v",   po::bool_switch(&verbose),      "enable debug logging")
         ;
@@ -466,6 +484,7 @@ static void runClient(int argc, char ** argv)
         po::notify(vm);
         cfg.durationNs = parseDuration(durationStr);
         cfg.warmupNs = parseDuration(warmupStr);
+        cfg.stallNs = parseDuration(stallDurationStr);
         if (verbose)
         {
             silk::Logger::setLevel(silk::LogLevel::DEBUG);

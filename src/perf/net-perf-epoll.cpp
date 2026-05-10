@@ -675,6 +675,12 @@ bool Server::drive(Connection * conn, uint32_t msgSize) noexcept
                 conn->offset += static_cast<uint32_t>(bytesRead);
                 if (conn->offset == msgSize)
                 {
+                    // First 4 bytes carry a stall budget in nanoseconds.
+                    // Busy-loop here; this worker thread cannot service its
+                    // other connections during the stall, demonstrating HOL
+                    // blocking on epoll's per-thread reactor.
+                    busyLoopForStall(conn->buf.get());
+
                     conn->state = State::Writing;
                     conn->offset = 0;
                 }
@@ -828,6 +834,8 @@ struct ClientConfig
     uint32_t threads = 0; // 0 = auto-detect via silk::getAvailableProcessorCount
     uint64_t durationNs = 10'000'000'000ULL;
     uint64_t warmupNs = 2'000'000'000ULL;
+    double stallRateHz = 0.0;
+    uint64_t stallNs = 0;
     bool printCounters = false;
 };
 
@@ -861,6 +869,7 @@ private:
         bool readable = true;
         bool writable = true;
         uint64_t startCycles = 0;
+        StallScheduler stalls;
         std::vector<uint64_t> latencies;
     };
 
@@ -878,7 +887,7 @@ private:
     static void workerMain(WorkerParams params) noexcept;
 
     /** Drive write/read state machine. Returns false if connection should close. */
-    static bool drive(Connection * conn, uint32_t msgSize, uint64_t warmupEndCycles) noexcept;
+    static bool drive(Connection * conn, const ClientConfig & cfg, uint64_t warmupEndCycles) noexcept;
 
     struct Worker
     {
@@ -923,8 +932,10 @@ void Client::start()
     {
         int r = TcpConnection::connect(cfg.host.c_str(), cfg.port, &connection.conn);
         SILK_ASSERT(!r, "connect failed: {}", std::strerror(r));
+        SILK_ASSERT(cfg.msgSize >= sizeof(uint32_t));
         connection.buf = std::make_unique<char[]>(cfg.msgSize);
         std::memset(connection.buf.get(), 0xAB, cfg.msgSize);
+        connection.stalls = StallScheduler(cfg.stallRateHz, cfg.stallNs, static_cast<uint64_t>(reinterpret_cast<uintptr_t>(&connection)));
     }
 
     uint32_t base = cfg.numConnections / cfg.threads;
@@ -988,12 +999,20 @@ std::vector<uint64_t> Client::collectLatencies()
     return all;
 }
 
-bool Client::drive(Connection * conn, uint32_t msgSize, uint64_t warmupEndCycles) noexcept
+bool Client::drive(Connection * conn, const ClientConfig & cfg, uint64_t warmupEndCycles) noexcept
 {
+    uint32_t msgSize = cfg.msgSize;
     for (;;)
     {
         if (conn->state == State::Writing)
         {
+            // Composing a fresh message: write the per-message stall budget
+            // into the first 4 bytes (Poisson process scheduled per connection).
+            if (conn->offset == 0)
+            {
+                uint32_t stallNs = conn->stalls.next();
+                std::memcpy(conn->buf.get(), &stallNs, sizeof(stallNs));
+            }
             if (!conn->writable)
             {
                 return true;
@@ -1118,7 +1137,7 @@ void Client::workerMain(WorkerParams params) noexcept
                 conn->writable = true;
             }
 
-            bool keepAlive = drive(conn, client->cfg.msgSize, warmupEndCycles);
+            bool keepAlive = drive(conn, client->cfg, warmupEndCycles);
             if (!keepAlive || eventClosesConnection(mask))
             {
                 int dr = epoll.del(conn->conn.getFd());
@@ -1240,6 +1259,7 @@ static void runClient(int argc, char ** argv)
 
     std::string durationStr = "10s";
     std::string warmupStr = "2s";
+    std::string stallDurationStr = "0";
 
     // clang-format off
     desc.add_options()
@@ -1251,6 +1271,8 @@ static void runClient(int argc, char ** argv)
         ("msg-size",    po::value(&cfg.msgSize),        "message size in bytes")
         ("duration",    po::value(&durationStr),        "measurement duration (e.g. 10s, 500ms)")
         ("warmup",      po::value(&warmupStr),          "warmup duration (e.g. 2s, 500ms)")
+        ("stall-rate",     po::value(&cfg.stallRateHz),   "per-connection Poisson rate of stall messages (Hz, 0 disables)")
+        ("stall-duration", po::value(&stallDurationStr),  "stall duration per stall event (e.g. 100us, 1ms)")
         ("print-counters", po::bool_switch(&cfg.printCounters), "include counters in the JSON report")
         ("verbose,v",   po::bool_switch(&verbose),      "enable debug logging")
         ;
@@ -1268,6 +1290,7 @@ static void runClient(int argc, char ** argv)
         po::notify(vm);
         cfg.durationNs = parseDuration(durationStr);
         cfg.warmupNs = parseDuration(warmupStr);
+        cfg.stallNs = parseDuration(stallDurationStr);
         if (cfg.threads == 0)
         {
             cfg.threads = silk::getAvailableProcessorCount();
