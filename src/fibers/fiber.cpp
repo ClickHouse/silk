@@ -534,7 +534,7 @@ struct FiberScheduler::ProcessorState
 
     template <typename Setup>
     bool enqueueIo(IoFuture * future, Setup && setup) noexcept;
-    void submitIo() noexcept;
+    void submitIo(bool flush) noexcept;
 
     void insertSuspended(Fiber * fiber) noexcept;
     void removeSuspended(Fiber * fiber) noexcept;
@@ -805,7 +805,7 @@ void FiberScheduler::ProcessorState::enqueueWakeup() noexcept
     if (enqueued)
     {
         wakeupDeadlineCycles = sleepFuture->deadlineCycles;
-        submitIo();
+        submitIo(true);
     }
 }
 
@@ -842,7 +842,20 @@ bool FiberScheduler::ProcessorState::enqueueIo(IoFuture * future, Setup && setup
     return false;
 }
 
-void FiberScheduler::ProcessorState::submitIo() noexcept
+// Submit pending SQEs to the kernel.
+//
+// flush=false: pressure-relief mode for dispatch loops - only submit
+// once at least options.ioUringFlushThreshold SQEs are queued, otherwise
+// let the next fiber accumulate more work before paying the syscall.
+//
+// flush=true: force submit regardless of count. Used at end-of-drain, by
+// the proxy/wakeup paths that need the SQE visible immediately, and by
+// worker threads which have no batching boundary.
+//
+// IO_SUBMIT profile event represents the syscall cost; per-fiber latency
+// lives in IO_WAIT. Category 0 because a single io_uring_enter covers SQEs
+// from any fibers that contributed.
+void FiberScheduler::ProcessorState::submitIo(bool flush) noexcept
 {
     // Fast path: submitIo is always called on the same thread that just called
     // enqueueIo, so our own enqueue is always visible here.
@@ -851,7 +864,8 @@ void FiberScheduler::ProcessorState::submitIo() noexcept
     uint32_t count = ::io_uring_sq_ready(&ring);
     TSAN_IGNORE_END();
 
-    if (!count)
+    uint32_t minCount = flush ? 1 : options.ioUringFlushThreshold;
+    if (count < minCount)
     {
         return;
     }
@@ -859,13 +873,25 @@ void FiberScheduler::ProcessorState::submitIo() noexcept
     std::lock_guard lock(submissionLock);
 
     count = ::io_uring_sq_ready(&ring);
-    if (count)
+    if (count >= minCount)
     {
         // TSan needs an explicit barrier between submission/completion.
         TSAN_RELEASE(this);
 
-        int r = ::io_uring_submit(&ring);
-        SILK_ASSERT(r >= 0);
+        if (profiler)
+        {
+            uint64_t startCycles = Tsc::getCycles();
+
+            int r = ::io_uring_submit(&ring);
+            SILK_ASSERT(r >= 0);
+
+            profileEvent(ProfileEventKind::IO_SUBMIT, 0, Tsc::getCycles() - startCycles);
+        }
+        else
+        {
+            int r = ::io_uring_submit(&ring);
+            SILK_ASSERT(r >= 0);
+        }
 
         Perf::getSimpleCounter(simpleCounters[IO_ENQUEUED], number).increment(count);
     }
@@ -969,6 +995,7 @@ void FiberScheduler::initialize(const Options * userOptions) noexcept
     SILK_ASSERT(options.fiberStackSize >= PAGE_SIZE && (options.fiberStackSize % PAGE_SIZE) == 0);
     SILK_ASSERT(options.readyQueueCapacity >= 2 && (options.readyQueueCapacity & (options.readyQueueCapacity - 1)) == 0);
     SILK_ASSERT(options.ioUringQueueSize >= 2 && (options.ioUringQueueSize & (options.ioUringQueueSize - 1)) == 0);
+    SILK_ASSERT(options.ioUringFlushThreshold >= 1 && options.ioUringFlushThreshold <= options.ioUringQueueSize);
     SILK_ASSERT(options.waiterTableSize >= 2 && (options.waiterTableSize & (options.waiterTableSize - 1)) == 0);
 
     scheduler = new SchedulerState();
@@ -1349,7 +1376,7 @@ void FiberScheduler::enqueueIo(IoFuture * future, Setup && setup) noexcept
     Fiber * fiber = getCurrentFiber();
     if (fiber->isProxyFiber)
     {
-        processor->submitIo();
+        processor->submitIo(true);
     }
 }
 
@@ -1570,6 +1597,7 @@ bool FiberScheduler::runStealLoop(ProcessorState * processor, uint64_t idleSince
         didWork |= runServiceLoop(victim, 0, timer);
 
         // We have a limited budget to spend doing work for others.
+        bool stoleAny = false;
         for (now = Tsc::getCycles(); now < deadlineCycles; now = Tsc::getCycles())
         {
             Fiber * fiber;
@@ -1582,6 +1610,14 @@ bool FiberScheduler::runStealLoop(ProcessorState * processor, uint64_t idleSince
             // Reassign stolen fiber to the current processor.
             fiber->processorNumber = processor->number;
             runFiber(fiber, timer);
+            stoleAny = true;
+        }
+
+        if (stoleAny)
+        {
+            // Drain whatever the steal loop left below the pressure-relief
+            // threshold before moving on to the next victim.
+            processor->submitIo(true);
             didWork = true;
         }
     }
@@ -1598,6 +1634,13 @@ bool FiberScheduler::handleReadyQueue(ProcessorState * processor, CpuTimer * tim
     {
         runFiber(fiber, timer);
         didWork = true;
+    }
+
+    // Drain whatever the dispatch left below the pressure-relief threshold
+    // so the kernel sees it before the scheduler thread parks.
+    if (didWork)
+    {
+        processor->submitIo(true);
     }
 
     return didWork;
@@ -1804,25 +1847,21 @@ void FiberScheduler::runFiber(Fiber * fiber, CpuTimer * timer) noexcept
     fiber->switchToFiberContext();
     threadFiber = nullptr;
 
-    uint64_t submitStartCycles = 0;
     if (timer)
     {
         if (processor->profiler)
         {
-            submitStartCycles = Tsc::getCycles();
-            processor->profileEvent(ProfileEventKind::FIBER_RUN, fiber->fiberId.category, submitStartCycles - runStartCycles);
+            processor->profileEvent(ProfileEventKind::FIBER_RUN, fiber->fiberId.category, Tsc::getCycles() - runStartCycles);
         }
 
         timer->reset(simpleCounters[SCHEDULER_SYSTEM_TIME], fiber->processorNumber);
     }
 
-    // Submit any SQEs the fiber enqueued during this run.
-    processor->submitIo();
-
-    if (submitStartCycles)
-    {
-        processor->profileEvent(ProfileEventKind::IO_SUBMIT, fiber->fiberId.category, Tsc::getCycles() - submitStartCycles);
-    }
+    // Submit any SQEs the fiber enqueued. On the per-CPU scheduler thread
+    // (timer != nullptr) use pressure-relief mode so the dispatch loop can
+    // amortize the syscall across multiple fibers; on unpinned worker threads
+    // there is no batching boundary, so force-submit per fiber.
+    processor->submitIo(timer == nullptr);
 
     FiberState fiberState = fiber->state.load(std::memory_order_acquire);
     if (fiberState == FiberState::SUSPEND_REQUESTED)
