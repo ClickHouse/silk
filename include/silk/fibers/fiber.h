@@ -120,6 +120,11 @@ public:
 
         // Allocate per-CPU latency profilers.
         bool enableProfiler = false;
+
+        // Disable work-stealing. Set to study the effect of work-stealing in
+        // isolation (e.g. head-of-line blocking benchmarks).
+        // Production should leave this off.
+        bool disableWorkStealing = false;
     };
 
     /**
@@ -476,7 +481,14 @@ private:
 
     struct CompareStealCost
     {
-        bool operator()(const StealCandidate & l, const StealCandidate & r) const noexcept { return l.costCycles < r.costCycles; }
+        bool operator()(const StealCandidate & l, const StealCandidate & r) const noexcept
+        {
+            if (l.costCycles != r.costCycles)
+            {
+                return l.costCycles < r.costCycles;
+            }
+            return l.processorNumber < r.processorNumber;
+        }
     };
 
     //

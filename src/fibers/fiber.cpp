@@ -25,7 +25,6 @@
 #include <format>
 #include <memory>
 #include <mutex>
-#include <random>
 #include <thread>
 #include <utility>
 
@@ -1089,8 +1088,10 @@ void FiberScheduler::buildStealCandidates() noexcept
 
         std::sort(processor->stealCandidates.get(), processor->stealCandidates.get() + candidateCount, CompareStealCost{});
 
-        // Shuffle CPUs in the same cost group.
-        std::mt19937 rng(cpu);
+        // Spread first-choice steal targets within each cost-tie group via a
+        // deterministic rotation by cpu % groupSize. Avoids the thundering
+        // herd of every CPU racing the same first target while keeping the
+        // candidate order reproducible across runs.
         for (uint32_t start = 0; start < candidateCount;)
         {
             uint64_t groupCost = processor->stealCandidates[start].costCycles;
@@ -1099,7 +1100,15 @@ void FiberScheduler::buildStealCandidates() noexcept
             {
                 ++end;
             }
-            std::shuffle(processor->stealCandidates.get() + start, processor->stealCandidates.get() + end, rng);
+            uint32_t groupSize = end - start;
+            if (groupSize > 1)
+            {
+                uint32_t rotation = cpu % groupSize;
+                std::rotate(
+                    processor->stealCandidates.get() + start,
+                    processor->stealCandidates.get() + start + rotation,
+                    processor->stealCandidates.get() + end);
+            }
             start = end;
         }
     }
@@ -1501,7 +1510,7 @@ void FiberScheduler::runScheduler(ProcessorState * processor) noexcept
         didWork |= runServiceLoop(processor, waitNs, &timer);
 
         // Steal work only when there is nothing to do on own CPU.
-        if (!didWork)
+        if (!didWork && !options.disableWorkStealing)
         {
             didWork |= runStealLoop(processor, idleSinceCycles, &timer);
         }
