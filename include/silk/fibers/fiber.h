@@ -89,6 +89,28 @@ public:
      */
     struct Options
     {
+        // Per-fiber stack size in bytes. Must be a multiple of the system page size.
+        // The pool also reserves two guard pages adjacent to each stack.
+        uint64_t fiberStackSize = 64 * 1024;
+
+        // Per-CPU ready queue capacity (fibers). Must be a power of two and >= 2.
+        // Sized to absorb dispatch bursts without falling back to the global queue.
+        uint64_t readyQueueCapacity = 1024;
+
+        // Per-CPU io_uring SQ ring capacity. Must be a power of two; the kernel
+        // rounds up to the nearest supported size.
+        uint64_t ioUringQueueSize = 256;
+
+        // Hash-table size for futex-style waiter lookups. Must be a power of two.
+        uint64_t waiterTableSize = 4096;
+
+        // Scheduler park backoff (nanoseconds). The dispatch loop spins for up to
+        // spinThresholdNs after going idle; past that it parks on the eventfd with
+        // an exponential backoff starting at initialWaitNs and capped at maxWaitNs.
+        uint64_t initialWaitNs = 1'000;
+        uint64_t maxWaitNs = 10'000'000;
+        uint64_t spinThresholdNs = 20'000;
+
         // Allocate per-CPU latency profilers.
         bool enableProfiler = false;
     };
@@ -99,6 +121,11 @@ public:
      * @param options  Optional configuration; defaults are used when null.
      */
     static void initialize(const Options * options = nullptr) noexcept;
+
+    /**
+     * Return the active configuration. Set by initialize; immutable thereafter.
+     */
+    static const Options & getOptions() noexcept { return options; }
 
     /**
      * Stop all scheduler threads and release all resources.
@@ -482,7 +509,8 @@ private:
     // State.
     //
 
-    inline static SchedulerState * scheduler;
+    static Options options;
+    static SchedulerState * scheduler;
 };
 
 } // namespace silk

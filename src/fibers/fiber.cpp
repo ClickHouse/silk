@@ -43,26 +43,19 @@
 namespace silk
 {
 
+FiberScheduler::Options FiberScheduler::options;
+FiberScheduler::SchedulerState * FiberScheduler::scheduler;
+
 //
 // Constants.
 //
 
-static constexpr uint64_t FIBER_STACK_SIZE = 64 * 1024;
-static constexpr uint64_t READY_QUEUE_CAPACITY = 1024;
-static constexpr uint64_t IO_URING_QUEUE_SIZE = 256;
-static constexpr uint64_t WAITER_TABLE_SIZE = 4096;
-static constexpr uint64_t INITIAL_WAIT_NS = 1'000;
-static constexpr uint64_t MAX_WAIT_NS = 10'000'000;
-static constexpr uint64_t SPIN_THRESHOLD_NS = 20'000;
 static constexpr uint64_t CQE_TAG_CANCEL = 0;
 static constexpr uint64_t CQE_TAG_TIMEOUT = 1;
 static constexpr uint64_t CQE_TAG_DOORBELL = 2;
 
 // Hard cap on CPU index (largest known socket: 384 cores).
 static constexpr uint16_t INVALID_PROCESSOR_NUMBER = (1 << 10);
-
-// Table size must be a power of two.
-static_assert((WAITER_TABLE_SIZE & (WAITER_TABLE_SIZE - 1)) == 0);
 
 // clang-format off
 #define FIBER_SIMPLE_COUNTERS(x) \
@@ -275,7 +268,7 @@ Fiber::~Fiber() noexcept
 
     if (stack)
     {
-        int r = ::munmap(stack, FIBER_STACK_SIZE + 2 * PAGE_SIZE);
+        int r = ::munmap(stack, FiberScheduler::getOptions().fiberStackSize + 2 * PAGE_SIZE);
         SILK_ASSERT(!r);
     }
 }
@@ -295,9 +288,11 @@ bool Fiber::initialize(FiberId fiberId_, FiberMain * fiberMain_, ParametersDtor 
     suspendTimestamp = 0;
     result = 0;
 
+    uint64_t fiberStackSize = FiberScheduler::getOptions().fiberStackSize;
+
     if (!stack)
     {
-        stack = ::mmap(nullptr, FIBER_STACK_SIZE + 2 * PAGE_SIZE, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        stack = ::mmap(nullptr, fiberStackSize + 2 * PAGE_SIZE, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
         if (stack == MAP_FAILED) [[unlikely]]
         {
             stack = nullptr;
@@ -307,7 +302,7 @@ bool Fiber::initialize(FiberId fiberId_, FiberMain * fiberMain_, ParametersDtor 
         int r = ::mprotect(stack, PAGE_SIZE, PROT_NONE);
         SILK_ASSERT(!r);
 
-        r = ::mprotect(static_cast<uint8_t *>(stack) + PAGE_SIZE + FIBER_STACK_SIZE, PAGE_SIZE, PROT_NONE);
+        r = ::mprotect(static_cast<uint8_t *>(stack) + PAGE_SIZE + fiberStackSize, PAGE_SIZE, PROT_NONE);
         SILK_ASSERT(!r);
     }
 
@@ -324,7 +319,7 @@ bool Fiber::initialize(FiberId fiberId_, FiberMain * fiberMain_, ParametersDtor 
     fiberMain = fiberMain_;
     parametersDtor = parametersDtor_;
     fiberContext = boost::context::detail::make_fcontext(
-        static_cast<uint8_t *>(stack) + PAGE_SIZE + FIBER_STACK_SIZE, FIBER_STACK_SIZE, fiberContextMain);
+        static_cast<uint8_t *>(stack) + PAGE_SIZE + fiberStackSize, fiberStackSize, fiberContextMain);
 
     return true;
 }
@@ -348,7 +343,8 @@ void Fiber::switchToFiberContext() noexcept
 {
 #if defined(__SANITIZE_ADDRESS__)
     void * schedulerFakeStack = nullptr;
-    __sanitizer_start_switch_fiber(&schedulerFakeStack, static_cast<uint8_t *>(stack) + PAGE_SIZE, FIBER_STACK_SIZE);
+    __sanitizer_start_switch_fiber(
+        &schedulerFakeStack, static_cast<uint8_t *>(stack) + PAGE_SIZE, FiberScheduler::getOptions().fiberStackSize);
 #endif
 
 #if defined(__SANITIZE_THREAD__)
@@ -524,7 +520,7 @@ struct FiberScheduler::CpuTimer
  */
 struct FiberScheduler::ProcessorState
 {
-    void initialize(uint32_t cpu, const Options & options) noexcept;
+    void initialize(uint32_t cpu) noexcept;
     void destroy() noexcept;
 
     FiberId allocateFiberId(uint8_t category) noexcept;
@@ -624,19 +620,21 @@ struct FiberScheduler::ProcessorState
     // is hammered from neighboring CPUs during steal, so left at the end of
     // ProcessorState to keep its cache-line traffic away from the per-CPU
     // hot path on line 0.
-    BoundedQueue<Fiber *> readyQueue{READY_QUEUE_CAPACITY};
+    BoundedQueue<Fiber *> readyQueue;
 };
 
-void FiberScheduler::ProcessorState::initialize(uint32_t cpu, const Options & options) noexcept
+void FiberScheduler::ProcessorState::initialize(uint32_t cpu) noexcept
 {
     SILK_ASSERT(cpu < INVALID_PROCESSOR_NUMBER);
     number = cpu;
+
+    readyQueue.initialize(options.readyQueueCapacity);
 
     eventFd = ::eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
     SILK_ASSERT(eventFd >= 0);
 
     io_uring_params params{};
-    int r = ::io_uring_queue_init_params(IO_URING_QUEUE_SIZE, &ring, &params);
+    int r = ::io_uring_queue_init_params(options.ioUringQueueSize, &ring, &params);
     SILK_ASSERT(!r);
 
     SILK_ASSERT(params.features & IORING_FEAT_NODROP);
@@ -911,14 +909,13 @@ struct FiberScheduler::SchedulerState
     std::unique_ptr<std::thread[]> schedulerThreads;
     std::unique_ptr<std::thread[]> workerThreads;
 
-    Options options;
-
     MemoryPool<Fiber, &Fiber::stackEntry> fiberPool;
     IntrusiveQueue<Fiber, &Fiber::reservedNode> readyQueue;
 
     sem_t threadSemaphore{};
 
-    WaitStack waiterTable[WAITER_TABLE_SIZE];
+    std::unique_ptr<WaitStack[]> waiterTable;
+    uint64_t waiterTableMask{};
 };
 
 FiberScheduler::SchedulerState::SchedulerState() noexcept
@@ -958,17 +955,26 @@ void FiberScheduler::SchedulerState::parkThread() noexcept
     }
 }
 
-void FiberScheduler::initialize(const Options * options) noexcept
+void FiberScheduler::initialize(const Options * userOptions) noexcept
 {
     SILK_ASSERT(!scheduler);
 
     REGISTER_SIMPLE_COUNTERS(&simpleCounters, FIBER_SIMPLE_COUNTERS);
 
-    scheduler = new SchedulerState();
-    if (options)
+    if (userOptions)
     {
-        scheduler->options = *options;
+        options = *userOptions;
     }
+
+    SILK_ASSERT(options.fiberStackSize >= PAGE_SIZE && (options.fiberStackSize % PAGE_SIZE) == 0);
+    SILK_ASSERT(options.readyQueueCapacity >= 2 && (options.readyQueueCapacity & (options.readyQueueCapacity - 1)) == 0);
+    SILK_ASSERT(options.ioUringQueueSize >= 2 && (options.ioUringQueueSize & (options.ioUringQueueSize - 1)) == 0);
+    SILK_ASSERT(options.waiterTableSize >= 2 && (options.waiterTableSize & (options.waiterTableSize - 1)) == 0);
+
+    scheduler = new SchedulerState();
+
+    scheduler->waiterTable = std::make_unique<WaitStack[]>(options.waiterTableSize);
+    scheduler->waiterTableMask = options.waiterTableSize - 1;
 
     scheduler->processorCount = getProcessorCount();
     scheduler->processorState = std::make_unique<ProcessorState[]>(scheduler->processorCount);
@@ -1183,7 +1189,7 @@ void FiberScheduler::enqueueReady(Fiber * fiber) noexcept
 {
     if (!fiber->isProxyFiber)
     {
-        if (scheduler->options.enableProfiler)
+        if (options.enableProfiler)
         {
             fiber->submitTimestamp = Tsc::getCycles();
         }
@@ -1294,7 +1300,7 @@ void FiberScheduler::suspend(SuspendCallback * callback, void * context) noexcep
 
 void FiberScheduler::enqueueWaiter(uint64_t key, Fiber * fiber) noexcept
 {
-    uint64_t index = intHash(key) & (WAITER_TABLE_SIZE - 1);
+    uint64_t index = intHash(key) & scheduler->waiterTableMask;
     scheduler->waiterTable[index].push(fiber);
 
     // seq_cst fence pairs with the one in releaseWaiters to prevent the
@@ -1309,7 +1315,7 @@ void FiberScheduler::releaseWaiters(uint64_t key) noexcept
     // seq_cst fence pairs with the one in enqueueWaiter.
     std::atomic_thread_fence(std::memory_order_seq_cst);
 
-    uint64_t index = intHash(key) & (WAITER_TABLE_SIZE - 1);
+    uint64_t index = intHash(key) & scheduler->waiterTableMask;
     Fiber * fiber = scheduler->waiterTable[index].popAll();
     while (fiber)
     {
@@ -1452,7 +1458,7 @@ void FiberScheduler::runScheduler(ProcessorState * processor) noexcept
 
     // Initialize per-CPU resources pinned to this CPU so that mmap'd memory
     // (io_uring rings, eventfd) is allocated on the local NUMA node.
-    processor->initialize(processor->number, scheduler->options);
+    processor->initialize(processor->number);
     processor->initialized.store(true, std::memory_order_release);
 
     uint64_t idleSinceCycles = Tsc::getCycles();
@@ -1480,7 +1486,7 @@ void FiberScheduler::runScheduler(ProcessorState * processor) noexcept
         }
         else
         {
-            waitNs = waitNs ? std::min(waitNs * 2, MAX_WAIT_NS) : INITIAL_WAIT_NS;
+            waitNs = waitNs ? std::min(waitNs * 2, options.maxWaitNs) : options.initialWaitNs;
         }
     }
 }
@@ -1495,11 +1501,11 @@ bool FiberScheduler::runServiceLoop(ProcessorState * processor, uint64_t waitNs,
 
     if (waitNs)
     {
-        // Wait step starts at INITIAL_WAIT_NS and doubles each idle iteration up to MAX_WAIT_NS.
-        // A timed wait ensures sleeping CPUs periodically wake to steal work even when
-        // not explicitly signalled (e.g. work arrived on a neighbor via an external thread).
+        // Wait step starts at initialWaitNs and doubles each idle iteration up to maxWaitNs.
+        // A timed wait ensures sleeping CPUs periodically wake to steal work even when not
+        // explicitly signalled (e.g. work arrived on a neighbor via an external thread).
         // Before going to sleep - spin a little to avoid eventfd syscalls.
-        if (waitNs < SPIN_THRESHOLD_NS)
+        if (waitNs < options.spinThresholdNs)
         {
             spinWait([=] { return processor->hasWork() || scheduler->stopping.load(std::memory_order_relaxed); });
         }
