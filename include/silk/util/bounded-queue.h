@@ -25,8 +25,23 @@ template <typename T>
 class BoundedQueue
 {
 public:
-    explicit BoundedQueue(uint64_t capacity) noexcept
+    /**
+     * Default-construct an empty, unusable queue. Call initialize before any
+     * enqueue/dequeue/empty access. Useful when the queue is a member of a
+     * larger structure whose capacity is known only after construction.
+     */
+    BoundedQueue() noexcept = default;
+
+    // TBD
+    explicit BoundedQueue(uint64_t capacity) noexcept { initialize(capacity); }
+
+    /**
+     * Allocate the slot array. The queue must be in its default-constructed
+     * state (no slots yet). Capacity must be a power of two and >= 2.
+     */
+    void initialize(uint64_t capacity) noexcept
     {
+        SILK_ASSERT(!slots);
         SILK_ASSERT(capacity >= 2 && (capacity & (capacity - 1)) == 0);
         mask = capacity - 1;
         slots = std::make_unique<Slot[]>(capacity);
@@ -36,8 +51,10 @@ public:
         }
     }
 
-    /** Append a value to the tail of the queue. Returns false if the queue is full or
-     *  a concurrent dequeue is in progress on the target slot (see class caveat). */
+    /**
+     * Append a value to the tail of the queue. Returns false if the queue is full or
+     * a concurrent dequeue is in progress on the target slot (see class caveat).
+     */
     [[nodiscard]] bool enqueue(T value) noexcept
     {
         uint64_t pos = enqueuePos.load(std::memory_order_relaxed);
@@ -66,8 +83,10 @@ public:
         }
     }
 
-    /** Write the head value into @p value. Returns false if the queue is empty or
-     *  a concurrent enqueue is in progress on the target slot (see class caveat). */
+    /**
+     * Write the head value into @p value. Returns false if the queue is empty or
+     * a concurrent enqueue is in progress on the target slot (see class caveat).
+     */
     [[nodiscard]] bool dequeue(T * value) noexcept
     {
         uint64_t pos = dequeuePos.load(std::memory_order_relaxed);
