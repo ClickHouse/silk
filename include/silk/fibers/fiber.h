@@ -508,6 +508,7 @@ private:
     }
 
     static void buildStealCandidates() noexcept;
+    static void initCurrentFiber() noexcept;
     static void * getFiberParameters(Fiber * fiber) noexcept;
     static Fiber * allocateFiber(FiberMain * fiberMain, ParametersDtor * parametersDtor, uint8_t category, FiberFuture * future) noexcept;
     static void freeFiber(Fiber * fiber) noexcept;
@@ -524,9 +525,13 @@ private:
     static bool runStealLoop(ProcessorState * processor, uint64_t idleSinceCycles, CpuTimer * timer) noexcept;
     static bool handleReadyQueue(ProcessorState * processor, CpuTimer * timer) noexcept;
     static bool handleCompletionQueue(ProcessorState * processor) noexcept;
+    static bool handleCompletionQueueSlow(ProcessorState * processor) noexcept;
     static bool handleSleepQueue(ProcessorState * processor) noexcept;
+    static void handleSleepQueueSlow(ProcessorState * processor, SleepFuture * sleepFuture) noexcept;
     static bool handleCancelQueue(ProcessorState * processor) noexcept;
+    static void handleCancelQueueSlow(ProcessorState * processor, SleepFuture * cancelEntry) noexcept;
     static bool handleExpiredWaiters(ProcessorState * processor) noexcept;
+    static void handleExpiredWaitersSlow(ProcessorState * processor, SleepFuture * sleepFuture, uint64_t now) noexcept;
     static void runFiber(Fiber * fiber, CpuTimer * timer) noexcept;
     static void runThreadWorker() noexcept;
 
