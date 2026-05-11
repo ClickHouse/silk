@@ -8,7 +8,6 @@
 #include <Poco/Net/StreamSocket.h>
 
 #include <cerrno>
-#include <format>
 
 #include <poll.h>
 #include <unistd.h>
@@ -130,7 +129,7 @@ bool FiberSocketImpl::poll(const Poco::Timespan & timeout, int mode)
 int FiberSocketImpl::sendBytes(const void * buffer, int length, int flags)
 {
     // Poco flags (MSG_NOSIGNAL, MSG_PEEK, etc.) are not plumbed through to io_uring read/write.
-    SILK_ASSERT(flags == 0, "FiberSocketImpl::sendBytes does not support flags (got {})", flags);
+    SILK_ASSERT(flags == 0, "FiberSocketImpl::sendBytes does not support flags (got %d)", flags);
 
     int total = 0;
     const char * ptr = static_cast<const char *>(buffer);
@@ -170,7 +169,7 @@ int FiberSocketImpl::sendBytes(const void * buffer, int length, int flags)
 int FiberSocketImpl::receiveBytes(void * buffer, int length, int flags)
 {
     // Poco flags (MSG_NOSIGNAL, MSG_PEEK, etc.) are not plumbed through to io_uring read/write.
-    SILK_ASSERT(flags == 0, "FiberSocketImpl::receiveBytes does not support flags (got {})", flags);
+    SILK_ASSERT(flags == 0, "FiberSocketImpl::receiveBytes does not support flags (got %d)", flags);
 
 #if defined(USE_IO_URING_RW)
     uint64_t bytesRead = 0;

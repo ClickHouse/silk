@@ -34,7 +34,6 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
-#include <format>
 #include <iostream>
 #include <limits>
 #include <memory>
@@ -135,7 +134,7 @@ void Client::start()
         else
         {
             int r = silk::FiberScheduler::run(fiberMain, {this, &conn}, &conn.future);
-            SILK_ASSERT(!r, "cannot start fiber: {}", std::strerror(r));
+            SILK_ASSERT(!r, "cannot start fiber: %s", std::strerror(r));
         }
     }
 
@@ -156,7 +155,7 @@ void Client::stop()
         {
             if (!isExpectedShutdown(e.code()))
             {
-                SILK_ERROR("shutdown failed: {}", e.displayText());
+                SILK_ERROR("shutdown failed: %s", e.displayText().c_str());
             }
         }
     }
@@ -204,7 +203,7 @@ void Client::runLoop(Connection * conn) noexcept
         {
             if (!stopping.load(std::memory_order_relaxed) && !isExpectedShutdown(e.code()))
             {
-                SILK_ERROR("HTTP request failed: {}", e.displayText());
+                SILK_ERROR("HTTP request failed: %s", e.displayText().c_str());
             }
             break;
         }
@@ -308,9 +307,9 @@ static void runClient(int argc, char ** argv)
     }
 
     SILK_INFO(
-        "starting {} http client, host={}:{}, connections={}",
+        "starting %s http client, host=%s:%u, connections=%u",
         cfg.useThreads ? "threaded" : "fiber",
-        cfg.host,
+        cfg.host.c_str(),
         cfg.port,
         cfg.numConnections);
 
@@ -319,13 +318,13 @@ static void runClient(int argc, char ** argv)
 
     if (cfg.warmupNs > 0)
     {
-        SILK_INFO("warming up for {}...", formatDuration(cfg.warmupNs));
+        SILK_INFO("warming up for %s...", formatDuration(cfg.warmupNs).c_str());
         signalled = sigwaitFor(mask, cfg.warmupNs);
     }
 
     if (!signalled)
     {
-        SILK_INFO("measuring for {}...", formatDuration(cfg.durationNs));
+        SILK_INFO("measuring for %s...", formatDuration(cfg.durationNs).c_str());
         sigwaitFor(mask, cfg.durationNs);
     }
 
@@ -492,7 +491,7 @@ private:
 void FiberHTTPServer::start()
 {
     int r = silk::FiberScheduler::run(acceptFiberMain, AcceptFiberParams{this}, &acceptFuture);
-    SILK_ASSERT(r == 0, "spawn accept fiber: {}", std::strerror(r));
+    SILK_ASSERT(r == 0, "spawn accept fiber: %s", std::strerror(r));
 }
 
 void FiberHTTPServer::stop()
@@ -509,12 +508,12 @@ void FiberHTTPServer::stop()
     {
         if (!isExpectedShutdown(e.code()))
         {
-            SILK_ERROR("shutdown failed: {}", e.displayText());
+            SILK_ERROR("shutdown failed: %s", e.displayText().c_str());
         }
     }
 
     int r = acceptFuture.wait();
-    SILK_ASSERT(r == 0, "accept fiber: {}", std::strerror(r));
+    SILK_ASSERT(r == 0, "accept fiber: %s", std::strerror(r));
 
     socket.close();
 
@@ -530,7 +529,7 @@ void FiberHTTPServer::stop()
             {
                 if (!isExpectedShutdown(e.code()))
                 {
-                    SILK_ERROR("shutdown failed: {}", e.displayText());
+                    SILK_ERROR("shutdown failed: %s", e.displayText().c_str());
                 }
             }
         }
@@ -556,7 +555,7 @@ void FiberHTTPServer::acceptLoop() noexcept
         {
             if (!stopping.load(std::memory_order_relaxed) && !isExpectedShutdown(e.code()))
             {
-                SILK_ERROR("accept failed: {}", e.displayText());
+                SILK_ERROR("accept failed: %s", e.displayText().c_str());
             }
             return;
         }
@@ -571,7 +570,7 @@ void FiberHTTPServer::acceptLoop() noexcept
         int r = silk::FiberScheduler::run(connFiberMain, ConnFiberParams{this, clientSocket}, &conn->future);
         if (r != 0)
         {
-            SILK_ERROR("spawn conn fiber: {}", std::strerror(r));
+            SILK_ERROR("spawn conn fiber: %s", std::strerror(r));
             {
                 std::lock_guard lock(connsMutex);
                 conns.remove(conn);
@@ -593,7 +592,7 @@ void FiberHTTPServer::connectionLoop(Poco::Net::StreamSocket socket) noexcept
     {
         if (!stopping.load(std::memory_order_relaxed) && !isExpectedShutdown(e.code()))
         {
-            SILK_ERROR("connection error: {}", e.displayText());
+            SILK_ERROR("connection error: %s", e.displayText().c_str());
         }
     }
 }
@@ -668,11 +667,11 @@ static void runServer(int argc, char ** argv)
     Poco::Net::HTTPRequestHandlerFactory::Ptr factory = new EchoHandlerFactory(handlerCfg);
 
     SILK_INFO(
-        "starting {} http server on port {}, queued={}, delay={}",
+        "starting %s http server on port %u, queued=%u, delay=%s",
         cfg.useThreads ? "threaded" : "fiber",
         cfg.port,
         cfg.maxQueued,
-        formatDuration(cfg.delayNs));
+        formatDuration(cfg.delayNs).c_str());
 
     if (cfg.useThreads)
     {

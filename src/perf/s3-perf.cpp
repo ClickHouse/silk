@@ -323,7 +323,7 @@ const char * PocoHttpClient::getMethod(Aws::Http::HttpMethod method)
         case Aws::Http::HttpMethod::HTTP_TRACE:
             return "TRACE";
     }
-    SILK_ASSERT(false);
+    SILK_FAIL("unknown HTTP method", "value=%d", static_cast<int>(method));
 }
 
 void PocoHttpClient::writeHeaders(Poco::Net::HTTPRequest & pocoReq, const Aws::Http::HeaderValueCollection & headers)
@@ -514,7 +514,7 @@ int FiberExecutor::execFiberMain(ExecParams * params) noexcept
         // The SDK wraps tasks in std::packaged_task, which captures exceptions
         // into the promise before rethrowing. The session thread sees the error
         // via callable.get(). We catch here only to satisfy noexcept.
-        SILK_ERROR("fiber executor task exception: {}", e.what());
+        SILK_ERROR("fiber executor task exception: %s", e.what());
     }
     return 0;
 }
@@ -703,7 +703,7 @@ void S3Bench::runSession(Session * session)
             // endpoint or a transient failure every session exits after one bad outcome,
             // and the run produces no useful latency data. failedSessions exposes the
             // count so the caller can warn.
-            SILK_ERROR("S3 request failed: {}", slots[head].error->GetMessage());
+            SILK_ERROR("S3 request failed: %s", slots[head].error->GetMessage().c_str());
             session->failed = true;
             head = (head + 1) % cfg.ioDepth;
             break;
@@ -829,13 +829,13 @@ int main(int argc, char ** argv)
 
     if (cfg.warmupNs > 0)
     {
-        SILK_INFO("warming up for {}...", formatDuration(cfg.warmupNs));
+        SILK_INFO("warming up for %s...", formatDuration(cfg.warmupNs).c_str());
         signalled = sigwaitFor(mask, cfg.warmupNs);
     }
 
     if (!signalled)
     {
-        SILK_INFO("measuring for {}...", formatDuration(cfg.durationNs));
+        SILK_INFO("measuring for %s...", formatDuration(cfg.durationNs).c_str());
         sigwaitFor(mask, cfg.durationNs);
     }
 
@@ -847,7 +847,7 @@ int main(int argc, char ** argv)
     uint32_t failedSessions = bench.failedSessions();
     if (failedSessions > 0)
     {
-        SILK_WARN("{}/{} sessions exited early due to S3 errors", failedSessions, cfg.numJobs);
+        SILK_WARN("%u/%u sessions exited early due to S3 errors", failedSessions, cfg.numJobs);
     }
 
     auto latencies = bench.collectLatencies();

@@ -1,12 +1,12 @@
 #pragma once
 
 #include <atomic>
-#include <format>
-#include <string_view>
 
 namespace silk
 {
 
+// Log severity, ordered low-to-high. A record is emitted when its level is
+// >= the logger's configured minimum (default INFO; change via Logger::setLevel).
 enum class LogLevel
 {
     DEBUG,
@@ -26,20 +26,16 @@ class Logger
 {
 public:
     /** Set the minimum level for messages to be emitted. */
-    static void setLevel(LogLevel level) noexcept;
+    static void setLevel(LogLevel level) noexcept { currentLevel.store(level, std::memory_order_relaxed); }
 
     /** Return true if messages at the given level would be emitted. */
     static bool isEnabled(LogLevel level) noexcept { return level >= currentLevel.load(std::memory_order_relaxed); }
 
-    /** Emit a pre-formatted message. */
-    static void log(LogLevel level, std::string_view file, int line, std::string_view message) noexcept;
+    /** Emit a pre-formatted message verbatim (no printf parsing). */
+    static void log(LogLevel level, const char * file, int line, const char * message) noexcept;
 
-    /** Format and emit a message. */
-    template <typename... Args>
-    static void log(LogLevel level, std::string_view file, int line, std::format_string<Args...> fmt, Args &&... args) noexcept
-    {
-        log(level, file, line, std::format(fmt, std::forward<Args>(args)...));
-    }
+    /** Emit a printf-formatted message. */
+    static void logf(LogLevel level, const char * file, int line, const char * fmt, ...) noexcept __attribute__((format(printf, 4, 5)));
 
 private:
     inline static std::atomic<LogLevel> currentLevel{LogLevel::INFO};
@@ -47,9 +43,22 @@ private:
 
 } // namespace silk
 
-// clang-format off
-#define SILK_DEBUG(...) do { if (silk::Logger::isEnabled(silk::LogLevel::DEBUG)) silk::Logger::log(silk::LogLevel::DEBUG, __FILE__, __LINE__, __VA_ARGS__); } while (0)
-#define SILK_INFO(...)  do { if (silk::Logger::isEnabled(silk::LogLevel::INFO))  silk::Logger::log(silk::LogLevel::INFO,  __FILE__, __LINE__, __VA_ARGS__); } while (0)
-#define SILK_WARN(...)  do { if (silk::Logger::isEnabled(silk::LogLevel::WARN))  silk::Logger::log(silk::LogLevel::WARN,  __FILE__, __LINE__, __VA_ARGS__); } while (0)
-#define SILK_ERROR(...) do { if (silk::Logger::isEnabled(silk::LogLevel::ERROR)) silk::Logger::log(silk::LogLevel::ERROR, __FILE__, __LINE__, __VA_ARGS__); } while (0)
-// clang-format on
+// Emit a log record at the given level. Dispatches to Logger::log for plain
+// strings (SILK_INFO("text")) and to Logger::logf for printf-style calls
+// (SILK_INFO("foo %d", x)) -- the latter is the only path that pays vsnprintf.
+// The format string is checked at every call site (-Wformat); formatting only
+// runs when the level is enabled, so a disabled-level call site is one relaxed
+// atomic load.
+#define SILK_LOG(level, fmt, ...) \
+    do \
+    { \
+        if (silk::Logger::isEnabled(level)) \
+        { \
+            silk::Logger::log##__VA_OPT__(f)(level, __FILE__, __LINE__, fmt __VA_OPT__(, ) __VA_ARGS__); \
+        } \
+    } while (0)
+
+#define SILK_DEBUG(fmt, ...) SILK_LOG(silk::LogLevel::DEBUG, fmt __VA_OPT__(, ) __VA_ARGS__)
+#define SILK_INFO(fmt, ...) SILK_LOG(silk::LogLevel::INFO, fmt __VA_OPT__(, ) __VA_ARGS__)
+#define SILK_WARN(fmt, ...) SILK_LOG(silk::LogLevel::WARN, fmt __VA_OPT__(, ) __VA_ARGS__)
+#define SILK_ERROR(fmt, ...) SILK_LOG(silk::LogLevel::ERROR, fmt __VA_OPT__(, ) __VA_ARGS__)

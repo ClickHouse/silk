@@ -22,7 +22,6 @@
 #include <atomic>
 #include <cerrno>
 #include <cstdint>
-#include <format>
 #include <memory>
 #include <mutex>
 #include <thread>
@@ -398,7 +397,7 @@ void Fiber::fiberContextMain(boost::context::detail::transfer_t transfer) noexce
     fiber->result = fiber->fiberMain(fiber->parameters);
     fiber->changeState(FiberState::RUNNING, FiberState::STOPPED);
     fiber->switchToThreadContext(true);
-    SILK_ASSERT(false, "unreachable");
+    SILK_FAIL("unreachable");
 }
 
 void Fiber::changeState(FiberState expectedState, FiberState newState) noexcept
@@ -406,7 +405,7 @@ void Fiber::changeState(FiberState expectedState, FiberState newState) noexcept
     FiberState prevState = state.exchange(newState, std::memory_order_acq_rel);
     SILK_ASSERT(
         prevState == expectedState,
-        "invalid fiber state: expected={}, actual={}",
+        "invalid fiber state: expected=%d, actual=%d",
         static_cast<int>(expectedState),
         static_cast<int>(prevState));
 }
@@ -430,7 +429,7 @@ bool Fiber::tryChangeStateToSuspended() noexcept
                 // runFiber will enqueue the fiber after the callback returns.
                 return false;
             default:
-                SILK_ASSERT(false, "Unexpected fiber state: {}", static_cast<int>(currentState));
+                SILK_FAIL("unexpected fiber state", "state=%d", static_cast<int>(currentState));
         }
     }
 }
@@ -457,7 +456,7 @@ bool Fiber::tryChangeStateToReady() noexcept
                 }
                 break;
             default:
-                SILK_ASSERT(false, "Unexpected fiber state: {}", static_cast<int>(currentState));
+                SILK_FAIL("unexpected fiber state", "state=%d", static_cast<int>(currentState));
         }
     }
 }

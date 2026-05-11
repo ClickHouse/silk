@@ -8,7 +8,6 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <format>
 #include <utility>
 
 #include <backtrace.h>
@@ -21,7 +20,7 @@ static int parseMapsFile(const char * path, Callback callback) noexcept
     if (!f)
     {
         int r = errno;
-        SILK_ERROR("open {}: {}", path, ::strerror(r));
+        SILK_ERROR("open %s: %s", path, ::strerror(r));
         return r;
     }
 
@@ -82,7 +81,7 @@ int Symbolizer::readKallsyms() noexcept
     if (!f)
     {
         int r = errno;
-        SILK_ERROR("open /proc/kallsyms: {}", ::strerror(r));
+        SILK_ERROR("open /proc/kallsyms: %s", ::strerror(r));
         return r;
     }
 
@@ -138,7 +137,9 @@ const std::string & Symbolizer::resolve(uint64_t addr)
         }
         if (result.empty())
         {
-            result = std::format("0x{:x}", addr);
+            char buf[32];
+            std::snprintf(buf, sizeof(buf), "0x%lx", addr);
+            result = buf;
         }
         auto [it2, _] = cache.emplace(addr, std::move(result));
         return it2->second;
@@ -172,7 +173,7 @@ const std::string & Symbolizer::resolve(uint64_t addr)
 
         if (!state)
         {
-            SILK_WARN("0x{:x}: no backtrace state for {}", addr, m.path);
+            SILK_WARN("0x%lx: no backtrace state for %s", addr, m.path.c_str());
             break;
         }
 
@@ -232,18 +233,27 @@ const std::string & Symbolizer::resolve(uint64_t addr)
     {
         if (mappingFound)
         {
-            SILK_DEBUG("0x{:x}: in mapping but not symbolized (elfAddr=0x{:x} {})", addr, mappingElfAddr, mappingPath);
+            SILK_DEBUG(
+                "0x%lx: in mapping but not symbolized (elfAddr=0x%lx %.*s)",
+                addr,
+                mappingElfAddr,
+                static_cast<int>(mappingPath.size()),
+                mappingPath.data());
             std::string_view base = mappingPath;
             if (auto slash = base.rfind('/'); slash != std::string_view::npos)
             {
                 base = base.substr(slash + 1);
             }
-            result = std::format("{}+0x{:x}", base, mappingElfAddr);
+            char buf[256];
+            std::snprintf(buf, sizeof(buf), "%.*s+0x%lx", static_cast<int>(base.size()), base.data(), mappingElfAddr);
+            result = buf;
         }
         else
         {
-            SILK_DEBUG("0x{:x}: no mapping (library loaded after readMappings?)", addr);
-            result = std::format("0x{:x}", addr);
+            SILK_DEBUG("0x%lx: no mapping (library loaded after readMappings?)", addr);
+            char buf[32];
+            std::snprintf(buf, sizeof(buf), "0x%lx", addr);
+            result = buf;
         }
     }
 
@@ -257,11 +267,11 @@ void Symbolizer::backtraceErrorCb(void * data, const char * msg, int errnum)
 
     if (errnum)
     {
-        SILK_ERROR("libbacktrace: {} ({})", msg, ::strerror(errnum));
+        SILK_ERROR("libbacktrace: %s (%s)", msg, ::strerror(errnum));
     }
     else
     {
-        SILK_ERROR("libbacktrace: {}", msg);
+        SILK_ERROR("libbacktrace: %s", msg);
     }
 }
 
