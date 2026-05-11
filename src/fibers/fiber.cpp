@@ -68,6 +68,7 @@ static constexpr uint16_t INVALID_PROCESSOR_NUMBER = (1 << 10);
     x(FIBER_STOLEN,            "FiberStolen") \
     x(IO_ENQUEUED,             "IoEnqueued") \
     x(IO_COMPLETED,            "IoCompleted") \
+    x(IO_SUBMITTED,            "IoSubmitted") \
     x(SQ_RING_OVERFLOW,        "SQRingOverflow") \
     x(CQ_RING_OVERFLOW,        "CQRingOverflow") \
     x(SLEEP_ENQUEUED,          "SleepEnqueued") \
@@ -533,7 +534,7 @@ struct FiberScheduler::ProcessorState
 
     template <typename Setup>
     bool enqueueIo(IoFuture * future, Setup && setup) noexcept;
-    void submitIo(bool flush) noexcept;
+    bool submitIo(bool flush) noexcept;
 
     void insertSuspended(Fiber * fiber) noexcept;
     void removeSuspended(Fiber * fiber) noexcept;
@@ -578,6 +579,18 @@ struct FiberScheduler::ProcessorState
 
         // Deadline of the in-flight io_uring timeout SQE; 0 when none is pending.
         uint64_t wakeupDeadlineCycles = 0;
+
+        // Timestamp (TSC cycles) of the most recent successful CQ drain on
+        // this ring. Used to emit CQ_WAIT profile events bounding how long
+        // any CQE in the next drain batch could have sat in the ring.
+        uint64_t lastCqDrainCycles = 0;
+
+        // Timestamp (TSC cycles) of the most recent io_uring_submit call.
+        // Read in submitIo (time-gate) and handleCompletionQueue (SQ_WAIT
+        // emit) under serviceLoopLock; written in submitIo under
+        // submissionLock.  Relaxed atomic is sufficient: readers tolerate a
+        // slightly stale value.
+        std::atomic<uint64_t> lastSubmitCycles{0};
 
         // Per-CPU latency profiler. Allocated only when Options::enableProfiler
         // is set; null otherwise.  Co-located with the hot path so the null
@@ -653,6 +666,9 @@ void FiberScheduler::ProcessorState::initialize(uint32_t cpu) noexcept
     {
         profiler = std::make_unique<Profiler>();
     }
+
+    lastCqDrainCycles = Tsc::getCycles();
+    lastSubmitCycles.store(lastCqDrainCycles, std::memory_order_relaxed);
 }
 
 void FiberScheduler::ProcessorState::destroy() noexcept
@@ -841,59 +857,55 @@ bool FiberScheduler::ProcessorState::enqueueIo(IoFuture * future, Setup && setup
     return false;
 }
 
-// Submit pending SQEs to the kernel.
-//
-// flush=false: pressure-relief mode for dispatch loops - only submit
-// once at least options.ioUringFlushThreshold SQEs are queued, otherwise
-// let the next fiber accumulate more work before paying the syscall.
-//
-// flush=true: force submit regardless of count. Used at end-of-drain, by
-// the proxy/wakeup paths that need the SQE visible immediately, and by
-// worker threads which have no batching boundary.
-//
-// IO_SUBMIT profile event represents the syscall cost; per-fiber latency
-// lives in IO_WAIT. Category 0 because a single io_uring_enter covers SQEs
-// from any fibers that contributed.
-void FiberScheduler::ProcessorState::submitIo(bool flush) noexcept
+// Submit pending SQEs to the kernel.  flush=true: unconditional flush.
+// flush=false: gated by ioUringFlushThreshold (count) or ioUringFlushTimeout.
+bool FiberScheduler::ProcessorState::submitIo(bool flush) noexcept
 {
-    // Fast path: submitIo is always called on the same thread that just called
-    // enqueueIo, so our own enqueue is always visible here.
-    // Suppress the TSan report for the cross-CPU race on sqe_tail.
+    // Fast path: read SQ tail outside the lock.
     TSAN_IGNORE_BEGIN();
     uint32_t count = ::io_uring_sq_ready(&ring);
     TSAN_IGNORE_END();
-
-    uint32_t minCount = flush ? 1 : options.ioUringFlushThreshold;
-    if (count < minCount)
+    if (count == 0)
     {
-        return;
+        return false;
+    }
+
+    uint64_t nowCycles = Tsc::getCycles();
+
+    if (!flush)
+    {
+        bool countMet = count >= options.ioUringFlushThreshold;
+        bool staleMet = nowCycles - lastSubmitCycles.load(std::memory_order_relaxed) > options.ioUringFlushTimeoutCycles;
+        if (!countMet && !staleMet)
+        {
+            return false;
+        }
     }
 
     std::lock_guard lock(submissionLock);
 
     count = ::io_uring_sq_ready(&ring);
-    if (count >= minCount)
+    if (count == 0)
     {
-        // TSan needs an explicit barrier between submission/completion.
-        TSAN_RELEASE(this);
-
-        if (profiler)
-        {
-            uint64_t startCycles = Tsc::getCycles();
-
-            int r = ::io_uring_submit(&ring);
-            SILK_ASSERT(r >= 0);
-
-            profileEvent(ProfileEventKind::IO_SUBMIT, 0, Tsc::getCycles() - startCycles);
-        }
-        else
-        {
-            int r = ::io_uring_submit(&ring);
-            SILK_ASSERT(r >= 0);
-        }
-
-        Perf::getSimpleCounter(simpleCounters[IO_ENQUEUED], number).increment(count);
+        return false;
     }
+
+    // TSan needs an explicit barrier between submission/completion.
+    TSAN_RELEASE(this);
+
+    lastSubmitCycles.store(nowCycles, std::memory_order_relaxed);
+
+    int r = ::io_uring_submit(&ring);
+    SILK_ASSERT(r >= 0);
+
+    if (profiler)
+    {
+        profileEvent(ProfileEventKind::SUBMIT_IO, 0, Tsc::getCycles() - nowCycles);
+    }
+
+    Perf::getSimpleCounter(simpleCounters[IO_ENQUEUED], number).increment(count);
+    Perf::getSimpleCounter(simpleCounters[IO_SUBMITTED], number).increment();
+    return true;
 }
 
 void FiberScheduler::ProcessorState::insertSuspended(Fiber * fiber) noexcept
@@ -996,6 +1008,7 @@ void FiberScheduler::initialize(const Options * userOptions) noexcept
     SILK_ASSERT(options.ioUringQueueSize >= 2 && (options.ioUringQueueSize & (options.ioUringQueueSize - 1)) == 0);
     SILK_ASSERT(options.ioUringFlushThreshold >= 1 && options.ioUringFlushThreshold <= options.ioUringQueueSize);
     SILK_ASSERT(options.waiterTableSize >= 2 && (options.waiterTableSize & (options.waiterTableSize - 1)) == 0);
+    options.ioUringFlushTimeoutCycles = Tsc::nanosecondsToCycles(options.ioUringFlushTimeout);
 
     scheduler = new SchedulerState();
 
@@ -1522,7 +1535,7 @@ void FiberScheduler::runScheduler(ProcessorState * processor) noexcept
         }
         else
         {
-            waitNs = waitNs ? std::min(waitNs * 2, options.maxWaitNs) : options.initialWaitNs;
+            waitNs = waitNs ? std::min<uint64_t>(waitNs * 2, options.maxWaitNs) : options.initialWaitNs;
         }
     }
 }
@@ -1662,6 +1675,12 @@ bool FiberScheduler::handleCompletionQueue(ProcessorState * processor) noexcept
     // TSan needs an explicit barrier between submission/completion.
     TSAN_ACQUIRE(processor);
 
+    uint64_t entryCycles = 0;
+    if (processor->profiler)
+    {
+        entryCycles = Tsc::getCycles();
+    }
+
     for (;;)
     {
         // Handle completion entries in the ring.
@@ -1704,7 +1723,10 @@ bool FiberScheduler::handleCompletionQueue(ProcessorState * processor) noexcept
 
             if (processor->profiler)
             {
-                processor->profileEvent(ProfileEventKind::IO_WAIT, future->category, Tsc::getCycles() - future->submitTimestamp);
+                uint64_t nowCycles = Tsc::getCycles();
+                uint64_t submitCycles = processor->lastSubmitCycles.load(std::memory_order_relaxed);
+                processor->profileEvent(ProfileEventKind::IO_WAIT, future->category, nowCycles - future->submitTimestamp);
+                processor->profileEvent(ProfileEventKind::SQ_WAIT, future->category, submitCycles - future->submitTimestamp);
             }
 
             int result = cqe->res;
@@ -1740,6 +1762,12 @@ bool FiberScheduler::handleCompletionQueue(ProcessorState * processor) noexcept
         // iteration.
         int r = ::io_uring_get_events(&processor->ring);
         SILK_ASSERT(r >= 0);
+    }
+
+    if (didWork && processor->profiler)
+    {
+        processor->profileEvent(ProfileEventKind::CQ_WAIT, 0, entryCycles - processor->lastCqDrainCycles);
+        processor->lastCqDrainCycles = entryCycles;
     }
 
     return didWork;

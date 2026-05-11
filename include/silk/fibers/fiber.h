@@ -56,11 +56,13 @@ static_assert(sizeof(FiberId) == 8);
  */
 enum class ProfileEventKind : uint8_t
 {
-    SUSPEND_WAIT = 0, // suspended -> enqueueReady: blocked-on-condition latency
-    IO_SUBMIT = 1, // submitIo: io_uring_submit cost per fiber-suspend flush
-    IO_WAIT = 2, // enqueueIo -> handleCompletion: IO latency
-    READY_WAIT = 3, // enqueueReady -> runFiber: ready-queue dwell
-    FIBER_RUN = 4, // switchToFiberContext -> return: on-CPU time per slice
+    READY_WAIT = 0, // enqueueReady -> runFiber: ready-queue dwell
+    FIBER_RUN = 1, // switchToFiberContext -> return: on-CPU time per slice
+    SUSPEND_WAIT = 2, // suspended -> enqueueReady: blocked-on-condition latency
+    IO_WAIT = 3, // enqueueIo -> handleCompletion: full IO latency
+    SQ_WAIT = 4, // enqueueIo -> io_uring_submit: SQE pending in silk's SQ ring before flush to kernel
+    SUBMIT_IO = 5, // io_uring_submit syscall cost
+    CQ_WAIT = 6, // wall-clock gap between consecutive non-empty CQ drains on a ring
     MAX
 };
 
@@ -91,32 +93,36 @@ public:
     {
         // Per-fiber stack size in bytes. Must be a multiple of the system page size.
         // The pool also reserves two guard pages adjacent to each stack.
-        uint64_t fiberStackSize = 64 * 1024;
+        uint32_t fiberStackSize = 64 * 1024;
 
         // Per-CPU ready queue capacity (fibers). Must be a power of two and >= 2.
         // Sized to absorb dispatch bursts without falling back to the global queue.
-        uint64_t readyQueueCapacity = 1024;
+        uint32_t readyQueueCapacity = 1024;
+
+        // Hash-table size for futex-style waiter lookups. Must be a power of two.
+        uint32_t waiterTableSize = 4096;
 
         // Per-CPU io_uring SQ ring capacity. Must be a power of two; the kernel
         // rounds up to the nearest supported size.
-        uint64_t ioUringQueueSize = 256;
+        uint32_t ioUringQueueSize = 256;
 
-        // Mid-drain submit threshold: submitIo defers io_uring_enter until the SQ
-        // ring holds at least this many entries. Lower values approach per-fiber
-        // submit (better latency on inline-completion workloads); higher values
-        // amortize syscall cost across more SQEs (better throughput on networked
-        // workloads). Must be <= ioUringQueueSize.
+        // Upper bound on the number of SQEs that may sit in silk's SQ ring
+        // before being flushed to the kernel.  Must be <= ioUringQueueSize.
         uint32_t ioUringFlushThreshold = 64;
 
-        // Hash-table size for futex-style waiter lookups. Must be a power of two.
-        uint64_t waiterTableSize = 4096;
+        // Upper bound on how long an SQE may sit in silk's SQ ring before
+        // being flushed to the kernel.
+        uint32_t ioUringFlushTimeout = 100'000;
+
+        // Derived in initialize() from ioUringFlushTimeout; users do not set this.
+        uint64_t ioUringFlushTimeoutCycles = 0;
 
         // Scheduler park backoff (nanoseconds). The dispatch loop spins for up to
         // spinThresholdNs after going idle; past that it parks on the eventfd with
         // an exponential backoff starting at initialWaitNs and capped at maxWaitNs.
-        uint64_t initialWaitNs = 1'000;
-        uint64_t maxWaitNs = 10'000'000;
-        uint64_t spinThresholdNs = 20'000;
+        uint32_t initialWaitNs = 1'000;
+        uint32_t maxWaitNs = 10'000'000;
+        uint32_t spinThresholdNs = 20'000;
 
         // Allocate per-CPU latency profilers.
         bool enableProfiler = false;
