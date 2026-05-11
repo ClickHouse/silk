@@ -112,16 +112,20 @@ static const char * profileEventKindName(silk::ProfileEventKind kind) noexcept
 {
     switch (kind)
     {
-        case silk::ProfileEventKind::SUSPEND_WAIT:
-            return "suspend_wait";
-        case silk::ProfileEventKind::IO_SUBMIT:
-            return "io_submit";
-        case silk::ProfileEventKind::IO_WAIT:
-            return "io_wait";
         case silk::ProfileEventKind::READY_WAIT:
             return "ready_wait";
         case silk::ProfileEventKind::FIBER_RUN:
             return "fiber_run";
+        case silk::ProfileEventKind::SUSPEND_WAIT:
+            return "suspend_wait";
+        case silk::ProfileEventKind::IO_WAIT:
+            return "io_wait";
+        case silk::ProfileEventKind::CQ_WAIT:
+            return "cq_wait";
+        case silk::ProfileEventKind::SQ_WAIT:
+            return "sq_wait";
+        case silk::ProfileEventKind::SUBMIT_IO:
+            return "submit_io";
         default:
             return "unknown";
     }
