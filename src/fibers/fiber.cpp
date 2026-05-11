@@ -534,6 +534,7 @@ struct FiberScheduler::ProcessorState
     template <typename Setup>
     bool enqueueIo(IoFuture * future, Setup && setup) noexcept;
     bool submitIo(bool flush) noexcept;
+    bool submitIoSlow(uint64_t startCycles) noexcept;
 
     void insertSuspended(Fiber * fiber) noexcept;
     void removeSuspended(Fiber * fiber) noexcept;
@@ -860,7 +861,10 @@ bool FiberScheduler::ProcessorState::enqueueIo(IoFuture * future, Setup && setup
 // flush=false: gated by ioUringFlushThreshold (count) or ioUringFlushTimeout.
 bool FiberScheduler::ProcessorState::submitIo(bool flush) noexcept
 {
-    // Fast path: read SQ tail outside the lock.
+    // Fast path: read SQ tail outside the lock. Returns false without taking
+    // the submission lock when there's nothing to submit or the count/staleness
+    // thresholds haven't been met. Kept small so it inlines into runFiber and
+    // enqueueWakeup; the rest lives in submitIoSlow.
     TSAN_IGNORE_BEGIN();
     uint32_t count = ::io_uring_sq_ready(&ring);
     TSAN_IGNORE_END();
@@ -881,9 +885,14 @@ bool FiberScheduler::ProcessorState::submitIo(bool flush) noexcept
         }
     }
 
+    return submitIoSlow(nowCycles);
+}
+
+__attribute__((noinline)) bool FiberScheduler::ProcessorState::submitIoSlow(uint64_t startCycles) noexcept
+{
     std::lock_guard lock(submissionLock);
 
-    count = ::io_uring_sq_ready(&ring);
+    uint32_t count = ::io_uring_sq_ready(&ring);
     if (count == 0)
     {
         return false;
@@ -892,14 +901,14 @@ bool FiberScheduler::ProcessorState::submitIo(bool flush) noexcept
     // TSan needs an explicit barrier between submission/completion.
     TSAN_RELEASE(this);
 
-    lastSubmitCycles.store(nowCycles, std::memory_order_relaxed);
+    lastSubmitCycles.store(startCycles, std::memory_order_relaxed);
 
     int r = ::io_uring_submit(&ring);
     SILK_ASSERT(r >= 0);
 
     if (profiler)
     {
-        profileEvent(ProfileEventKind::SUBMIT_IO, 0, Tsc::getCycles() - nowCycles);
+        profileEvent(ProfileEventKind::SUBMIT_IO, 0, Tsc::getCycles() - startCycles);
     }
 
     Perf::getSimpleCounter(simpleCounters[IO_ENQUEUED], number).increment(count);
@@ -1172,15 +1181,25 @@ FiberId FiberScheduler::getCurrentFiberId() noexcept
 
 Fiber * FiberScheduler::getCurrentFiber() noexcept
 {
+    // Fast path: thread is running a regular fiber, or has already lazily
+    // allocated a proxy fiber. Both branches stay inline; only the very first
+    // call from a non-fiber thread reaches initCurrentFiber.
     if (threadFiber)
     {
         return threadFiber;
     }
     if (!proxyFiber) [[unlikely]]
     {
-        proxyFiber = std::make_unique<Fiber>(true);
+        initCurrentFiber();
     }
     return proxyFiber.get();
+}
+
+__attribute__((noinline)) void FiberScheduler::initCurrentFiber() noexcept
+{
+    // Lazily create a proxy fiber so a non-fiber thread can still participate
+    // in fiber-aware APIs (e.g. FiberMutex::lock, FiberScheduler::run-and-wait).
+    proxyFiber = std::make_unique<Fiber>(true);
 }
 
 bool FiberScheduler::isFiberRunning(Fiber * fiber) noexcept
@@ -1669,6 +1688,17 @@ bool FiberScheduler::handleReadyQueue(ProcessorState * processor, CpuTimer * tim
 
 bool FiberScheduler::handleCompletionQueue(ProcessorState * processor) noexcept
 {
+    // Fast path: CQ ring is empty, nothing to drain.
+    if (::io_uring_cq_ready(&processor->ring) == 0)
+    {
+        return false;
+    }
+
+    return handleCompletionQueueSlow(processor);
+}
+
+__attribute__((noinline)) bool FiberScheduler::handleCompletionQueueSlow(ProcessorState * processor) noexcept
+{
     bool didWork = false;
 
     // TSan needs an explicit barrier between submission/completion.
@@ -1774,10 +1804,20 @@ bool FiberScheduler::handleCompletionQueue(ProcessorState * processor) noexcept
 
 bool FiberScheduler::handleSleepQueue(ProcessorState * processor) noexcept
 {
-    bool didWork = false;
-
+    // Fast path: queue empty, nothing to do.
     SleepFuture * sleepFuture = processor->sleepQueue.popAll();
-    while (sleepFuture)
+    if (!sleepFuture)
+    {
+        return false;
+    }
+
+    handleSleepQueueSlow(processor, sleepFuture);
+    return true;
+}
+
+__attribute__((noinline)) void FiberScheduler::handleSleepQueueSlow(ProcessorState * processor, SleepFuture * sleepFuture) noexcept
+{
+    do
     {
         SleepFuture * next = SleepStack::next(sleepFuture);
         uint32_t prev = sleepFuture->state.fetch_or(SleepFuture::IN_TABLE, std::memory_order_acq_rel);
@@ -1791,18 +1831,26 @@ bool FiberScheduler::handleSleepQueue(ProcessorState * processor) noexcept
             processor->sleepTree.insert(sleepFuture);
         }
         sleepFuture = next;
-        didWork = true;
-    }
 
-    return didWork;
+    } while (sleepFuture);
 }
 
 bool FiberScheduler::handleCancelQueue(ProcessorState * processor) noexcept
 {
-    bool didWork = false;
-
+    // Fast path: queue empty, nothing to do.
     SleepFuture * cancelEntry = processor->cancelQueue.popAll();
-    while (cancelEntry)
+    if (!cancelEntry)
+    {
+        return false;
+    }
+
+    handleCancelQueueSlow(processor, cancelEntry);
+    return true;
+}
+
+__attribute__((noinline)) void FiberScheduler::handleCancelQueueSlow(ProcessorState * processor, SleepFuture * cancelEntry) noexcept
+{
+    do
     {
         SleepFuture * next = SleepStack::next(cancelEntry);
         processor->sleepTree.remove(cancelEntry);
@@ -1811,34 +1859,44 @@ bool FiberScheduler::handleCancelQueue(ProcessorState * processor) noexcept
         cancelEntry = next;
 
         Perf::getSimpleCounter(simpleCounters[SLEEP_CANCELLED], processor->number).increment();
-        didWork = true;
-    }
 
-    return didWork;
+    } while (cancelEntry);
 }
 
 bool FiberScheduler::handleExpiredWaiters(ProcessorState * processor) noexcept
 {
-    bool didWork = false;
+    // Fast path: tree empty or earliest deadline still in the future. Inlines
+    // into runServiceLoop; the expire loop lives in handleExpiredWaitersSlow.
+    SleepFuture * sleepFuture = processor->sleepTree.min();
+    if (!sleepFuture)
+    {
+        return false;
+    }
 
     uint64_t now = Tsc::getCycles();
-    for (;;)
+    if (sleepFuture->deadlineCycles > now)
     {
-        SleepFuture * sleepFuture = processor->sleepTree.min();
-        if (!sleepFuture || sleepFuture->deadlineCycles > now)
-        {
-            break;
-        }
+        return false;
+    }
 
+    handleExpiredWaitersSlow(processor, sleepFuture, now);
+    return true;
+}
+
+__attribute__((noinline)) void
+FiberScheduler::handleExpiredWaitersSlow(ProcessorState * processor, SleepFuture * sleepFuture, uint64_t now) noexcept
+{
+    do
+    {
         processor->sleepTree.remove(sleepFuture);
         sleepFuture->state.fetch_and(~SleepFuture::IN_TABLE, std::memory_order_relaxed);
         sleepFuture->set(0);
 
         Perf::getSimpleCounter(simpleCounters[SLEEP_EXPIRED], processor->number).increment();
-        didWork = true;
-    }
 
-    return didWork;
+        sleepFuture = processor->sleepTree.min();
+
+    } while (sleepFuture && sleepFuture->deadlineCycles <= now);
 }
 
 void FiberScheduler::runFiber(Fiber * fiber, CpuTimer * timer) noexcept

@@ -44,6 +44,20 @@ public:
 
     void lock() noexcept
     {
+        // Fast path: one CAS. Inlines into every caller so the uncontended
+        // case is a single atomic op + branch. Contention falls through to
+        // lockSlow, which is kept out of the inliner's reach.
+        if (!try_lock()) [[unlikely]]
+        {
+            lockSlow();
+        }
+    }
+
+    void unlock() noexcept { flag.store(false, std::memory_order_release); }
+
+private:
+    __attribute__((noinline)) void lockSlow() noexcept
+    {
         while (!try_lock())
         {
             if (!spinWait([this] { return !flag.load(std::memory_order_relaxed); }))
@@ -53,9 +67,6 @@ public:
         }
     }
 
-    void unlock() noexcept { flag.store(false, std::memory_order_release); }
-
-private:
     std::atomic<bool> flag{false};
 };
 
