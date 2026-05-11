@@ -699,6 +699,18 @@ static void runServer(int argc, char ** argv)
         server.stop();
     }
 
+    if (cfg.printCounters)
+    {
+        printf("{\n");
+        if (!cfg.useThreads)
+        {
+            printSchedulerLatency();
+            printf(",");
+        }
+        printCounters();
+        printf("}\n");
+    }
+
     if (!cfg.useThreads)
     {
         silk::FiberScheduler::destroy();

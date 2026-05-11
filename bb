@@ -611,12 +611,17 @@ def cmd_net_perf(preset: str, params: NetPerfParams) -> None:
     stall_flags: list[str] = []
     if params.stall_rate > 0:
         stall_flags = [
-            "--stall-rate", str(params.stall_rate),
-            "--stall-duration", str(params.stall_duration),
+            "--stall-rate",
+            str(params.stall_rate),
+            "--stall-duration",
+            str(params.stall_duration),
         ]
 
     server = None
     if local:
+        server_kwargs: dict[str, Any] = {}
+        if params.print_counters:
+            server_kwargs["stdout"] = subprocess.PIPE
         server = start_process(
             "taskset",
             "-c",
@@ -629,7 +634,9 @@ def cmd_net_perf(preset: str, params: NetPerfParams) -> None:
             str(params.port),
             "--delay",
             str(params.delay),
+            *print_counters_flag,
             *verbose_flag,
+            **server_kwargs,
         )
         wait_for_tcp_port(params.host, params.port)
 
@@ -703,11 +710,20 @@ def cmd_net_perf(preset: str, params: NetPerfParams) -> None:
                 ]
                 print(_perf_row(cells, _NP_WIDTH))
                 if params.print_counters:
+                    print()
+                    print("### client counters")
                     _print_counters(data)
     finally:
         if server:
             server.terminate()
-            server.wait()
+            server_stdout, _ = server.communicate()
+            if params.print_counters and server_stdout:
+                try:
+                    server_data = json.loads(server_stdout)
+                    print("### server counters")
+                    _print_counters(server_data)
+                except json.JSONDecodeError as e:
+                    log.warning("could not parse server counters: %s", e)
 
 
 @dataclass
@@ -1015,9 +1031,14 @@ def _start_internal_server(
     ]
     if _parse_duration_s(params.delay) > 0:
         args += ["--delay", params.delay]
+    if params.print_counters:
+        args += ["--print-counters"]
     if log.isEnabledFor(logging.DEBUG):
         args += ["--verbose"]
-    return start_process(*args)
+    server_kwargs: dict[str, Any] = {}
+    if params.print_counters:
+        server_kwargs["stdout"] = subprocess.PIPE
+    return start_process(*args, **server_kwargs)
 
 
 def cmd_http_perf(preset: str, params: HttpPerfParams) -> None:
@@ -1110,10 +1131,22 @@ def cmd_http_perf(preset: str, params: HttpPerfParams) -> None:
                 ]
                 print(_perf_row(cells, _HP_WIDTHS))
                 if params.print_counters:
+                    print()
+                    print("### client counters")
                     _print_counters(data)
     finally:
         server.terminate()
-        server.wait()
+        if params.print_counters and not params.nginx:
+            server_stdout, _ = server.communicate()
+            if server_stdout:
+                try:
+                    server_data = json.loads(server_stdout)
+                    print("### server counters")
+                    _print_counters(server_data)
+                except json.JSONDecodeError as e:
+                    log.warning("could not parse server counters: %s", e)
+        else:
+            server.wait()
 
 
 def _ensure_minio() -> tuple[str, str]:
@@ -2002,8 +2035,16 @@ def main() -> None:
         targets = set(args.targets)
         if "all" in targets:
             targets = {
-                "file", "fio", "net", "net-asio", "net-epoll",
-                "http", "http-threads", "http-nginx", "s3", "s3-threads",
+                "file",
+                "fio",
+                "net",
+                "net-asio",
+                "net-epoll",
+                "http",
+                "http-threads",
+                "http-nginx",
+                "s3",
+                "s3-threads",
             }
         file_params = FilePerfParams(
             numjobs=[1, 16],
