@@ -5,7 +5,6 @@
 #include <silk/util/spinlock.h>
 
 #include <atomic>
-#include <format>
 
 namespace silk
 {

@@ -3,7 +3,6 @@
 #include <silk/util/assert.h>
 
 #include <cstring>
-#include <format>
 
 #if defined(__x86_64__)
 #    include <cpuid.h>

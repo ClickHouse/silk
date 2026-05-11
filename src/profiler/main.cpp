@@ -120,8 +120,8 @@ int main(int argc, char ** argv)
 
     if (!hasBpf || !hasPerfmon)
     {
-        SILK_ERROR("missing required capabilities (CAP_BPF={}, CAP_PERFMON={})", hasBpf, hasPerfmon);
-        SILK_ERROR("run once: sudo setcap cap_bpf,cap_perfmon,cap_syslog+eip {}", argv[0]);
+        SILK_ERROR("missing required capabilities (CAP_BPF=%d, CAP_PERFMON=%d)", hasBpf, hasPerfmon);
+        SILK_ERROR("run once: sudo setcap cap_bpf,cap_perfmon,cap_syslog+eip %s", argv[0]);
         return 1;
     }
 
@@ -133,7 +133,7 @@ int main(int argc, char ** argv)
     int r = symbolizer.readSelfMappings();
     if (r)
     {
-        SILK_ERROR("readSelfMappings: {}", strerror(r));
+        SILK_ERROR("readSelfMappings: %s", strerror(r));
         return r;
     }
 
@@ -141,7 +141,7 @@ int main(int argc, char ** argv)
     r = symbolizer.readMappings(targetPid);
     if (r)
     {
-        SILK_ERROR("readMappings: {}", strerror(r));
+        SILK_ERROR("readMappings: %s", strerror(r));
         return r;
     }
 
@@ -155,7 +155,7 @@ int main(int argc, char ** argv)
         else
         {
             SILK_WARN("CAP_SYSLOG missing -- kernel frames will appear as hex addresses");
-            SILK_WARN("run once: sudo setcap cap_bpf,cap_perfmon,cap_syslog+eip {}", argv[0]);
+            SILK_WARN("run once: sudo setcap cap_bpf,cap_perfmon,cap_syslog+eip %s", argv[0]);
         }
     }
 
@@ -164,17 +164,17 @@ int main(int argc, char ** argv)
     r = profiler.start();
     if (r)
     {
-        SILK_ERROR("profiler start failed: {}", strerror(r));
+        SILK_ERROR("profiler start failed: %s", strerror(r));
         return r;
     }
 
     if (durationSec > 0)
     {
-        SILK_INFO("profiling pid {} at {} Hz for {} seconds", targetPid, sampleHz, durationSec);
+        SILK_INFO("profiling pid %u at %u Hz for %u seconds", targetPid, sampleHz, durationSec);
     }
     else
     {
-        SILK_INFO("profiling pid {} at {} Hz -- Ctrl+C to stop", targetPid, sampleHz);
+        SILK_INFO("profiling pid %u at %u Hz -- Ctrl+C to stop", targetPid, sampleHz);
     }
 
     uint64_t waitNs = durationSec > 0 ? (uint64_t)durationSec * 1'000'000'000ULL : UINT64_MAX;
@@ -189,7 +189,7 @@ int main(int argc, char ** argv)
     }
     catch (const std::exception & ex)
     {
-        SILK_ERROR("collect: {}", ex.what());
+        SILK_ERROR("collect: %s", ex.what());
         return 1;
     }
 

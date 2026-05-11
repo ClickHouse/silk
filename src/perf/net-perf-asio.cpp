@@ -115,7 +115,7 @@ asio::awaitable<void> Server::acceptLoop()
         {
             if (!isExpectedShutdown(ec))
             {
-                SILK_ERROR("accept failed: {}", ec.message());
+                SILK_ERROR("accept failed: %s", ec.message().c_str());
             }
             break;
         }
@@ -147,7 +147,7 @@ asio::awaitable<void> Server::handleConnection(Server * server, std::shared_ptr<
             {
                 if (!isExpectedShutdown(ec))
                 {
-                    SILK_ERROR("read failed: {}", ec.message());
+                    SILK_ERROR("read failed: %s", ec.message().c_str());
                 }
                 co_return;
             }
@@ -168,7 +168,7 @@ asio::awaitable<void> Server::handleConnection(Server * server, std::shared_ptr<
             {
                 if (!isExpectedShutdown(ec))
                 {
-                    SILK_ERROR("sleep failed: {}", ec.message());
+                    SILK_ERROR("sleep failed: %s", ec.message().c_str());
                 }
                 co_return;
             }
@@ -183,7 +183,7 @@ asio::awaitable<void> Server::handleConnection(Server * server, std::shared_ptr<
             {
                 if (!isExpectedShutdown(ec))
                 {
-                    SILK_ERROR("write failed: {}", ec.message());
+                    SILK_ERROR("write failed: %s", ec.message().c_str());
                 }
                 co_return;
             }
@@ -297,7 +297,7 @@ asio::awaitable<void> Client::clientConnection(Client * client, Connection * con
             {
                 if (!isExpectedShutdown(ec))
                 {
-                    SILK_ERROR("write failed: {}", ec.message());
+                    SILK_ERROR("write failed: %s", ec.message().c_str());
                 }
                 co_return;
             }
@@ -313,7 +313,7 @@ asio::awaitable<void> Client::clientConnection(Client * client, Connection * con
             {
                 if (!isExpectedShutdown(ec))
                 {
-                    SILK_ERROR("read failed: {}", ec.message());
+                    SILK_ERROR("read failed: %s", ec.message().c_str());
                 }
                 co_return;
             }
@@ -428,7 +428,7 @@ static void runServer(int argc, char ** argv)
     Server server(ioc, cfg);
     server.start();
 
-    SILK_INFO("starting server on {}:{}", cfg.host, cfg.port);
+    SILK_INFO("starting server on %s:%u", cfg.host.c_str(), cfg.port);
 
     int sig = 0;
     sigwait(&mask, &sig);
@@ -515,13 +515,13 @@ static void runClient(int argc, char ** argv)
 
     if (cfg.warmupNs > 0)
     {
-        SILK_INFO("warming up for {}...", formatDuration(cfg.warmupNs));
+        SILK_INFO("warming up for %s...", formatDuration(cfg.warmupNs).c_str());
         signalled = sigwaitFor(mask, cfg.warmupNs);
     }
 
     if (!signalled)
     {
-        SILK_INFO("measuring for {}...", formatDuration(cfg.durationNs));
+        SILK_INFO("measuring for %s...", formatDuration(cfg.durationNs).c_str());
         sigwaitFor(mask, cfg.durationNs);
     }
 

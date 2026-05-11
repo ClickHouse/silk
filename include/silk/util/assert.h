@@ -16,11 +16,17 @@ static constexpr bool DebugAssertionsEnabled = false;
 #endif
 
 /**
- * Print a symbolized stack trace, the error message, and optional details, then abort.
+ * Print a symbolized stack trace, the error message, optional printf-formatted
+ * details, and abort. `fmt` is a printf-style format string; pass nullptr (or
+ * omit) to skip the details line.
  */
-[[noreturn]] void assertFail(const char * message, const char * file, int line, const char * details = nullptr) noexcept;
+[[noreturn]] void assertFail(const char * message, const char * file, int line, const char * fmt = nullptr, ...) noexcept
+    __attribute__((format(printf, 4, 5)));
 
 } // namespace silk
+
+// Unconditional abort.
+#define SILK_FAIL(message, ...) silk::assertFail(message, __FILE__, __LINE__ __VA_OPT__(, ) __VA_ARGS__)
 
 // Assertion active in all builds unless DISABLE_ASSERTIONS is defined.
 // Use for invariants that must hold in release -- hard internal contract violations.
@@ -29,7 +35,7 @@ static constexpr bool DebugAssertionsEnabled = false;
     { \
         if (silk::ReleaseAssertionsEnabled && !(condition)) [[unlikely]] \
         { \
-            silk::assertFail("assertion failed: " #condition, __FILE__, __LINE__ __VA_OPT__(, std::format(__VA_ARGS__).c_str())); \
+            silk::assertFail("assertion failed: " #condition, __FILE__, __LINE__ __VA_OPT__(, ) __VA_ARGS__); \
         } \
     } while (0)
 
@@ -40,6 +46,6 @@ static constexpr bool DebugAssertionsEnabled = false;
     { \
         if (silk::DebugAssertionsEnabled && !(condition)) [[unlikely]] \
         { \
-            silk::assertFail("assertion failed: " #condition, __FILE__, __LINE__ __VA_OPT__(, std::format(__VA_ARGS__).c_str())); \
+            silk::assertFail("assertion failed: " #condition, __FILE__, __LINE__ __VA_OPT__(, ) __VA_ARGS__); \
         } \
     } while (0)
