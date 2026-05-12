@@ -429,7 +429,7 @@ bool Fiber::tryChangeStateToSuspended() noexcept
                 // runFiber will enqueue the fiber after the callback returns.
                 return false;
             default:
-                SILK_FAIL("unexpected fiber state", "state=%d", static_cast<int>(currentState));
+                SILK_FAIL("unexpected fiber state: %d", static_cast<int>(currentState));
         }
     }
 }
@@ -456,7 +456,7 @@ bool Fiber::tryChangeStateToReady() noexcept
                 }
                 break;
             default:
-                SILK_FAIL("unexpected fiber state", "state=%d", static_cast<int>(currentState));
+                SILK_FAIL("unexpected fiber state: %d", static_cast<int>(currentState));
         }
     }
 }

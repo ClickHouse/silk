@@ -323,7 +323,7 @@ const char * PocoHttpClient::getMethod(Aws::Http::HttpMethod method)
         case Aws::Http::HttpMethod::HTTP_TRACE:
             return "TRACE";
     }
-    SILK_FAIL("unknown HTTP method", "value=%d", static_cast<int>(method));
+    SILK_FAIL("unknown HTTP method: %d", static_cast<int>(method));
 }
 
 void PocoHttpClient::writeHeaders(Poco::Net::HTTPRequest & pocoReq, const Aws::Http::HeaderValueCollection & headers)

@@ -12,13 +12,13 @@
 #    include <cxxabi.h>
 #endif // SILK_USE_LIBBACKTRACE
 
+#define COLOR_RESET "\033[0m"
+#define COLOR_RED "\033[1;31m"
+#define COLOR_YELLOW "\033[0;33m"
+#define COLOR_GREEN "\033[0;32m"
+
 namespace silk
 {
-
-static constexpr const char * COLOR_RESET = "\033[0m";
-static constexpr const char * COLOR_RED = "\033[1;31m";
-static constexpr const char * COLOR_YELLOW = "\033[0;33m";
-static constexpr const char * COLOR_GREEN = "\033[0;32m";
 
 #if defined(SILK_USE_LIBBACKTRACE)
 
@@ -38,7 +38,7 @@ struct Context
 static int btCallback(void * data, uintptr_t pc, const char * filename, int lineno, const char * function) noexcept
 {
     Context * ctx = static_cast<Context *>(data);
-    std::fprintf(stderr, "#%d  %#018lx in %s", ctx->frame++, static_cast<unsigned long>(pc), COLOR_YELLOW);
+    std::fprintf(stderr, "#%d  %#018lx in " COLOR_YELLOW, ctx->frame++, static_cast<unsigned long>(pc));
 
     int status = 0;
     char * demangled = function ? abi::__cxa_demangle(function, nullptr, nullptr, &status) : nullptr;
@@ -48,21 +48,21 @@ static int btCallback(void * data, uintptr_t pc, const char * filename, int line
         if (paren)
         {
             std::fwrite(demangled, 1, static_cast<size_t>(paren - demangled), stderr);
-            std::fprintf(stderr, "%s %s", COLOR_RESET, paren);
+            std::fprintf(stderr, COLOR_RESET " %s", paren);
         }
         else
         {
-            std::fprintf(stderr, "%s%s ()", demangled, COLOR_RESET);
+            std::fprintf(stderr, "%s" COLOR_RESET " ()", demangled);
         }
     }
     else
     {
-        std::fprintf(stderr, "%s%s ()", function ? function : "??", COLOR_RESET);
+        std::fprintf(stderr, "%s" COLOR_RESET " ()", function ? function : "??");
     }
 
     if (filename)
     {
-        std::fprintf(stderr, " at %s%s%s:%d", COLOR_GREEN, filename, COLOR_RESET, lineno);
+        std::fprintf(stderr, " at " COLOR_GREEN "%s" COLOR_RESET ":%d", filename, lineno);
     }
     std::fputc('\n', stderr);
 
@@ -78,20 +78,27 @@ static void btErrorCallback(void * data, const char * msg, int err) noexcept
 
 #endif // SILK_USE_LIBBACKTRACE
 
-void assertFail(const char * message, const char * file, int line, const char * fmt, ...) noexcept
+void assertFail(const char * file, int line, const char * message, const char * fmt, ...) noexcept
 {
     ::flockfile(stderr);
 
-    std::fprintf(stderr, "%s%s:%d %s", COLOR_RED, file, line, message);
+    std::fprintf(stderr, COLOR_RED "%s:%d ", file, line);
+    if (message)
+    {
+        std::fputs(message, stderr);
+    }
     if (fmt)
     {
-        std::fputs(" -- ", stderr);
+        if (message)
+        {
+            std::fputs(" -- ", stderr);
+        }
         va_list ap;
         va_start(ap, fmt);
         std::vfprintf(stderr, fmt, ap);
         va_end(ap);
     }
-    std::fprintf(stderr, "%s\n", COLOR_RESET);
+    std::fputs(COLOR_RESET "\n", stderr);
 
 #if defined(SILK_USE_LIBBACKTRACE)
     Context ctx;
@@ -105,3 +112,8 @@ void assertFail(const char * message, const char * file, int line, const char * 
 }
 
 } // namespace silk
+
+#undef COLOR_RESET
+#undef COLOR_RED
+#undef COLOR_YELLOW
+#undef COLOR_GREEN
