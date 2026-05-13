@@ -3,8 +3,6 @@
 
 #include <silk/util/logger.h>
 
-#include <boost/program_options.hpp>
-
 #include <cstdint>
 #include <cstring>
 #include <exception>
@@ -13,6 +11,7 @@
 #include <pthread.h>
 #include <signal.h>
 
+#include <cxxopts.hpp>
 #include <linux/capability.h>
 #include <sys/syscall.h>
 
@@ -72,40 +71,42 @@ int main(int argc, char ** argv)
     bool offcpu = false;
     bool verbose = false;
 
-    namespace po = boost::program_options;
-    po::options_description desc("profiler options");
+    cxxopts::Options cli("profiler", "profiler options");
 
     // clang-format off
-    desc.add_options()
-        ("help,h",                                              "show this help")
-        ("pid",           po::value(&targetPid)->required(),         "target process ID")
-        ("hz",            po::value(&sampleHz)->default_value(sampleHz),   "on-CPU sampling frequency")
-        ("duration",      po::value(&durationSec)->default_value(durationSec), "run for N seconds (0 = until Ctrl+C)")
-        ("kernel-stacks", po::bool_switch(&kernelStacks),            "capture kernel stack frames")
-        ("on-cpu",        po::bool_switch(&oncpu),                   "capture on-CPU stack samples")
-        ("off-cpu",       po::bool_switch(&offcpu),                  "capture off-CPU blocking time")
-        ("verbose,v",     po::bool_switch(&verbose),                 "enable debug logging")
+    cli.add_options()
+        ("h,help",        "show this help")
+        ("pid",           "target process ID",                          cxxopts::value<uint32_t>(targetPid))
+        ("hz",            "on-CPU sampling frequency",                  cxxopts::value<uint32_t>(sampleHz))
+        ("duration",      "run for N seconds (0 = until Ctrl+C)",       cxxopts::value<uint32_t>(durationSec))
+        ("kernel-stacks", "capture kernel stack frames",                cxxopts::value<bool>(kernelStacks))
+        ("on-cpu",        "capture on-CPU stack samples",               cxxopts::value<bool>(oncpu))
+        ("off-cpu",       "capture off-CPU blocking time",              cxxopts::value<bool>(offcpu))
+        ("v,verbose",     "enable debug logging",                       cxxopts::value<bool>(verbose))
         ;
     // clang-format on
 
-    po::variables_map vm;
     try
     {
-        po::store(po::parse_command_line(argc, argv, desc), vm);
-        if (vm.count("help"))
+        auto result = cli.parse(argc, argv);
+        if (result.count("help"))
         {
-            std::cout << "usage: profiler [options]\n" << desc << "\n";
+            std::cout << cli.help() << "\n";
             return 0;
         }
-        po::notify(vm);
+        if (result.count("pid") == 0)
+        {
+            std::cerr << "error: --pid is required\n" << cli.help() << "\n";
+            return 1;
+        }
         if (verbose)
         {
             silk::Logger::setLevel(silk::LogLevel::DEBUG);
         }
     }
-    catch (const po::error & ex)
+    catch (const cxxopts::exceptions::exception & ex)
     {
-        std::cerr << "error: " << ex.what() << "\n" << desc << "\n";
+        std::cerr << "error: " << ex.what() << "\n" << cli.help() << "\n";
         return 1;
     }
 

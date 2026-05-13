@@ -8,11 +8,12 @@ Initialize the required submodules after cloning:
 
 ```
 git submodule update --init --depth=1 \
+    contrib/benchmark \
+    contrib/cxxopts \
+    contrib/googletest \
     contrib/libbacktrace \
     contrib/librseq \
-    contrib/liburing \
-    contrib/googletest \
-    contrib/benchmark
+    contrib/liburing
 ```
 
 To build optional components, initialize their submodules too:

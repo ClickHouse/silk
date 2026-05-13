@@ -32,7 +32,7 @@ if(POLICY CMP0167)
     cmake_policy(SET CMP0167 NEW)
 endif()
 
-find_package(Boost REQUIRED context program_options)
+find_package(Boost REQUIRED context)
 
 if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64")
     add_compile_options(-march=x86-64-v3)
@@ -85,6 +85,7 @@ endif()
 
 add_subdirectory(contrib/liburing-cmake)
 add_subdirectory(contrib/librseq-cmake)
+add_subdirectory(contrib/cxxopts-cmake)
 add_subdirectory(contrib/googletest-cmake)
 add_subdirectory(contrib/benchmark-cmake)
 add_subdirectory(contrib/systemtap-sdt)
@@ -133,11 +134,12 @@ add_subdirectory(src/util)
 add_subdirectory(src/fibers)
 add_subdirectory(src/gdb)
 
+# Perf and profiler targets may pull in system libs with libstdc++ ABI
+# (Poco, AWS SDK) that conflict with the instrumented libc++ used in MSan
+# builds. Boost::context (used by silk) is assembly-level and has no
+# std::string in its ABI, so it works with libc++ despite being a system
+# library.
 if(NOT SANITIZER STREQUAL "memory")
-    # perf targets link against system Boost::program_options (libstdc++ ABI),
-    # which is incompatible with the instrumented libc++ used in MSan builds.
-    # Boost::context (used by silk) is assembly-level and has no std::string
-    # in its ABI, so it works with libc++ despite being a system library.
     add_subdirectory(src/perf)
     if(BUILD_LIBBACKTRACE)
         # symbolizer.cpp depends directly on <backtrace.h>.
