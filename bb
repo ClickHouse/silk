@@ -450,6 +450,7 @@ def _run_flamegraph(preset: str, name: str, client_args: list[str]) -> None:
                 profiler_bin,
                 "--pid",
                 str(client.pid),
+                "--on-cpu",
                 "--off-cpu",
                 "--kernel-stacks",
                 *verbose_flag,
