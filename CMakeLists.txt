@@ -32,7 +32,8 @@ if(POLICY CMP0167)
     cmake_policy(SET CMP0167 NEW)
 endif()
 
-find_package(Boost REQUIRED context)
+# Boost headers only - context is vendored under contrib/fcontext.
+find_package(Boost REQUIRED)
 
 if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64")
     add_compile_options(-march=x86-64-v3)
@@ -83,14 +84,17 @@ if(SANITIZER STREQUAL "memory")
     export(TARGETS cxx cxxabi FILE "${CMAKE_BINARY_DIR}/cxx-targets.cmake")
 endif()
 
-add_subdirectory(contrib/liburing-cmake)
-add_subdirectory(contrib/librseq-cmake)
-add_subdirectory(contrib/cxxopts-cmake)
-add_subdirectory(contrib/googletest-cmake)
 add_subdirectory(contrib/benchmark-cmake)
-add_subdirectory(contrib/systemtap-sdt)
+add_subdirectory(contrib/cxxopts-cmake)
+add_subdirectory(contrib/fcontext)
+add_subdirectory(contrib/googletest-cmake)
+# libbpf-cmake must precede bpftool-cmake: bpftool's wrapper early-exits if
+# Libbpf::Libbpf is not yet a target.
 add_subdirectory(contrib/libbpf-cmake)
 add_subdirectory(contrib/bpftool-cmake)
+add_subdirectory(contrib/librseq-cmake)
+add_subdirectory(contrib/liburing-cmake)
+add_subdirectory(contrib/systemtap-sdt)
 
 option(BUILD_LIBBACKTRACE "Build libbacktrace (used to symbolize stack traces on SILK_ASSERT failure and by the profiler)" ON)
 if(BUILD_LIBBACKTRACE)
@@ -136,9 +140,7 @@ add_subdirectory(src/gdb)
 
 # Perf and profiler targets may pull in system libs with libstdc++ ABI
 # (Poco, AWS SDK) that conflict with the instrumented libc++ used in MSan
-# builds. Boost::context (used by silk) is assembly-level and has no
-# std::string in its ABI, so it works with libc++ despite being a system
-# library.
+# builds.
 if(NOT SANITIZER STREQUAL "memory")
     add_subdirectory(src/perf)
     if(BUILD_LIBBACKTRACE)

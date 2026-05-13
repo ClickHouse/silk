@@ -1,7 +1,8 @@
 #include <silk/util/assert.h>
 
 #include <benchmark/benchmark.h>
-#include <boost/context/detail/fcontext.hpp>
+
+#include <fcontext.h>
 
 #include <sys/mman.h>
 
@@ -12,13 +13,11 @@ class BoostContextBench : public benchmark::Fixture
 {
 };
 
-// Raw boost::context round-trip: one extra stack that immediately jumps back
+// Raw fcontext round-trip: one extra stack that immediately jumps back
 // to wherever it was called from.  Each iteration = 2 context switches
 // (main -> bounce, bounce -> main) with zero scheduler overhead.
 BENCHMARK_F(BoostContextBench, ContextSwitch)(benchmark::State & state)
 {
-    using namespace boost::context::detail;
-
     static constexpr uint64_t STACK_SIZE = 65536;
 
     void * stack = ::mmap(nullptr, STACK_SIZE, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);

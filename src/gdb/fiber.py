@@ -26,13 +26,13 @@ def _arch():
     raise RuntimeError(f"unsupported architecture: {name}")
 
 
-# Boost.Context callee-saved frame layout.
+# fcontext callee-saved frame layout.
 # Each entry is (gdb_register_name, byte_offset_from_fctx).
 # fctx is the saved SP/RSP value stored in Fiber::fiberContext.
 #
-# Offsets verified from Boost.Context ASM sources:
-#   x86-64: https://github.com/boostorg/context/blob/develop/src/asm/jump_x86_64_sysv_elf_gas.S
-#   arm64:  https://github.com/boostorg/context/blob/develop/src/asm/jump_arm64_aapcs_elf_gas.S
+# Offsets verified from the vendored asm sources (originally from Boost.Context):
+#   x86-64: contrib/fcontext/asm/jump_x86_64_sysv_elf_gas.S
+#   arm64:  contrib/fcontext/asm/jump_arm64_aapcs_elf_gas.S
 _FRAME_REGS = {
     "x86_64": [
         # [0x00] mxcsr + x87 cw  -- not a GP register, skip

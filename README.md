@@ -18,10 +18,10 @@ A cooperative fiber scheduler for Linux with per-CPU scheduler threads, io_uring
 - Ninja
 - Clang 21
 - ccache (optional)
-- Boost (`libboost-dev`, `libboost-context-dev`)
+- Boost headers (`libboost-dev`)
 - libelf (`libelf-dev`) — optional, required only for `src/profiler`; the profiler is silently skipped if absent.
 
-GTest, Google Benchmark, libbacktrace, liburing, librseq, libbpf, bpftool, and cxxopts are bundled as submodules under `contrib/` and do not need to be installed separately. Poco, the AWS SDK, and jemalloc are built on demand via `--build-poco`, `--build-aws`, and `--build-jemalloc` passed to `configure`.
+GTest, Google Benchmark, libbacktrace, liburing, librseq, libbpf, bpftool, and cxxopts are bundled as submodules under `contrib/` and do not need to be installed separately. The two Boost.Context asm sources used for fiber switching are vendored under `contrib/fcontext/`, and systemtap's USDT headers (`<sys/sdt.h>` + `<sys/sdt-config.h>`) under `contrib/systemtap-sdt/` (both vendored directly, no submodule). Poco, the AWS SDK, and jemalloc are built on demand via `--build-poco`, `--build-aws`, and `--build-jemalloc` passed to `configure`.
 
 Runtime dependencies for optional benchmarks: nginx (only for `http-perf --nginx`; the default uses an internal Poco-based server built into the `http-perf` binary), fio (for `fio-perf`), and MinIO (for `s3-perf`). MinIO is downloaded automatically to `.tools/` if not in PATH; the others must be installed separately.
 
