@@ -64,13 +64,14 @@ jobs:
       - name: Init submodules
         run: |
           git submodule update --init --depth=1 \
-            contrib/libbacktrace \
-            contrib/librseq \
-            contrib/liburing \
-            contrib/googletest \
             contrib/benchmark \
+            contrib/bpftool \
+            contrib/cxxopts \
+            contrib/googletest \
+            contrib/libbacktrace \
             contrib/libbpf \
-            contrib/bpftool
+            contrib/librseq \
+            contrib/liburing
 
       - name: Init Poco submodule
         if: matrix.build.name == 'release' || matrix.build.name == 'tsan'
