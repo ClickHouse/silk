@@ -1,7 +1,9 @@
 #include <silk/util/tsc.h>
 
 #include <silk/util/assert.h>
+#include <silk/util/platform.h>
 
+#include <cerrno>
 #include <cstring>
 
 #if defined(__x86_64__)
@@ -98,6 +100,26 @@ static uint64_t getTscFrequencyCpuid() noexcept
 
     return 0;
 }
+
+static uint64_t getTscFrequencyCalibrated() noexcept
+{
+    uint64_t startNs = getTimeNanoseconds();
+    uint64_t startCycles = Tsc::getCycles();
+    uint64_t deadlineNs = startNs + 50'000'000; // 50 ms
+
+    struct timespec deadline;
+    deadline.tv_sec = deadlineNs / 1'000'000'000;
+    deadline.tv_nsec = deadlineNs % 1'000'000'000;
+
+    while (clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &deadline, nullptr) == EINTR)
+    {
+    }
+
+    uint64_t durationNs = getTimeNanoseconds() - startNs;
+    uint64_t durationCycles = Tsc::getCycles() - startCycles;
+    return durationCycles * 1'000'000'000 / durationNs;
+}
+
 #endif // __x86_64__
 
 void Tsc::initialize() noexcept
@@ -111,6 +133,15 @@ void Tsc::initialize() noexcept
 #if defined(__x86_64__)
     SILK_ASSERT(hasInvariantTsc(), "CPU does not advertise Invariant TSC; silk requires a stable cross-core counter");
     frequency = getTscFrequencyCpuid();
+    // AMD CPUs do not populate CPUID leaves 0x15 or 0x16, and some older Intel
+    // parts leave them empty too. Fall back to measuring TSC against
+    // CLOCK_MONOTONIC over a fixed window -- the same approach the Linux kernel
+    // takes when CPUID does not advertise a frequency. Invariant TSC is already
+    // asserted by the caller, so a single calibration sample is representative.
+    if (frequency == 0)
+    {
+        frequency = getTscFrequencyCalibrated();
+    }
 #elif defined(__aarch64__)
     // ARMv8 cntvct_el0 is anchored to a system counter that is invariant by
     // architecture, so no equivalent capability check is required.
