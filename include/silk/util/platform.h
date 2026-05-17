@@ -31,6 +31,10 @@ extern "C" ptrdiff_t rseq_offset;
 /** Suppress unused-variable warnings. */
 #define SILK_UNUSED(x) (void)(x)
 
+/** Token-paste two preprocessor arguments after expansion. */
+#define SILK_CONCAT_IMPL(a, b) a##b
+#define SILK_CONCAT(a, b) SILK_CONCAT_IMPL(a, b)
+
 namespace silk
 {
 
