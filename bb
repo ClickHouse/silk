@@ -633,6 +633,8 @@ def cmd_net_perf(preset: str, params: NetPerfParams) -> None:
             params.host,
             "--port",
             str(params.port),
+            "--msg-size",
+            str(params.msg_size),
             "--delay",
             str(params.delay),
             *print_counters_flag,
