@@ -152,4 +152,129 @@ BENCHMARK_F(FiberMutexBench, RoundTrip)(benchmark::State & state)
     responder.wait();
 }
 
+// Uncontended shared fast path: lock_shared + unlock_shared with no other fiber.
+BENCHMARK_F(FiberMutexBench, UncontendedShared)(benchmark::State & state)
+{
+    struct Params
+    {
+        benchmark::State * state;
+        FiberMutex * mutex;
+
+        static int fiberMain(Params * p) noexcept
+        {
+            for (auto _ : *p->state)
+            {
+                p->mutex->lock_shared();
+                p->mutex->unlock_shared();
+            }
+            return 0;
+        }
+    };
+
+    FiberMutex mutex;
+    int r = FiberScheduler::run(Params::fiberMain, {&state, &mutex});
+    SILK_ASSERT(!r);
+}
+
+// Two readers contending on the counter word: no mutual exclusion, just CAS
+// traffic against another concurrent reader on the same cache line.
+BENCHMARK_F(FiberMutexBench, ContendedSharedShared)(benchmark::State & state)
+{
+    struct Driver
+    {
+        benchmark::State * state;
+        FiberMutex * mutex;
+
+        static int fiberMain(Driver * p) noexcept
+        {
+            for (auto _ : *p->state)
+            {
+                p->mutex->lock_shared();
+                p->mutex->unlock_shared();
+            }
+            return 0;
+        }
+    };
+
+    struct Contender
+    {
+        FiberMutex * mutex;
+        std::atomic<bool> * stop;
+
+        static int fiberMain(Contender * p) noexcept
+        {
+            while (!p->stop->load(std::memory_order_relaxed))
+            {
+                p->mutex->lock_shared();
+                p->mutex->unlock_shared();
+            }
+            return 0;
+        }
+    };
+
+    FiberMutex mutex;
+    std::atomic<bool> stop{false};
+
+    FiberFuture contender, driver;
+    int r = FiberScheduler::run(Contender::fiberMain, {&mutex, &stop}, &contender);
+    SILK_ASSERT(!r);
+    r = FiberScheduler::run(Driver::fiberMain, {&state, &mutex}, &driver);
+    SILK_ASSERT(!r);
+
+    driver.wait();
+    stop.store(true, std::memory_order_relaxed);
+    contender.wait();
+}
+
+// Reader vs. writer contention: driver takes shared, contender takes exclusive.
+// Each iteration exercises a true block-and-wake on whichever side currently
+// holds the lock.
+BENCHMARK_F(FiberMutexBench, ContendedSharedExclusive)(benchmark::State & state)
+{
+    struct Driver
+    {
+        benchmark::State * state;
+        FiberMutex * mutex;
+
+        static int fiberMain(Driver * p) noexcept
+        {
+            for (auto _ : *p->state)
+            {
+                p->mutex->lock_shared();
+                p->mutex->unlock_shared();
+            }
+            return 0;
+        }
+    };
+
+    struct Contender
+    {
+        FiberMutex * mutex;
+        std::atomic<bool> * stop;
+
+        static int fiberMain(Contender * p) noexcept
+        {
+            while (!p->stop->load(std::memory_order_relaxed))
+            {
+                p->mutex->lock();
+                p->mutex->unlock();
+            }
+            return 0;
+        }
+    };
+
+    FiberMutex mutex;
+    std::atomic<bool> stop{false};
+
+    FiberFuture contender, driver;
+    int r = FiberScheduler::run(Contender::fiberMain, {&mutex, &stop}, &contender);
+    SILK_ASSERT(!r);
+    r = FiberScheduler::run(Driver::fiberMain, {&state, &mutex}, &driver);
+    SILK_ASSERT(!r);
+
+    driver.wait();
+    stop.store(true, std::memory_order_relaxed);
+    contender.wait();
+}
+
 } // namespace silk
