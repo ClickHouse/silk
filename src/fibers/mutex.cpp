@@ -9,117 +9,102 @@
 namespace silk
 {
 
-bool FiberMutex::try_lock() noexcept
+void FiberMutex::lockSlow(State currentState) noexcept
 {
-    State currentState;
-    currentState.raw = state.load(std::memory_order_relaxed);
-    for (;;)
+    if (currentState.exclusive)
     {
-        if (currentState.raw)
-        {
-            return false;
-        }
+        SILK_ASSERT_DEBUG(
+            currentState.value != reinterpret_cast<uint64_t>(FiberScheduler::getCurrentFiber()), "FiberMutex is not reentrant");
 
-        State newState;
-        newState.owner = reinterpret_cast<uint64_t>(FiberScheduler::getCurrentFiber());
-        SILK_ASSERT(!newState.hasWaiters);
+        // Spin for ~500 ns (16 x ~35 ns PAUSE on Skylake) before suspending.
+        static constexpr uint32_t SPIN_COUNT = 16;
 
-        if (state.compare_exchange_weak(currentState.raw, newState.raw, std::memory_order_acquire, std::memory_order_relaxed))
+        // Spin briefly only when the blocker is an identifiable exclusive owner
+        // currently running on another CPU. Shared holders have no recorded
+        // identity, so we cannot verify they are running and skip the spin in
+        // that case - exclusive acquirers waiting on shared traffic go straight
+        // to suspend.
+        if (!currentState.hasWaiters)
         {
-            return true;
+            Fiber * owner = reinterpret_cast<Fiber *>(currentState.value);
+            bool ownerRunning = owner && FiberScheduler::isFiberRunning(owner);
+            if (ownerRunning)
+            {
+                spinWait([this] { return !state.load(std::memory_order_relaxed); }, SPIN_COUNT);
+                currentState.raw = state.load(std::memory_order_relaxed);
+            }
         }
+    }
+
+    while (!lockHelper(&currentState))
+    {
+        SuspendCtx ctx{this, true};
+        FiberScheduler::suspend(reinterpret_cast<FiberScheduler::SuspendCallback *>(suspendCallback), &ctx);
+        currentState.raw = state.load(std::memory_order_relaxed);
     }
 }
 
-void FiberMutex::lock() noexcept
+void FiberMutex::lockSharedSlow(State currentState) noexcept
 {
-    // Spin for ~500 ns (16 x ~35 ns PAUSE on Skylake) before suspending.
     static constexpr uint32_t SPIN_COUNT = 16;
 
-    State currentState;
-    currentState.raw = state.load(std::memory_order_relaxed);
-
-    SILK_ASSERT_DEBUG(currentState.owner != reinterpret_cast<uint64_t>(FiberScheduler::getCurrentFiber()), "FiberMutex is not reentrant");
-
-    // Spin briefly before suspending: if the owner is on another CPU and releases
-    // within ~500 ns, we avoid the full scheduler wakeup path.
-    // Skip if there are already waiters in the queue.
-    //
-    // The owner pointer is loaded from a stale snapshot of state, so by the time
-    // we call isFiberRunning the original owner may have unlocked, returned, and
-    // been recycled by the fiber pool into a different fiber. The pool never
-    // unmaps Fiber memory, so the load on owner->state is always safe; the worst
-    // case is a spurious 500 ns spin against the wrong fiber's state, after which
-    // lockHelper takes the slow path. No correctness consequence.
-    if (!currentState.hasWaiters)
+    // Same spin policy as lockSlow: only when the blocker is an identifiable
+    // exclusive owner running on another CPU.
+    if (!currentState.hasWaiters && currentState.exclusive)
     {
-        Fiber * owner = reinterpret_cast<Fiber *>(currentState.owner);
-        if (owner && FiberScheduler::isFiberRunning(owner))
+        Fiber * owner = reinterpret_cast<Fiber *>(currentState.value);
+        bool ownerRunning = owner && FiberScheduler::isFiberRunning(owner);
+        if (ownerRunning)
         {
-            spinWait([this] { return !state.load(std::memory_order_relaxed); }, SPIN_COUNT);
+            spinWait(
+                [this]
+                {
+                    State s;
+                    s.raw = state.load(std::memory_order_relaxed);
+                    return !s.exclusive;
+                },
+                SPIN_COUNT);
+            currentState.raw = state.load(std::memory_order_relaxed);
         }
     }
 
-    // Slow path: try to acquire; suspend if still locked.
-    while (!lockHelper())
+    while (!lockSharedHelper(&currentState))
     {
-        FiberScheduler::suspend(reinterpret_cast<FiberScheduler::SuspendCallback *>(suspendCallback), this);
+        SuspendCtx ctx{this, false};
+        FiberScheduler::suspend(reinterpret_cast<FiberScheduler::SuspendCallback *>(suspendCallback), &ctx);
+        currentState.raw = state.load(std::memory_order_relaxed);
     }
 }
 
-void FiberMutex::unlock() noexcept
+bool FiberMutex::lockHelper(State * currentState) noexcept
 {
-    State currentState;
-    currentState.raw = state.load(std::memory_order_relaxed);
-
-    SILK_ASSERT_DEBUG(
-        currentState.owner == reinterpret_cast<uint64_t>(FiberScheduler::getCurrentFiber()),
-        "FiberMutex::unlock called by non-owner fiber");
-
     for (;;)
     {
-        SILK_ASSERT(currentState.raw);
-
-        if (state.compare_exchange_weak(currentState.raw, 0, std::memory_order_release, std::memory_order_relaxed))
-        {
-            if (currentState.hasWaiters)
-            {
-                FiberScheduler::releaseWaiters(reinterpret_cast<uint64_t>(this));
-            }
-            return;
-        }
-    }
-}
-
-bool FiberMutex::lockHelper() noexcept
-{
-    State currentState;
-    currentState.raw = state.load(std::memory_order_relaxed);
-    for (;;)
-    {
-        if (!currentState.raw)
+        if (!currentState->raw)
         {
             State newState;
-            newState.owner = reinterpret_cast<uint64_t>(FiberScheduler::getCurrentFiber());
+            newState.exclusive = 1;
+            newState.value = reinterpret_cast<uint64_t>(FiberScheduler::getCurrentFiber());
             SILK_ASSERT(!newState.hasWaiters);
 
-            if (state.compare_exchange_weak(currentState.raw, newState.raw, std::memory_order_acquire, std::memory_order_relaxed))
+            if (state.compare_exchange_weak(currentState->raw, newState.raw, std::memory_order_acquire, std::memory_order_relaxed))
             {
                 return true;
             }
             continue;
         }
 
-        // hasWaiters signals to unlock() that there are suspended fibers waiting
-        // in the waiter table, so it must call releaseWaiters. The first fiber to
-        // find the mutex locked sets this flag; subsequent fibers see it already
-        // set and skip straight to the last return false below.
-        if (!currentState.hasWaiters)
+        // hasWaiters signals to the releasing fiber (unlock or unlock_shared)
+        // that there are suspended fibers in the waiter table, so it must call
+        // releaseWaiters. The first waiter to find the lock held sets the bit;
+        // subsequent waiters see it already set and skip straight to the last
+        // return false below.
+        if (!currentState->hasWaiters)
         {
-            State newState(currentState);
-            newState.hasWaiters = true;
+            State newState(*currentState);
+            newState.hasWaiters = 1;
 
-            if (state.compare_exchange_weak(currentState.raw, newState.raw, std::memory_order_release, std::memory_order_relaxed))
+            if (state.compare_exchange_weak(currentState->raw, newState.raw, std::memory_order_release, std::memory_order_relaxed))
             {
                 return false;
             }
@@ -130,11 +115,47 @@ bool FiberMutex::lockHelper() noexcept
     }
 }
 
-void FiberMutex::suspendCallback(Fiber * fiber, FiberMutex * mutex) noexcept
+bool FiberMutex::lockSharedHelper(State * currentState) noexcept
 {
+    for (;;)
+    {
+        if (!currentState->exclusive)
+        {
+            State newState(*currentState);
+            newState.value = currentState->value + 1;
+
+            if (state.compare_exchange_weak(currentState->raw, newState.raw, std::memory_order_acquire, std::memory_order_relaxed))
+            {
+                return true;
+            }
+            continue;
+        }
+
+        if (!currentState->hasWaiters)
+        {
+            State newState(*currentState);
+            newState.hasWaiters = 1;
+
+            if (state.compare_exchange_weak(currentState->raw, newState.raw, std::memory_order_release, std::memory_order_relaxed))
+            {
+                return false;
+            }
+            continue;
+        }
+
+        return false;
+    }
+}
+
+void FiberMutex::suspendCallback(Fiber * fiber, SuspendCtx * ctx) noexcept
+{
+    FiberMutex * mutex = ctx->mutex;
+    bool exclusive = ctx->exclusive;
+
     State currentState;
     currentState.raw = mutex->state.load(std::memory_order_acquire);
-    if (!currentState.raw)
+    bool satisfied = exclusive ? !currentState.raw : !currentState.exclusive;
+    if (satisfied)
     {
         FiberScheduler::schedule(fiber);
         return;
@@ -142,16 +163,10 @@ void FiberMutex::suspendCallback(Fiber * fiber, FiberMutex * mutex) noexcept
 
     FiberScheduler::enqueueWaiter(reinterpret_cast<uint64_t>(mutex), fiber);
 
-    // Re-check after enqueue. If hasWaiters is false, we must release waiters
-    // ourselves. This covers two cases:
-    // 1. Mutex is unlocked: the holder already called releaseWaiters but missed us
-    //    (we were not yet in the stack).
-    // 2. Mutex is locked with hasWaiters=false: the holder unlocked (seeing
-    //    hasWaiters=true, getting an empty stack) and re-acquired before we
-    //    enqueued, resetting hasWaiters=false. The holder's next unlock will not
-    //    call releaseWaiters. Releasing now causes a spurious wakeup, but the
-    //    fibers will retry lockHelper, setting hasWaiters=true, and the holder
-    //    will release them on the following unlock.
+    // Re-check after enqueue. If hasWaiters is false, the previous releasing
+    // fiber already called releaseWaiters but missed us (we were not yet in
+    // the waiter table). Self-release here is correct: the popped fiber will
+    // retry its helper and either acquire or re-arm hasWaiters.
     currentState.raw = mutex->state.load(std::memory_order_acquire);
     if (!currentState.hasWaiters)
     {
