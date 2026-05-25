@@ -87,7 +87,7 @@ bool FiberMutex::lockHelper(State * currentState) noexcept
             newState.value = reinterpret_cast<uint64_t>(FiberScheduler::getCurrentFiber());
             SILK_ASSERT(!newState.hasWaiters);
 
-            if (state.compare_exchange_weak(currentState->raw, newState.raw, std::memory_order_acquire, std::memory_order_relaxed))
+            if (state.compare_exchange_weak(currentState->raw, newState.raw, std::memory_order_acq_rel, std::memory_order_relaxed))
             {
                 return true;
             }
