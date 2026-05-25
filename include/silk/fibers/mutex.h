@@ -33,7 +33,7 @@ public:
             State newState;
             newState.exclusive = 1;
             newState.value = reinterpret_cast<uint64_t>(FiberScheduler::getCurrentFiber());
-            return state.compare_exchange_weak(currentState.raw, newState.raw, std::memory_order_acquire, std::memory_order_relaxed);
+            return state.compare_exchange_weak(currentState.raw, newState.raw, std::memory_order_acq_rel, std::memory_order_relaxed);
         }
         return false;
     }
@@ -42,13 +42,13 @@ public:
     void lock() noexcept
     {
         State currentState;
-        currentState.raw = state.load(std::memory_order_relaxed);
+        currentState.raw = state.load(std::memory_order_acquire);
         if (!currentState.raw)
         {
             State newState;
             newState.exclusive = 1;
             newState.value = reinterpret_cast<uint64_t>(FiberScheduler::getCurrentFiber());
-            if (state.compare_exchange_weak(currentState.raw, newState.raw, std::memory_order_acquire, std::memory_order_relaxed))
+            if (state.compare_exchange_weak(currentState.raw, newState.raw, std::memory_order_acq_rel, std::memory_order_acquire))
             {
                 return;
             }
@@ -100,12 +100,12 @@ public:
     void lock_shared() noexcept
     {
         State currentState;
-        currentState.raw = state.load(std::memory_order_relaxed);
+        currentState.raw = state.load(std::memory_order_acquire);
         if (!currentState.exclusive)
         {
             State newState(currentState);
             newState.value = currentState.value + 1;
-            if (state.compare_exchange_weak(currentState.raw, newState.raw, std::memory_order_acquire, std::memory_order_relaxed))
+            if (state.compare_exchange_weak(currentState.raw, newState.raw, std::memory_order_acquire, std::memory_order_acquire))
             {
                 return;
             }
