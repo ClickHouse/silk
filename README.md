@@ -1,6 +1,15 @@
-# Silk
 
-A cooperative fiber scheduler for Linux with per-CPU scheduler threads, io_uring integration, and topology-aware work-stealing. Fibers are lightweight stackful coroutines that suspend rather than block their OS thread, enabling high concurrency with low overhead.
+
+
+<picture>
+    <img align="left" width="200" style="margin-right: 20px;" src="https://github.com/user-attachments/assets/0c64f89e-55c7-42f8-8a82-0da220f1f9f5" alt="The ClickHouse Operator logo.">
+</picture>
+
+### Silk
+
+A cooperative fiber scheduler for Linux with per-CPU scheduler threads, io_uring integration, and topology-aware work-stealing. 
+
+Fibers are lightweight stackful coroutines that suspend rather than block their OS thread, enabling high concurrency with low overhead.
 
 ## Documentation
 
