@@ -1,8 +1,5 @@
-
-
-
 <picture>
-    <img align="left" width="200" style="margin-right: 20px;" src="https://github.com/user-attachments/assets/0c64f89e-55c7-42f8-8a82-0da220f1f9f5" alt="The ClickHouse Operator logo.">
+    <img align="left" width="200" style="margin-right: 20px;" src="https://github.com/user-attachments/assets/0c64f89e-55c7-42f8-8a82-0da220f1f9f5" alt="The Silk logo.">
 </picture>
 
 ### Silk
