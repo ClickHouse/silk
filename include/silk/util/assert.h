@@ -9,7 +9,7 @@ static constexpr bool ReleaseAssertionsEnabled = true;
 static constexpr bool ReleaseAssertionsEnabled = false;
 #endif
 
-#if defined(DEBUG) && !defined(DISABLE_ASSERTIONS)
+#if !defined(NDEBUG) && !defined(DISABLE_ASSERTIONS)
 static constexpr bool DebugAssertionsEnabled = true;
 #else
 static constexpr bool DebugAssertionsEnabled = false;
