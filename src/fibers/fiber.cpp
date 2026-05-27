@@ -1471,21 +1471,21 @@ void FiberScheduler::sleep(uint64_t nanoseconds, SleepFuture * future) noexcept
 
 void FiberScheduler::cancelSleep(SleepFuture * future) noexcept
 {
-    uint32_t expected = future->state.load(std::memory_order_relaxed);
+    uint32_t state = future->state.load(std::memory_order_relaxed);
     for (;;)
     {
-        if (expected & SleepFuture::CANCELLED)
+        if (state & SleepFuture::CANCELLED)
         {
             return;
         }
         if (future->state.compare_exchange_weak(
-                expected, expected | SleepFuture::CANCELLED, std::memory_order_acq_rel, std::memory_order_relaxed))
+                state, state | SleepFuture::CANCELLED, std::memory_order_acq_rel, std::memory_order_relaxed))
         {
             break;
         }
     }
 
-    if (expected & SleepFuture::IN_TABLE)
+    if (state & SleepFuture::IN_TABLE)
     {
         ProcessorState * processor = &scheduler->processorState[future->processorNumber];
         processor->cancelQueue.push(future);
@@ -1818,15 +1818,22 @@ __attribute__((noinline)) void FiberScheduler::handleSleepQueueSlow(ProcessorSta
     do
     {
         SleepFuture * next = SleepStack::next(sleepFuture);
-        uint32_t prev = sleepFuture->state.fetch_or(SleepFuture::IN_TABLE, std::memory_order_acq_rel);
-        if (prev & SleepFuture::CANCELLED)
+        uint32_t state = sleepFuture->state.load(std::memory_order_relaxed);
+        for (;;)
         {
-            sleepFuture->state.fetch_and(~SleepFuture::IN_TABLE, std::memory_order_relaxed);
-            sleepFuture->set(ECANCELED);
-        }
-        else
-        {
-            processor->sleepTree.insert(sleepFuture);
+            if (state & SleepFuture::CANCELLED)
+            {
+                sleepFuture->set(ECANCELED);
+                break;
+            }
+
+            SILK_ASSERT(!(state & SleepFuture::IN_TABLE));
+            if (sleepFuture->state.compare_exchange_weak(
+                    state, state | SleepFuture::IN_TABLE, std::memory_order_acq_rel, std::memory_order_relaxed))
+            {
+                processor->sleepTree.insert(sleepFuture);
+                break;
+            }
         }
         sleepFuture = next;
 
@@ -1848,17 +1855,21 @@ bool FiberScheduler::handleCancelQueue(ProcessorState * processor) noexcept
 
 __attribute__((noinline)) void FiberScheduler::handleCancelQueueSlow(ProcessorState * processor, SleepFuture * cancelEntry) noexcept
 {
+    uint64_t count = 0;
     do
     {
+        uint32_t prev = cancelEntry->state.fetch_and(~SleepFuture::IN_TABLE, std::memory_order_acq_rel);
+        SILK_ASSERT(prev & SleepFuture::IN_TABLE);
+
         SleepFuture * next = SleepStack::next(cancelEntry);
         processor->sleepTree.remove(cancelEntry);
-        cancelEntry->state.fetch_and(~SleepFuture::IN_TABLE, std::memory_order_relaxed);
         cancelEntry->set(ECANCELED);
         cancelEntry = next;
-
-        Perf::getSimpleCounter(simpleCounters[SLEEP_CANCELLED], processor->number).increment();
+        ++count;
 
     } while (cancelEntry);
+
+    Perf::getSimpleCounter(simpleCounters[SLEEP_CANCELLED], processor->number).increment(count);
 }
 
 bool FiberScheduler::handleExpiredWaiters(ProcessorState * processor) noexcept
@@ -1884,17 +1895,33 @@ bool FiberScheduler::handleExpiredWaiters(ProcessorState * processor) noexcept
 __attribute__((noinline)) void
 FiberScheduler::handleExpiredWaitersSlow(ProcessorState * processor, SleepFuture * sleepFuture, uint64_t now) noexcept
 {
+    uint64_t count = 0;
     do
     {
-        processor->sleepTree.remove(sleepFuture);
-        sleepFuture->state.fetch_and(~SleepFuture::IN_TABLE, std::memory_order_relaxed);
-        sleepFuture->set(0);
+        uint32_t state = sleepFuture->state.load(std::memory_order_relaxed);
+        for (;;)
+        {
+            if (state & SleepFuture::CANCELLED)
+            {
+                sleepFuture = processor->sleepTree.next(sleepFuture);
+                break;
+            }
 
-        Perf::getSimpleCounter(simpleCounters[SLEEP_EXPIRED], processor->number).increment();
-
-        sleepFuture = processor->sleepTree.min();
+            SILK_ASSERT(state & SleepFuture::IN_TABLE);
+            if (sleepFuture->state.compare_exchange_weak(
+                    state, state & ~SleepFuture::IN_TABLE, std::memory_order_acq_rel, std::memory_order_relaxed))
+            {
+                SleepFuture * next = processor->sleepTree.remove(sleepFuture);
+                sleepFuture->set(0);
+                sleepFuture = next;
+                ++count;
+                break;
+            }
+        }
 
     } while (sleepFuture && sleepFuture->deadlineCycles <= now);
+
+    Perf::getSimpleCounter(simpleCounters[SLEEP_EXPIRED], processor->number).increment(count);
 }
 
 void FiberScheduler::runFiber(Fiber * fiber, CpuTimer * timer) noexcept
