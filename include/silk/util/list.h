@@ -68,6 +68,9 @@ public:
         }
     }
 
+    /** Move all elements from @p other to the end of this list. O(1). @p other is left empty. */
+    void splice(List * other) noexcept { impl.splice(impl.end(), other->impl); }
+
     /** Return the next object after @p object, or nullptr if @p object is last. */
     T * next(T * object) noexcept
     {
