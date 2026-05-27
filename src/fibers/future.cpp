@@ -58,9 +58,6 @@ void FiberFuture::signal() noexcept
                 MultipleWaitState * waitState = reinterpret_cast<MultipleWaitState *>(currentState.waiter);
                 waitState->completionFuture->signal();
                 waitState->completionCounter.fetch_add(1, std::memory_order_release);
-
-                // TSan can't see happens-before through relaxed-spin + fence; annotate explicitly.
-                TSAN_RELEASE(waitState);
             }
             else if (currentState.hasCallback)
             {
@@ -193,11 +190,17 @@ uint64_t FiberFuture::waitForMultiple(FiberFuture ** futureArray, uint64_t futur
         {
             schedYield();
         }
-        std::atomic_thread_fence(std::memory_order_acquire);
-    }
 
-    // acquire side; pairs with TSAN_RELEASE in signal
-    TSAN_ACQUIRE(&waitState);
+#if defined(__SANITIZE_THREAD__)
+        // TSan does not track HB through a standalone acquire fence paired
+        // with relaxed loads. Do an extra acquire-load on the counter under
+        // TSan so the release-acquire pair on this atomic is directly visible
+        // to the tool.
+        waitState.completionCounter.load(std::memory_order_acquire);
+#else
+        std::atomic_thread_fence(std::memory_order_acquire);
+#endif
+    }
 
     return completionIndex;
 }
