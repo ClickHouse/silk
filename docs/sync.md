@@ -11,6 +11,7 @@ blocking the OS thread. Source lives in `src/fibers/`.
 FiberFuture         -- single-producer/single-consumer result handle
 FiberFutex          -- counter-based wakeup (Linux futex pattern)
 FiberMutex          -- mutual exclusion, unfair
+FiberCondVar        -- condition variable (mirrors std::condition_variable)
 
 FiberSequencer      -- monotone counter with ordered, cancellable waiters
   FiberEvent        -- manual-reset event (built on FiberSequencer)
@@ -98,25 +99,104 @@ acquire.
 
 ## FiberMutex
 
-Unfair fiber-aware mutex. Conforms to `BasicLockable` / `Lockable`; compatible
-with `std::lock_guard` and `std::unique_lock`.
+Fiber-aware shared mutex. Conforms to `BasicLockable`, `Lockable`, and
+`SharedMutex`; compatible with `std::lock_guard`, `std::unique_lock`, and
+`std::shared_lock`.
 
-**State** -- packed `uint64_t`: `{owner:63, hasWaiters:1}`.
+```cpp
+FiberMutex mutex;
+mutex.lock();          /* exclusive */    mutex.unlock();
+mutex.lock_shared();   /* shared */       mutex.unlock_shared();
+```
 
-**Fast path** -- `try_lock()` does a single CAS from 0 to `{currentFiber, 0}`.
+**State** -- packed `uint64_t`:
+`{value:61, exclusive:1, hasExclusiveWaiters:1, hasSharedWaiters:1}`.
+The `value` field reinterprets as `Fiber *` when `exclusive=1` and as the
+shared holder count when `exclusive=0`; `raw=0` is the canonical unlocked
+state. Splitting the waiter bit by acquire mode is what enables
+writer-priority: readers can check `hasExclusiveWaiters` on the fast path.
 
-**Spin phase** -- `lock()` spins 16 PAUSEs (~500 ns) if the owner is `RUNNING`
-on another CPU and no waiters are queued, before falling back to the slow path.
+**Fast path** -- `try_lock()` does a single CAS from 0 to
+`{value=currentFiber, exclusive=1}`. `try_lock_shared()` CASes
+`{value, exclusive=0}` to `{value+1, exclusive=0}` only if
+`hasExclusiveWaiters` is clear.
 
-**Slow path** -- `lockHelper()` sets the `hasWaiters` flag, then
-`suspendCallback` enqueues the fiber into the waiter table. `unlock()` CASes
-state to 0 and calls `releaseWaiters` if `hasWaiters` was set.
+**Spin phase** -- `lock()` and `lock_shared()` spin 16 PAUSEs (~500 ns) only
+when the blocker is an identifiable exclusive owner currently `RUNNING` on
+another CPU and no waiter is yet queued. Shared holders have no recorded
+identity, so exclusive acquirers waiting on shared traffic skip the spin
+and go straight to suspend.
 
-**suspendCallback race** -- after enqueuing, if `hasWaiters` is false (the
-holder unlocked and re-acquired between our enqueue and this check),
-`releaseWaiters` is called immediately. This causes a spurious wakeup; the
-woken fibers retry `lockHelper`, re-set `hasWaiters`, and the next `unlock`
-will release them properly.
+**Slow path** -- `lockHelper()` arms `hasExclusiveWaiters`;
+`lockSharedHelper()` arms `hasSharedWaiters`. In each case `suspendCallback`
+then enqueues the fiber into the waiter table. `unlock()` CASes state to 0
+and calls `releaseWaiters` if either waiter bit was set. `unlock_shared()`
+decrements `value`; when the count reaches 0 it clears both waiter bits
+atomically and calls `releaseWaiters` if either was set.
+
+**Writer priority (best-effort)** -- once an exclusive waiter sets
+`hasExclusiveWaiters`, new readers see the bit on the fast path and queue
+behind the writer rather than slipping in. The wake model is still
+wake-all, so on the next release event every queued waiter races; if a
+shared waiter wins, the writer re-arms the bit and re-suspends. The bit
+is also briefly clear between the release CAS and the writer re-arming it,
+so a reader arriving in that gap can slip ahead. In practice this strongly
+favors writers without providing strict starvation-freedom.
+
+**suspendCallback race** -- after enqueuing, the waiter re-reads its
+matching bit (`hasExclusiveWaiters` for an exclusive waiter,
+`hasSharedWaiters` for a shared one). If false, the previous releasing
+fiber already called `releaseWaiters` but missed us (we were not yet in
+the waiter table); we self-release. The woken fibers retry their helper
+and either acquire or re-arm the matching bit, and the next release
+delivers them properly.
+
+---
+
+## FiberCondVar
+
+Fiber-aware condition variable. Mirrors `std::condition_variable`: a fiber
+atomically releases a `Lockable` and suspends inside `wait()`; the lock is
+re-acquired before `wait()` returns. `notify_one()` wakes one currently
+waiting fiber (no-op if none is waiting); `notify_all()` wakes everyone
+currently waiting and has no effect on fibers that arrive later. Spurious
+wakeups are permitted -- callers must re-check the predicate.
+
+```cpp
+FiberCondVar cv;
+FiberMutex mutex;
+// waiter
+std::unique_lock lock(mutex);
+while (!predicate) { cv.wait(lock); }
+// signaller
+{
+    std::lock_guard guard(mutex);
+    /* update predicate */
+}
+cv.notify_one();   // or cv.notify_all()
+```
+
+`wait` accepts any type with `lock()`/`unlock()`, so it composes with
+`FiberMutex`, `std::unique_lock<FiberMutex>`, etc.
+
+**State** -- a `SpinLock` protects an intrusive `List<Future>` of waiters.
+Each waiter is a `Future` (inherits `FiberFuture`) allocated on the calling
+fiber's stack by `wait()` / `wait_for()` and linked into the list.
+
+**wait_for** -- `cv.wait_for(lock, nanoseconds)` returns 0 on a notify-driven
+wakeup or `ETIMEDOUT` on timeout. Implemented via
+`FiberFuture::waitWithTimeout`; on timeout the future cancels itself, which
+removes it from the waiter list. A notify that races at the boundary may
+consume our future but `wait_for` still returns `ETIMEDOUT` -- the
+predicate re-check handles the lost wakeup, per the usual cv contract.
+
+**Cancel/notify race** -- a single `inWaiters` bool per waiter, read and
+written only under `spinLock`, serializes timeout-triggered self-cancel
+against `notify_one` / `notify_all`. Exactly one of those paths removes the
+future from the list and calls `set()`; the other observes `inWaiters` is
+false and bails. `notify_all` splices the waiter list into a local snapshot
+and clears `inWaiters` on each, all under the lock; the actual `set(0)`
+calls fire outside the lock.
 
 ---
 

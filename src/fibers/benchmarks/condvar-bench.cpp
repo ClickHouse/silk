@@ -15,9 +15,8 @@ class FiberCondVarBench : public benchmark::Fixture
 {
 };
 
-// Measures the uncontended fast path of notify_one(): the combiner enters,
-// finds the waiter list empty, and exits. The counter increment is the only
-// real work done. No waiter is ever registered.
+// Measures the uncontended fast path of notify_one(): acquire the spinlock,
+// observe the waiter list empty, release. No waiter is ever registered.
 BENCHMARK_F(FiberCondVarBench, NotifyOneUncontended)(benchmark::State & state)
 {
     struct Params
@@ -40,8 +39,8 @@ BENCHMARK_F(FiberCondVarBench, NotifyOneUncontended)(benchmark::State & state)
     SILK_ASSERT(!r);
 }
 
-// Same as above for notify_all(): the sticky notifyAll flag is set, the
-// combiner observes an empty waiter list and clears the flag.
+// Same as above for notify_all(): acquire the spinlock, splice an empty
+// waiter list into a local snapshot, release.
 BENCHMARK_F(FiberCondVarBench, NotifyAllUncontended)(benchmark::State & state)
 {
     struct Params
@@ -66,9 +65,11 @@ BENCHMARK_F(FiberCondVarBench, NotifyAllUncontended)(benchmark::State & state)
 
 // Producer/consumer ping-pong: a driver fiber publishes an item under the
 // mutex and notifies; a responder fiber waits, consumes the item, and signals
-// the driver to continue. Each iteration = two mutex round-trips + one
-// notify_one drain that wakes a waiter + one notify_one drain that exits empty
-// (the driver's wait sees the responder's "consumed" signal immediately).
+// the driver to continue. Each iteration = two mutex round-trips + two
+// notify_one calls. Depending on scheduling, the responder's notify may find
+// the driver already suspended (waking it) or find the list empty (in which
+// case the driver re-checks items, sees 0, and exits the wait loop without
+// suspending).
 BENCHMARK_F(FiberCondVarBench, RoundTrip)(benchmark::State & state)
 {
     struct Shared

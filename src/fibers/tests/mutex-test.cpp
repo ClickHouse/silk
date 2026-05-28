@@ -353,6 +353,61 @@ TEST(FiberMutex, exclusiveWakesAfterSharedRelease)
     writer.wait();
 }
 
+// Once an exclusive waiter is queued behind a shared holder, try_lock_shared
+// must start failing - that's the writer-priority guarantee. Without it (the
+// old single hasWaiters bit), try_lock_shared would happily keep succeeding
+// while the writer starves.
+TEST(FiberMutex, writerPriorityBlocksNewReaders)
+{
+    struct Writer
+    {
+        FiberMutex * mutex;
+
+        static int fiberMain(Writer * p) noexcept
+        {
+            p->mutex->lock();
+            p->mutex->unlock();
+            return 0;
+        }
+    };
+
+    FiberMutex mutex;
+    mutex.lock_shared();
+
+    FiberFuture writerDone;
+    int r = FiberScheduler::run(Writer::fiberMain, {&mutex}, &writerDone);
+    ASSERT_FALSE(r);
+
+    // The work-stealing scheduler picks up the writer on another worker
+    // promptly; the writer hits the slow path, arms hasExclusiveWaiters, and
+    // suspends. Spin try_lock_shared until we observe the bit (bounded so a
+    // regression that drops writer-priority surfaces as a test failure rather
+    // than a hang).
+    bool sawFailure = false;
+    for (int i = 0; i < 10000; ++i)
+    {
+        if (!mutex.try_lock_shared())
+        {
+            sawFailure = true;
+            break;
+        }
+        mutex.unlock_shared();
+        schedYield();
+    }
+    ASSERT_TRUE(sawFailure) << "writer-priority not enforced: try_lock_shared kept succeeding while a writer was queued";
+
+    // While we still hold the shared lock the writer cannot acquire, so
+    // hasExclusiveWaiters stays set and try_lock_shared keeps failing.
+    for (int i = 0; i < 5; ++i)
+    {
+        EXPECT_FALSE(mutex.try_lock_shared());
+        schedYield();
+    }
+
+    mutex.unlock_shared();
+    writerDone.wait();
+}
+
 TEST(FiberMutex, mixedReadersWritersCounter)
 {
     static constexpr int N_READERS = 6;
