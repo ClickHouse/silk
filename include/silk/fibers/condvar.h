@@ -24,26 +24,24 @@ class FiberCondVar
 {
 public:
     /**
-     * Waiter handle. Inherits FiberFuture so callers can wait directly or
-     * compose with FiberFuture::waitForMultiple.
+     * Per-waiter state. Inherits FiberFuture so wait_for can route through
+     * FiberFuture::waitWithTimeout. Constructed on the stack inside wait() /
+     * wait_for(); not intended for direct use by callers.
      */
     class Future : public FiberFuture
     {
-    public:
-        /** Cancel a pending wait. Sets the future with ECANCELED if still pending. */
-        void cancel() noexcept
-        {
-            if (condVar)
-            {
-                condVar->cancelWait(this);
-            }
-        }
-
     private:
         friend class FiberCondVar;
 
+        /** Cancel a pending wait. Sets the future with ECANCELED if still queued. */
+        void cancel() noexcept { condVar->cancelWait(this); }
+
         ListEntry listEntry;
         FiberCondVar * condVar = nullptr;
+        // True while this Future is linked in FiberCondVar::waiters. Read and
+        // written only under spinLock; serializes cancel() vs notify_one() /
+        // notify_all() so exactly one path removes the future from the list
+        // and calls set().
         bool inWaiters = false;
     };
 
