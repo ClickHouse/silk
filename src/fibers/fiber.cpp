@@ -1436,6 +1436,18 @@ void FiberScheduler::poll(int fd, uint32_t events, uint64_t * triggeredEvents, I
     enqueueIo(future, [=](io_uring_sqe * sqe) noexcept { ::io_uring_prep_poll_add(sqe, fd, events); });
 }
 
+void FiberScheduler::connect(int fd, const sockaddr * addr, socklen_t addrlen, IoFuture * future) noexcept
+{
+    future->result = nullptr;
+    enqueueIo(future, [=](io_uring_sqe * sqe) noexcept { ::io_uring_prep_connect(sqe, fd, addr, addrlen); });
+}
+
+void FiberScheduler::accept(int fd, sockaddr * addr, socklen_t * addrlen, int flags, uint64_t * acceptedFd, IoFuture * future) noexcept
+{
+    future->result = acceptedFd;
+    enqueueIo(future, [=](io_uring_sqe * sqe) noexcept { ::io_uring_prep_accept(sqe, fd, addr, addrlen, flags); });
+}
+
 void FiberScheduler::cancelIo(IoFuture * future) noexcept
 {
     future->result = nullptr;

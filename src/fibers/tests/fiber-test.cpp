@@ -13,6 +13,10 @@
 #include <sched.h>
 #include <unistd.h>
 
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+
 namespace silk
 {
 
@@ -407,6 +411,60 @@ TEST(Fiber, cancelRead)
     ::close(fds[0]);
     ::close(fds[1]);
 }
+
+// connect + accept: client connect and listener accepts on loopback.
+TEST(Fiber, connectAccept)
+{
+    int listenFd = ::socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
+    ASSERT_GE(listenFd, 0);
+
+    sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+
+    int r = ::bind(listenFd, reinterpret_cast<const sockaddr *>(&addr), sizeof(addr));
+    ASSERT_EQ(r, 0);
+    r = ::listen(listenFd, 1);
+    ASSERT_EQ(r, 0);
+
+    socklen_t len = sizeof(addr);
+    r = ::getsockname(listenFd, reinterpret_cast<sockaddr *>(&addr), &len);
+    ASSERT_EQ(r, 0);
+
+    int clientFd = ::socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
+    ASSERT_GE(clientFd, 0);
+
+    struct Params
+    {
+        int listenFd;
+        int clientFd;
+        sockaddr_in addr;
+
+        static int fiberMain(Params * p) noexcept
+        {
+            FiberScheduler::IoFuture connectFuture;
+            FiberScheduler::connect(p->clientFd, reinterpret_cast<const sockaddr *>(&p->addr), sizeof(p->addr), &connectFuture);
+
+            uint64_t acceptedFd = 0;
+            int a = FiberScheduler::accept(p->listenFd, nullptr, nullptr, SOCK_CLOEXEC, &acceptedFd);
+            EXPECT_EQ(a, 0);
+            EXPECT_GE(static_cast<int>(acceptedFd), 0);
+
+            EXPECT_EQ(connectFuture.wait(), 0);
+
+            ::close(static_cast<int>(acceptedFd));
+
+            return 0;
+        }
+    };
+
+    r = FiberScheduler::run(Params::fiberMain, {listenFd, clientFd, addr});
+    ASSERT_EQ(r, 0);
+
+    ::close(clientFd);
+    ::close(listenFd);
+}
+
 
 // Stress: many fibers each doing a write+read through their own pipe.
 TEST(Fiber, concurrentReadWrite)

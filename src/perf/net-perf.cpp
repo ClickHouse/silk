@@ -134,38 +134,10 @@ int TcpConnection::connect(const char * host, uint16_t port, TcpConnection * out
         return r;
     }
 
-    int r = ::connect(fd, reinterpret_cast<const sockaddr *>(&addr), sizeof(addr));
-    if (r < 0)
-    {
-        r = errno;
-        if (r != EINPROGRESS)
-        {
-            SILK_ERROR("connect failed: %s", std::strerror(r));
-            ::close(fd);
-            return r;
-        }
-
-        r = silk::FiberScheduler::poll(fd, POLLOUT);
-        if (r)
-        {
-            SILK_ERROR("poll failed: %s", std::strerror(r));
-            ::close(fd);
-            return r;
-        }
-    }
-
-    r = 0;
-    socklen_t len = sizeof(r);
-    if (::getsockopt(fd, SOL_SOCKET, SO_ERROR, &r, &len))
-    {
-        r = errno;
-        SILK_ERROR("getsockopt SO_ERROR failed: %s", std::strerror(r));
-        ::close(fd);
-        return r;
-    }
+    int r = silk::FiberScheduler::connect(fd, reinterpret_cast<const sockaddr *>(&addr), sizeof(addr));
     if (r)
     {
-        SILK_ERROR("connect error: %s", std::strerror(r));
+        SILK_ERROR("connect failed: %s", std::strerror(r));
         ::close(fd);
         return r;
     }
@@ -237,26 +209,13 @@ int TcpConnection::listen(const char * host, uint16_t port, int backlog, TcpConn
 
 int TcpConnection::accept(TcpConnection * out) noexcept
 {
-    int fd;
-    for (;;)
+    uint64_t acceptedFd = 0;
+    int r = silk::FiberScheduler::accept(connFd, nullptr, nullptr, SOCK_NONBLOCK | SOCK_CLOEXEC, &acceptedFd);
+    if (r)
     {
-        fd = ::accept4(connFd, nullptr, nullptr, SOCK_NONBLOCK | SOCK_CLOEXEC);
-        if (fd >= 0)
-        {
-            break;
-        }
-
-        int r = errno;
-        if (r == EAGAIN)
-        {
-            r = silk::FiberScheduler::poll(connFd, POLLIN);
-            if (!r)
-            {
-                continue;
-            }
-        }
         return r;
     }
+    int fd = static_cast<int>(acceptedFd);
 
     int value = 1;
     if (::setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &value, sizeof(value)))

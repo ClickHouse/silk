@@ -9,6 +9,7 @@
 #include <memory>
 #include <utility>
 
+#include <sys/socket.h>
 #include <sys/uio.h>
 
 namespace silk
@@ -411,6 +412,62 @@ public:
      * @param future          Completion handle; wait() returns 0 on success or a errno on failure.
      */
     static void poll(int fd, uint32_t events, uint64_t * triggeredEvents, IoFuture * future) noexcept;
+
+    /**
+     * Blocking connect: connect @p fd to @p addr.
+     *
+     * @param fd       File descriptor to connect.
+     * @param addr     Destination address.
+     * @param addrlen  Length of @p addr.
+     * @return         0 on success, or a errno on failure.
+     */
+    static int connect(int fd, const sockaddr * addr, socklen_t addrlen) noexcept
+    {
+        IoFuture future;
+        connect(fd, addr, addrlen, &future);
+        return future.wait();
+    }
+
+    /**
+     * Async connect. Returns immediately; the caller must wait on @p future
+     * for the result.
+     *
+     * @param fd       File descriptor to connect.
+     * @param addr     Destination address; must remain valid until @p future completes.
+     * @param addrlen  Length of @p addr.
+     * @param future   Completion handle; wait() returns 0 on success or a errno on failure.
+     */
+    static void connect(int fd, const sockaddr * addr, socklen_t addrlen, IoFuture * future) noexcept;
+
+    /**
+     * Blocking accept: accept a connection on the listening socket @p fd.
+     *
+     * @param fd          Listening socket to accept on.
+     * @param addr        If not null, receives the peer address.
+     * @param addrlen     In/out length of @p addr; ignored if @p addr is null.
+     * @param flags       accept4() flags applied to the accepted socket (e.g. SOCK_CLOEXEC).
+     * @param acceptedFd  If not null, receives the accepted socket fd on success.
+     * @return            0 on success, or a errno on failure.
+     */
+    static int accept(int fd, sockaddr * addr, socklen_t * addrlen, int flags, uint64_t * acceptedFd = nullptr) noexcept
+    {
+        IoFuture future;
+        accept(fd, addr, addrlen, flags, acceptedFd, &future);
+        return future.wait();
+    }
+
+    /**
+     * Async accept. Returns immediately; the caller must wait on @p future
+     * for the result.
+     *
+     * @param fd          Listening socket to accept on.
+     * @param addr        If not null, receives the peer address; must remain valid until @p future completes.
+     * @param addrlen     In/out length of @p addr; must remain valid until @p future completes; ignored if @p addr is null.
+     * @param flags       accept4() flags applied to the accepted socket (e.g. SOCK_CLOEXEC).
+     * @param acceptedFd  If not null, receives the accepted socket fd on success.
+     * @param future      Completion handle; wait() returns 0 on success or a errno on failure.
+     */
+    static void accept(int fd, sockaddr * addr, socklen_t * addrlen, int flags, uint64_t * acceptedFd, IoFuture * future) noexcept;
 
     /**
      * Completion handle for an async sleep submitted via sleep().
