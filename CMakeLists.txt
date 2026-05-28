@@ -128,7 +128,9 @@ if(COVERAGE)
     add_link_options(-fprofile-instr-generate)
 endif()
 
-enable_testing()
+option(BUILD_BENCHMARKS "Build benchmark targets" ON)
+
+include(CTest)
 include(GoogleTest)
 
 include_directories(include)
