@@ -15,14 +15,14 @@ namespace
 int returnLeaf(Error * error, int * macroLine)
 {
     *macroLine = __LINE__ + 1;
-    RETURN_ERROR(EIO, error, "disk failure");
+    SILK_RETURN_ERROR(EIO, error, "disk failure");
     return 0;
 }
 
 int returnLeafFormatted(Error * error, int * macroLine)
 {
     *macroLine = __LINE__ + 1;
-    RETURN_ERROR(EIO, error, "could not open %s: errno=%d", "foo.txt", 42);
+    SILK_RETURN_ERROR(EIO, error, "could not open %s: errno=%d", "foo.txt", 42);
     return 0;
 }
 
@@ -30,7 +30,7 @@ int checkErrorPropagates(int innerCode, Error * error, int * macroLine)
 {
     int r = innerCode;
     *macroLine = __LINE__ + 1;
-    CHECK_ERROR(r, error, "could not allocate LSN");
+    SILK_CHECK_ERROR(r, error, "could not allocate LSN");
     return 0;
 }
 
@@ -38,7 +38,7 @@ int checkErrorFormatted(int innerCode, Error * error, int * macroLine)
 {
     int r = innerCode;
     *macroLine = __LINE__ + 1;
-    CHECK_ERROR(r, error, "could not insert record: pgId=%u", 7u);
+    SILK_CHECK_ERROR(r, error, "could not insert record: pgId=%u", 7u);
     return 0;
 }
 
@@ -46,14 +46,14 @@ int checkErrorStacks(Error * error, int * macroLine)
 {
     int r = error->push(EIO, "log.cpp", 11, "ring buffer full");
     *macroLine = __LINE__ + 1;
-    CHECK_ERROR(r, error, "log write rejected at lsn=%lu", 42UL);
+    SILK_CHECK_ERROR(r, error, "log write rejected at lsn=%lu", 42UL);
     return 0;
 }
 
 int checkBoolPropagates(bool cond, Error * error, int * macroLine)
 {
     *macroLine = __LINE__ + 1;
-    CHECK_BOOL(cond, ENOSPC, error, "could not append row");
+    SILK_CHECK_BOOL(cond, ENOSPC, error, "could not append row");
     return 0;
 }
 

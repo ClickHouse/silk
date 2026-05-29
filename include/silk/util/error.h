@@ -15,7 +15,7 @@ namespace silk
  * failure that started the chain. All frame storage (headers + message bytes) lives in a single
  * arena owned by the Error.
  *
- * Errors are normally produced through the RETURN_ERROR / CHECK_ERROR / CHECK_BOOL macros,
+ * Errors are normally produced through the SILK_RETURN_ERROR / SILK_CHECK_ERROR / SILK_CHECK_BOOL macros,
  * which push a frame and capture the call-site file and line. Functions take an Error * error
  * out-parameter and the caller declares the Error on its own stack:
  *
@@ -139,10 +139,10 @@ private:
  * from a callee returning a code):
  *
  *     if (input == nullptr) {
- *         RETURN_ERROR(EINVAL, error, "null input: idx=%d", idx);
+ *         SILK_RETURN_ERROR(EINVAL, error, "null input: idx=%d", idx);
  *     }
  */
-#define RETURN_ERROR(code, error, msg, ...) return (error)->push##__VA_OPT__(f)((code), __FILE__, __LINE__, msg __VA_OPT__(, ) __VA_ARGS__)
+#define SILK_RETURN_ERROR(code, error, msg, ...) return (error)->push##__VA_OPT__(f)((code), __FILE__, __LINE__, msg __VA_OPT__(, ) __VA_ARGS__)
 
 /**
  * Failure propagation: if r is non-zero, push a new frame on top of *error and return r.
@@ -151,12 +151,12 @@ private:
  * see the class doc.
  *
  *     int r = volume->allocateLsn(&lsn);
- *     CHECK_ERROR(r, error, "could not allocate LSN");
+ *     SILK_CHECK_ERROR(r, error, "could not allocate LSN");
  *
  *     int r = store->getRowBlockReference(rbn, time, rowFunctions, &reference, error);
- *     CHECK_ERROR(r, error, "could not get row-block reference: pgId=%u", rbn.pgId);
+ *     SILK_CHECK_ERROR(r, error, "could not get row-block reference: pgId=%u", rbn.pgId);
  */
-#define CHECK_ERROR(code, error, msg, ...) \
+#define SILK_CHECK_ERROR(code, error, msg, ...) \
     do \
     { \
         if ((code) != 0) [[unlikely]] \
@@ -170,9 +170,9 @@ private:
  *
  * NEVER embed a function call as cond -- capture into a bool b temp first:
  *     bool b = record.addRow(&context, recordRow);
- *     CHECK_BOOL(b, ENOSPC, error, "could not append row");
+ *     SILK_CHECK_BOOL(b, ENOSPC, error, "could not append row");
  */
-#define CHECK_BOOL(cond, code, error, msg, ...) \
+#define SILK_CHECK_BOOL(cond, code, error, msg, ...) \
     do \
     { \
         if (!(cond)) [[unlikely]] \
