@@ -1450,7 +1450,6 @@ void FiberScheduler::accept(int fd, sockaddr * addr, socklen_t * addrlen, int fl
 
 void FiberScheduler::cancelIo(IoFuture * future) noexcept
 {
-    future->result = nullptr;
     enqueueIo(
         nullptr,
         [=](io_uring_sqe * sqe) noexcept
