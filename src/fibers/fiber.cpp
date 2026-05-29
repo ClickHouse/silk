@@ -1438,7 +1438,6 @@ void FiberScheduler::poll(int fd, uint32_t events, uint64_t * triggeredEvents, I
 
 void FiberScheduler::cancelIo(IoFuture * future) noexcept
 {
-    future->result = nullptr;
     enqueueIo(
         nullptr,
         [=](io_uring_sqe * sqe) noexcept
