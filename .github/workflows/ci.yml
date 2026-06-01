@@ -112,7 +112,8 @@ jobs:
           sudo apt-get -o DPkg::Lock::Timeout=60 install -y \
             ninja-build \
             ccache \
-            libboost-dev \
+            libboost-context-dev \
+            libboost-program-options-dev \
             libdouble-conversion-dev \
             libelf-dev \
             zlib1g-dev
