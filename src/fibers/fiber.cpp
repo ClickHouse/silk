@@ -51,9 +51,6 @@ static constexpr uint64_t CQE_TAG_CANCEL = 0;
 static constexpr uint64_t CQE_TAG_TIMEOUT = 1;
 static constexpr uint64_t CQE_TAG_DOORBELL = 2;
 
-// Hard cap on CPU index (largest known socket: 384 cores).
-static constexpr uint16_t INVALID_PROCESSOR_NUMBER = (1 << 10);
-
 // clang-format off
 #define FIBER_SIMPLE_COUNTERS(x) \
     x(FIBER_STARTED,           "FiberStarted") \
@@ -839,6 +836,10 @@ bool FiberScheduler::ProcessorState::enqueueIo(IoFuture * future, Setup && setup
         {
             ::io_uring_sqe_set_data(sqe, future);
 
+            // Record which processor holds this SQE so cancelIo can submit the
+            // cancel to the correct ring (cross-ring cancels fail with -ENOENT).
+            future->processorNumber = this->number;
+
             if (profiler)
             {
                 future->submitTimestamp = Tsc::getCycles();
@@ -1450,13 +1451,37 @@ void FiberScheduler::accept(int fd, sockaddr * addr, socklen_t * addrlen, int fl
 
 void FiberScheduler::cancelIo(IoFuture * future) noexcept
 {
-    enqueueIo(
-        nullptr,
-        [=](io_uring_sqe * sqe) noexcept
-        {
-            ::io_uring_prep_cancel(sqe, future, 0);
-            ::io_uring_sqe_set_data64(sqe, CQE_TAG_CANCEL);
-        });
+    // The cancel SQE must go to the SAME io_uring ring that holds the original
+    // SQE.  If we submit the cancel to a different ring (e.g. because the fiber
+    // was work-stolen to another CPU between registering the poll and cancelling
+    // it), io_uring returns -ENOENT and the original operation is never removed,
+    // leaving the caller's IoFuture::wait() blocked forever.
+    uint32_t processorNumber = future->processorNumber;
+    if (processorNumber == INVALID_PROCESSOR_NUMBER)
+    {
+        processorNumber = getCurrentProcessor();
+    }
+
+    auto * target = &scheduler->processorState[processorNumber];
+
+    auto setup = [=](io_uring_sqe * sqe) noexcept
+    {
+        ::io_uring_prep_cancel(sqe, future, 0);
+        ::io_uring_sqe_set_data64(sqe, CQE_TAG_CANCEL);
+    };
+
+    // Retry if the SQ ring is temporarily full.
+    while (!target->enqueueIo(nullptr, setup))
+    {
+        Perf::getSimpleCounter(simpleCounters[SQ_RING_OVERFLOW], target->number).increment();
+        yield();
+    }
+
+    // If we enqueued to a remote processor's ring, force-submit.
+    if (processorNumber != getCurrentProcessor() || getCurrentFiber()->isProxyFiber)
+    {
+        target->submitIo(true);
+    }
 }
 
 void FiberScheduler::sleep(uint64_t nanoseconds, SleepFuture * future) noexcept

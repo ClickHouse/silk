@@ -24,6 +24,11 @@ class Fiber;
 static constexpr uint64_t FIBER_PARAMETERS_SIZE = 64;
 
 /**
+ * Hard cap on CPU index (largest known socket: 384 cores).
+ */
+static constexpr uint16_t INVALID_PROCESSOR_NUMBER = (1 << 10);
+
+/**
  * Fiber entry point signature. Returns an integer result code.
  */
 using FiberMain = int(void * parameters) noexcept;
@@ -320,6 +325,9 @@ public:
         uint64_t * result = nullptr;
         uint64_t submitTimestamp = 0;
         uint8_t category = 0;
+        // Processor whose io_uring ring holds this SQE; cancelIo must submit
+        // the cancel to the same ring to avoid a cross-ring -ENOENT failure.
+        uint32_t processorNumber = INVALID_PROCESSOR_NUMBER;
     };
 
     /**
@@ -491,7 +499,7 @@ public:
         StackEntry stackEntry;
         TreeEntry treeEntry;
         uint64_t deadlineCycles = 0;
-        uint32_t processorNumber = UINT32_MAX;
+        uint32_t processorNumber = INVALID_PROCESSOR_NUMBER;
         std::atomic<uint32_t> state{};
     };
 
