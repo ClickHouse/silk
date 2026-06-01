@@ -1,5 +1,18 @@
 # Contributing to Silk
 
+Silk is an open project to which you can contribute in many ways, for example, with ideas, code, or documentation.
+We appreciate all efforts that help to make the project better.
+
+Thank you!
+
+## Legal Info
+
+When you open your first pull request in the ClickHouse repository, a bot will ask to accept the ClickHouse Individual CLA (Contributor License Agreement).
+Please review and sign it.
+
+Optionally, to make contributions more legally binding, your employer as a legal entity may want to sign a ClickHouse Corporate CLA with ClickHouse, Inc.
+If you're interested to do so, contact us at [legal@clickhouse.com](mailto:legal@clickhouse.com).
+
 ## Build requirements
 
 See [README.md](README.md#requirements) for the full list of build dependencies.
