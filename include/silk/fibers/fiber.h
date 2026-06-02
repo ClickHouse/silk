@@ -1,6 +1,7 @@
 #pragma once
 
 #include <silk/fibers/future.h>
+#include <silk/util/platform.h>
 #include <silk/util/stack.h>
 #include <silk/util/tree.h>
 
@@ -224,6 +225,13 @@ public:
      * Valid from any context, including non-fiber threads.
      */
     static Fiber * getCurrentFiber() noexcept;
+
+#ifdef SILK_FIBER_LOCAL_STORAGE
+    /**
+     * Return the current fiber's local storage buffer (CACHELINE_SIZE bytes).
+     */
+    __attribute__((always_inline)) static void * getLocalStorage() noexcept;
+#endif
 
     /**
      * Return true if fiber is currently running.

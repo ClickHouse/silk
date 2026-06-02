@@ -130,6 +130,8 @@ endif()
 
 option(BUILD_BENCHMARKS "Build benchmark targets" ON)
 
+option(SILK_FIBER_LOCAL_STORAGE "Enable fiber-local storage" OFF)
+
 include(CTest)
 include(GoogleTest)
 

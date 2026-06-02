@@ -20,6 +20,7 @@
 #include <atomic>
 #include <cerrno>
 #include <cstdint>
+#include <cstring>
 #include <memory>
 #include <mutex>
 #include <thread>
@@ -198,6 +199,11 @@ public:
         uint64_t suspendTimestamp = 0;
     };
 
+#ifdef SILK_FIBER_LOCAL_STORAGE
+    // Fiber-local storage.
+    alignas(CACHELINE_SIZE) uint8_t localStorage[CACHELINE_SIZE] = {};
+#endif
+
     // Embedded node for the shared ready queue. Its memory is always valid
     // because fiberPool never frees. reservedNode points to whichever node
     // is available for the next enqueue; after each dequeue the recycled
@@ -235,10 +241,10 @@ static_assert(alignof(Fiber) >= 8);
 using WaitStack = LockFreeStack<Fiber, &Fiber::stackEntry>;
 using SuspendedList = List<Fiber, &Fiber::suspendedEntry>;
 
-// Current fiber running on this OS thread; null when idle.
+// Current fiber running on this OS thread; null until the first getCurrentFiber call.
 static thread_local Fiber * threadFiber = nullptr;
 
-// Proxy fiber for the current non-fiber thread; destroyed at thread exit.
+// Owns the proxy fiber for the current non-fiber thread; destroyed at thread exit.
 static thread_local std::unique_ptr<Fiber> proxyFiber;
 
 Fiber::Fiber(bool isProxyFiber) noexcept
@@ -314,6 +320,11 @@ bool Fiber::initialize(FiberId fiberId_, FiberMain * fiberMain_, ParametersDtor 
     fiberMain = fiberMain_;
     parametersDtor = parametersDtor_;
     fiberContext = make_fcontext(static_cast<uint8_t *>(stack) + PAGE_SIZE + fiberStackSize, fiberStackSize, fiberContextMain);
+
+#ifdef SILK_FIBER_LOCAL_STORAGE
+    // Inherit a copy of the launcher's local storage.
+    std::memcpy(localStorage, FiberScheduler::getCurrentFiber()->localStorage, sizeof(localStorage));
+#endif
 
     return true;
 }
@@ -1180,18 +1191,13 @@ FiberId FiberScheduler::getCurrentFiberId() noexcept
 
 Fiber * FiberScheduler::getCurrentFiber() noexcept
 {
-    // Fast path: thread is running a regular fiber, or has already lazily
-    // allocated a proxy fiber. Both branches stay inline; only the very first
-    // call from a non-fiber thread reaches initCurrentFiber.
-    if (threadFiber)
-    {
-        return threadFiber;
-    }
-    if (!proxyFiber) [[unlikely]]
+    // Fast path: a single TLS load.
+    // Only the first call from a thread reaches initCurrentFiber to lazily create its proxy.
+    if (!threadFiber) [[unlikely]]
     {
         initCurrentFiber();
     }
-    return proxyFiber.get();
+    return threadFiber;
 }
 
 __attribute__((noinline)) void FiberScheduler::initCurrentFiber() noexcept
@@ -1199,7 +1205,15 @@ __attribute__((noinline)) void FiberScheduler::initCurrentFiber() noexcept
     // Lazily create a proxy fiber so a non-fiber thread can still participate
     // in fiber-aware APIs (e.g. FiberMutex::lock, FiberScheduler::run-and-wait).
     proxyFiber = std::make_unique<Fiber>(true);
+    threadFiber = proxyFiber.get();
 }
+
+#ifdef SILK_FIBER_LOCAL_STORAGE
+void * FiberScheduler::getLocalStorage() noexcept
+{
+    return getCurrentFiber()->localStorage;
+}
+#endif
 
 bool FiberScheduler::isFiberRunning(Fiber * fiber) noexcept
 {
@@ -1998,9 +2012,10 @@ void FiberScheduler::runFiber(Fiber * fiber, CpuTimer * timer) noexcept
         timer->reset(simpleCounters[SCHEDULER_USER_TIME], fiber->processorNumber);
     }
 
+    Fiber * previousFiber = threadFiber;
     threadFiber = fiber;
     fiber->switchToFiberContext();
-    threadFiber = nullptr;
+    threadFiber = previousFiber;
 
     if (timer)
     {
