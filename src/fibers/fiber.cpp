@@ -112,7 +112,13 @@ public:
     Fiber(bool isProxyFiber = false) noexcept;
     ~Fiber() noexcept;
 
-    bool initialize(FiberId fiberId, FiberMain * fiberMain, ParametersDtor * parametersDtor, FiberFuture * waitingFuture) noexcept;
+    bool initialize(
+        FiberId fiberId,
+        FiberMain * fiberMain,
+        ParametersDtor * parametersDtor,
+        FiberFuture * waitingFuture,
+        FiberSwitchCallback * fiberResume,
+        FiberSwitchCallback * fiberSuspend) noexcept;
     void deinitialize() noexcept;
 
     void switchToFiberContext() noexcept;
@@ -184,6 +190,9 @@ public:
         // fiberContextMain immediately after fiberMain returns.
         FiberMain * fiberMain = nullptr;
         ParametersDtor * parametersDtor = nullptr;
+
+        FiberSwitchCallback * fiberResume = nullptr;
+        FiberSwitchCallback * fiberSuspend = nullptr;
 
         // Set by run to the FiberFuture to notify on completion.
         FiberFuture * waitingFuture = nullptr;
@@ -268,7 +277,13 @@ Fiber::~Fiber() noexcept
     }
 }
 
-bool Fiber::initialize(FiberId fiberId_, FiberMain * fiberMain_, ParametersDtor * parametersDtor_, FiberFuture * waitingFuture_) noexcept
+bool Fiber::initialize(
+    FiberId fiberId_,
+    FiberMain * fiberMain_,
+    ParametersDtor * parametersDtor_,
+    FiberFuture * waitingFuture_,
+    FiberSwitchCallback * fiberResume_,
+    FiberSwitchCallback * fiberSuspend_) noexcept
 {
     state.store(FiberState::SUSPENDED, std::memory_order_relaxed);
 
@@ -313,6 +328,8 @@ bool Fiber::initialize(FiberId fiberId_, FiberMain * fiberMain_, ParametersDtor 
 
     fiberMain = fiberMain_;
     parametersDtor = parametersDtor_;
+    fiberResume = fiberResume_;
+    fiberSuspend = fiberSuspend_;
     fiberContext = make_fcontext(static_cast<uint8_t *>(stack) + PAGE_SIZE + fiberStackSize, fiberStackSize, fiberContextMain);
 
     return true;
@@ -1212,7 +1229,13 @@ void * FiberScheduler::getFiberParameters(Fiber * fiber) noexcept
 }
 
 Fiber *
-FiberScheduler::allocateFiber(FiberMain * fiberMain, ParametersDtor * parametersDtor, uint8_t category, FiberFuture * future) noexcept
+FiberScheduler::allocateFiber(
+    FiberMain * fiberMain,
+    ParametersDtor * parametersDtor,
+    uint8_t category,
+    FiberFuture * future,
+    FiberSwitchCallback * fiberResume,
+    FiberSwitchCallback * fiberSuspend) noexcept
 {
     Fiber * fiber = scheduler->fiberPool.allocate();
     if (fiber)
@@ -1220,7 +1243,7 @@ FiberScheduler::allocateFiber(FiberMain * fiberMain, ParametersDtor * parameters
         ProcessorState * processor = &scheduler->processorState[getCurrentProcessor()];
         FiberId fiberId = processor->allocateFiberId(category);
 
-        if (fiber->initialize(fiberId, fiberMain, parametersDtor, future))
+        if (fiber->initialize(fiberId, fiberMain, parametersDtor, future, fiberResume, fiberSuspend))
         {
             Perf::getSimpleCounter(simpleCounters[FIBER_STARTED], processor->number).increment();
             return fiber;
@@ -1999,7 +2022,19 @@ void FiberScheduler::runFiber(Fiber * fiber, CpuTimer * timer) noexcept
     }
 
     threadFiber = fiber;
+
+    if (fiber->fiberResume)
+    {
+        fiber->fiberResume(fiber);
+    }
+
     fiber->switchToFiberContext();
+
+    if (fiber->fiberSuspend)
+    {
+        fiber->fiberSuspend(fiber);
+    }
+
     threadFiber = nullptr;
 
     if (timer)

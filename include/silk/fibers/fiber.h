@@ -39,6 +39,8 @@ using FiberMain = int(void * parameters) noexcept;
  */
 using ParametersDtor = void(void * parameters) noexcept;
 
+using FiberSwitchCallback = void(Fiber * fiber) noexcept;
+
 /**
  * Packed fiber identity: [category:8 | cpu:10 | counter:46] stored as uint64_t.
  *  category: byte passed to run; the runtime treats it as opaque.
@@ -137,6 +139,9 @@ public:
         // isolation (e.g. head-of-line blocking benchmarks).
         // Production should leave this off.
         bool disableWorkStealing = false;
+
+        FiberSwitchCallback * fiberResume = nullptr;
+        FiberSwitchCallback * fiberSuspend = nullptr;
     };
 
     /**
@@ -195,6 +200,26 @@ public:
         return ENOMEM;
     }
 
+    template <typename T>
+    [[nodiscard]] static int run(int (*fiberMain)(T *) noexcept, T && parameters, FiberFuture * future, const Options & options) noexcept
+    {
+        static_assert(sizeof(T) <= FIBER_PARAMETERS_SIZE);
+        Fiber * fiber = allocateFiber(
+            reinterpret_cast<FiberMain *>(fiberMain),
+            std::is_trivially_destructible_v<T> ? nullptr : destroyParameters<T>,
+            0,
+            future,
+            options.fiberResume,
+            options.fiberSuspend);
+        if (fiber)
+        {
+            std::construct_at(static_cast<T *>(getFiberParameters(fiber)), std::forward<T>(parameters));
+            schedule(fiber);
+            return 0;
+        }
+        return ENOMEM;
+    }
+
     /**
      * Start a fiber, block until it completes, and return its result.
      * Suspends the calling fiber cooperatively if called from a fiber context;
@@ -229,6 +254,8 @@ public:
      * Return true if fiber is currently running.
      */
     static bool isFiberRunning(Fiber * fiber) noexcept;
+
+    static void * getFiberParameters(Fiber * fiber) noexcept;
 
     /**
      * Resume a suspended fiber.
@@ -574,8 +601,13 @@ private:
 
     static void buildStealCandidates() noexcept;
     static void initCurrentFiber() noexcept;
-    static void * getFiberParameters(Fiber * fiber) noexcept;
-    static Fiber * allocateFiber(FiberMain * fiberMain, ParametersDtor * parametersDtor, uint8_t category, FiberFuture * future) noexcept;
+    static Fiber * allocateFiber(
+        FiberMain * fiberMain,
+        ParametersDtor * parametersDtor,
+        uint8_t category,
+        FiberFuture * future,
+        FiberSwitchCallback * fiberResume = nullptr,
+        FiberSwitchCallback * fiberSuspend = nullptr) noexcept;
     static void freeFiber(Fiber * fiber) noexcept;
     static void enqueueReady(Fiber * fiber) noexcept;
     static void yieldSuspendCallback(Fiber * fiber, void * context) noexcept;
