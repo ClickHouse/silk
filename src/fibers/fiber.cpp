@@ -19,6 +19,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cerrno>
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <mutex>
@@ -112,7 +113,7 @@ public:
     Fiber(bool isProxyFiber = false) noexcept;
     ~Fiber() noexcept;
 
-    bool initialize(FiberId fiberId, FiberMain * fiberMain, ParametersDtor * parametersDtor, FiberFuture * waitingFuture) noexcept;
+    bool initialize(FiberId fiberId, FiberMain * fiberMain, FiberParametersDtor * parametersDtor, FiberFuture * waitingFuture) noexcept;
     void deinitialize() noexcept;
 
     void switchToFiberContext() noexcept;
@@ -183,7 +184,7 @@ public:
         // by run for non-trivially-destructible T and called by
         // fiberContextMain immediately after fiberMain returns.
         FiberMain * fiberMain = nullptr;
-        ParametersDtor * parametersDtor = nullptr;
+        FiberParametersDtor * parametersDtor = nullptr;
 
         // Set by run to the FiberFuture to notify on completion.
         FiberFuture * waitingFuture = nullptr;
@@ -232,6 +233,8 @@ public:
 // are always zero, so the full 64-bit address fits in either field without masking.
 static_assert(alignof(Fiber) >= 8);
 
+static_assert(offsetof(Fiber, parameters) == FIBER_PARAMETERS_OFFSET);
+
 using WaitStack = LockFreeStack<Fiber, &Fiber::stackEntry>;
 using SuspendedList = List<Fiber, &Fiber::suspendedEntry>;
 
@@ -268,7 +271,8 @@ Fiber::~Fiber() noexcept
     }
 }
 
-bool Fiber::initialize(FiberId fiberId_, FiberMain * fiberMain_, ParametersDtor * parametersDtor_, FiberFuture * waitingFuture_) noexcept
+bool Fiber::initialize(
+    FiberId fiberId_, FiberMain * fiberMain_, FiberParametersDtor * parametersDtor_, FiberFuture * waitingFuture_) noexcept
 {
     state.store(FiberState::SUSPENDED, std::memory_order_relaxed);
 
@@ -1206,13 +1210,8 @@ bool FiberScheduler::isFiberRunning(Fiber * fiber) noexcept
     return fiber->state.load(std::memory_order_acquire) == FiberState::RUNNING;
 }
 
-void * FiberScheduler::getFiberParameters(Fiber * fiber) noexcept
-{
-    return fiber->parameters;
-}
-
 Fiber *
-FiberScheduler::allocateFiber(FiberMain * fiberMain, ParametersDtor * parametersDtor, uint8_t category, FiberFuture * future) noexcept
+FiberScheduler::allocateFiber(FiberMain * fiberMain, FiberParametersDtor * parametersDtor, uint8_t category, FiberFuture * future) noexcept
 {
     Fiber * fiber = scheduler->fiberPool.allocate();
     if (fiber)
@@ -1999,7 +1998,25 @@ void FiberScheduler::runFiber(Fiber * fiber, CpuTimer * timer) noexcept
     }
 
     threadFiber = fiber;
+
+    // Fiber gains the CPU: fires on the first run and on every resume. Runs on
+    // the scheduler thread immediately before control transfers into the fiber;
+    // since jump_fcontext is a same-thread stack switch, anything the callback
+    // installs (e.g. thread-local execution context) is visible to fiber code.
+    if (options.fiberResume)
+    {
+        options.fiberResume(fiber);
+    }
+
     fiber->switchToFiberContext();
+
+    // Fiber relinquishes the CPU: fires whether it suspended (will resume later)
+    // or stopped (terminated), so fiberResume/fiberSuspend calls always balance.
+    if (options.fiberSuspend)
+    {
+        options.fiberSuspend(fiber);
+    }
+
     threadFiber = nullptr;
 
     if (timer)
