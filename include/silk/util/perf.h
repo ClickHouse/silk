@@ -36,7 +36,7 @@
     do \
     { \
         static const char * names[] = {counters(DECLARE_COUNTER_NAME)}; \
-        int r = Perf::registerSimpleCounters(ptr, names, std::size(names)); \
+        int r = silk::Perf::registerSimpleCounters(ptr, names, std::size(names)); \
         SILK_ASSERT(!r); \
     } while (0)
 
@@ -59,7 +59,7 @@
     do \
     { \
         static const char * names[] = {counters(DECLARE_COUNTER_NAME)}; \
-        int r = Perf::registerMemCounters(ptr, names, std::size(names)); \
+        int r = silk::Perf::registerMemCounters(ptr, names, std::size(names)); \
         SILK_ASSERT(!r); \
     } while (0)
 
