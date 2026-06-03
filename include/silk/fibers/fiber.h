@@ -6,6 +6,7 @@
 
 #include <atomic>
 #include <cerrno>
+#include <cstdint>
 #include <memory>
 #include <utility>
 
@@ -22,6 +23,7 @@ class Fiber;
  * Types exceeding this limit cause a compile-time error.
  */
 static constexpr uint64_t FIBER_PARAMETERS_SIZE = 64;
+static constexpr uint64_t FIBER_PARAMETERS_OFFSET = 224;
 
 /**
  * Hard cap on CPU index (largest known socket: 384 cores).
@@ -37,7 +39,12 @@ using FiberMain = int(void * parameters) noexcept;
  * Destructor for the fiber's parameter buffer. Called after the entry point returns.
  * Null for trivially destructible parameter types.
  */
-using ParametersDtor = void(void * parameters) noexcept;
+using FiberParametersDtor = void(void * parameters) noexcept;
+
+/**
+ * Fiber switch callback.  Called when fiber suspended/resumed.
+ */
+using FiberSwitchCallback = void(Fiber * fiber) noexcept;
 
 /**
  * Packed fiber identity: [category:8 | cpu:10 | counter:46] stored as uint64_t.
@@ -137,6 +144,15 @@ public:
         // isolation (e.g. head-of-line blocking benchmarks).
         // Production should leave this off.
         bool disableWorkStealing = false;
+
+        // Optional per-fiber context-switch hooks. fiberResume fires on the
+        // thread about to run the fiber, immediately before control enters it
+        // (first run and every resume); fiberSuspend fires on the same thread
+        // immediately after control leaves it (on suspend and on termination).
+        // Calls always balance, so they suit save/restore of per-fiber state
+        // across the OS thread the fiber borrows. Not invoked for proxy fibers.
+        FiberSwitchCallback * fiberSuspend = nullptr;
+        FiberSwitchCallback * fiberResume = nullptr;
     };
 
     /**
@@ -229,6 +245,11 @@ public:
      * Return true if fiber is currently running.
      */
     static bool isFiberRunning(Fiber * fiber) noexcept;
+
+    /**
+     * Return a pointer to fiber parameters block.
+     */
+    static void * getFiberParameters(Fiber * fiber) noexcept { return reinterpret_cast<uint8_t *>(fiber) + FIBER_PARAMETERS_OFFSET; }
 
     /**
      * Resume a suspended fiber.
@@ -574,8 +595,8 @@ private:
 
     static void buildStealCandidates() noexcept;
     static void initCurrentFiber() noexcept;
-    static void * getFiberParameters(Fiber * fiber) noexcept;
-    static Fiber * allocateFiber(FiberMain * fiberMain, ParametersDtor * parametersDtor, uint8_t category, FiberFuture * future) noexcept;
+    static Fiber *
+    allocateFiber(FiberMain * fiberMain, FiberParametersDtor * parametersDtor, uint8_t category, FiberFuture * future) noexcept;
     static void freeFiber(Fiber * fiber) noexcept;
     static void enqueueReady(Fiber * fiber) noexcept;
     static void yieldSuspendCallback(Fiber * fiber, void * context) noexcept;
