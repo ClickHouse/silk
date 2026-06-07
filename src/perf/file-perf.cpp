@@ -298,7 +298,10 @@ int Benchmark::workerFiberMain(WorkerFiberParams * params) noexcept
     for (uint32_t i = 0; i < benchmark->cfg.iodepth; ++i)
     {
         int r = job->slots[i].future.wait();
-        SILK_ERROR("request failed: %s", std::strerror(r));
+        if (r)
+        {
+            SILK_ERROR("request failed: %s", std::strerror(r));
+        }
     }
 
     return 0;
