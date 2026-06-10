@@ -10,11 +10,12 @@ Fibers are lightweight stackful coroutines that suspend rather than block their 
 
 ## Documentation
 
+- [`docs/coroutines.md`](docs/coroutines.md) — stackless coroutines vs stackful fibers: design differences and performance data
+- [`docs/perf.md`](docs/perf.md) — `net-perf` and `file-perf` benchmark results and fio comparison
 - [`docs/scheduler.md`](docs/scheduler.md) — scheduler loop, context switching, suspension pattern, async IO, sleep cancellation, work-stealing design, and performance benchmarks
 - [`docs/sync.md`](docs/sync.md) — synchronization primitives: `FiberFuture`, `FiberFutex`, `FiberMutex`, `FiberSequencer`, `FiberEvent`, `FairFiberMutex`
+- [`docs/tls.md`](docs/tls.md) - thread-local storage with migrating fibers: why native `thread_local` is unsafe across a suspension, the rules for fiber code, and how silk hardens its own context accessors
 - [`docs/util.md`](docs/util.md) — utility library: lock-free data structures, TSC timing, memory pool, CPU topology, logging, assertions
-- [`docs/perf.md`](docs/perf.md) — `net-perf` and `file-perf` benchmark results and fio comparison
-- [`docs/coroutines.md`](docs/coroutines.md) — stackless coroutines vs stackful fibers: design differences and performance data
 - [`src/fibers/tests/`](src/fibers/tests/) — usage examples: fiber lifecycle, futures, synchronization primitives, async IO
 - [`src/gdb/fiber.py`](src/gdb/fiber.py) — GDB extension; load with `source src/gdb/fiber.py`, then use `fiber-list`, `fiber-savecontext`, `fiber-restorecontext`, `fiber-switchcontext`
 

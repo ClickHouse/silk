@@ -594,7 +594,6 @@ private:
     }
 
     static void buildStealCandidates() noexcept;
-    static void initCurrentFiber() noexcept;
     static Fiber *
     allocateFiber(FiberMain * fiberMain, FiberParametersDtor * parametersDtor, uint8_t category, FiberFuture * future) noexcept;
     static void freeFiber(Fiber * fiber) noexcept;

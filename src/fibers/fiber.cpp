@@ -847,7 +847,7 @@ bool FiberScheduler::ProcessorState::enqueueIo(IoFuture * future, Setup && setup
             if (profiler)
             {
                 future->submitTimestamp = Tsc::getCycles();
-                future->category = threadFiber ? threadFiber->fiberId.category : 0;
+                future->category = getCurrentFiberId().category;
             }
 
             // TSan needs an explicit barrier between submission/completion.
@@ -1177,32 +1177,35 @@ void FiberScheduler::destroy() noexcept
     delete scheduler;
 }
 
-FiberId FiberScheduler::getCurrentFiberId() noexcept
+// noinline is load-bearing, not a hint. These accessors read the threadFiber/proxyFiber
+// thread-locals. A fiber may suspend on one OS thread and resume on another, so a caller
+// that brackets a suspension point must observe the resuming thread's value.
+// If the accessor were inlined, the compiler could materialize the thread pointer once
+// into a callee-saved register and reuse it after the suspension; jump_fcontext preserves
+// callee-saved registers across the switch, so the cached pointer would still address the
+// previous (now idle) thread's thread-local, reading a stale value or null.
+// Keeping the access behind a real call boundary forces a fresh thread-pointer read on
+// every invocation.
+__attribute__((noinline)) FiberId FiberScheduler::getCurrentFiberId() noexcept
 {
     return threadFiber ? threadFiber->fiberId : FiberId{};
 }
 
-Fiber * FiberScheduler::getCurrentFiber() noexcept
+__attribute__((noinline)) Fiber * FiberScheduler::getCurrentFiber() noexcept
 {
     // Fast path: thread is running a regular fiber, or has already lazily
-    // allocated a proxy fiber. Both branches stay inline; only the very first
-    // call from a non-fiber thread reaches initCurrentFiber.
+    // allocated a proxy fiber.
     if (threadFiber)
     {
         return threadFiber;
     }
     if (!proxyFiber) [[unlikely]]
     {
-        initCurrentFiber();
+        // Lazily create a proxy fiber so a non-fiber thread can still participate
+        // in fiber-aware APIs (e.g. FiberMutex::lock, FiberScheduler::run-and-wait).
+        proxyFiber = std::make_unique<Fiber>(true);
     }
     return proxyFiber.get();
-}
-
-__attribute__((noinline)) void FiberScheduler::initCurrentFiber() noexcept
-{
-    // Lazily create a proxy fiber so a non-fiber thread can still participate
-    // in fiber-aware APIs (e.g. FiberMutex::lock, FiberScheduler::run-and-wait).
-    proxyFiber = std::make_unique<Fiber>(true);
 }
 
 bool FiberScheduler::isFiberRunning(Fiber * fiber) noexcept
