@@ -1,7 +1,6 @@
 # Utility Library
 
-All utilities live in `src/util/`. They are used by the fiber scheduler and its
-synchronization primitives but have no dependency on them.
+All utilities live in `src/util/`. They are used by the fiber scheduler and its synchronization primitives but have no dependency on them.
 
 ---
 
@@ -20,22 +19,15 @@ Cross-platform constants and thin OS wrappers.
 | `cpuPause()` | CPU pause hint for spin loops |
 | `getTimeNanoseconds()` | Monotonic clock in nanoseconds (`CLOCK_MONOTONIC`) |
 
-**`cpuPause()`** emits `PAUSE` on x86-64 and `ISB` on aarch64. `ISB` is used
-instead of `YIELD` because `YIELD` is a NOP on non-SMT Graviton cores, providing
-no backoff. `ISB` flushes the pipeline and takes ~13 ns, equivalent to x86
-`PAUSE`.
+**`cpuPause()`** emits `PAUSE` on x86-64 and `ISB` on aarch64. `ISB` is used instead of `YIELD` because `YIELD` is a NOP on non-SMT Graviton cores, providing no backoff. `ISB` flushes the pipeline and takes ~13 ns, equivalent to x86 `PAUSE`.
 
-**Prefer `Tsc::getCycles()` over `getTimeNanoseconds()`** for hot-path timing.
-`getTimeNanoseconds()` calls `clock_gettime` (a syscall on some kernels); `Tsc`
-is a single instruction with no syscall overhead.
+**Prefer `Tsc::getCycles()` over `getTimeNanoseconds()`** for hot-path timing. `getTimeNanoseconds()` calls `clock_gettime` (a syscall on some kernels); `Tsc` is a single instruction with no syscall overhead.
 
 ---
 
 ## TSC (`tsc.h`)
 
-Reads the CPU timestamp counter and converts between cycles and nanoseconds.
-Frequency is detected once at startup and cached; conversions use
-fixed-point multiply-shift (`cycles * fp >> 20`) with no division.
+Reads the CPU timestamp counter and converts between cycles and nanoseconds. Frequency is detected once at startup and cached; conversions use fixed-point multiply-shift (`cycles * fp >> 20`) with no division.
 
 ```cpp
 uint64_t start = Tsc::getCycles();
@@ -45,10 +37,7 @@ uint64_t elapsed = Tsc::cyclesToNanoseconds(Tsc::getCycles() - start);
 uint64_t deadline = Tsc::getCycles() + Tsc::nanosecondsToCycles(1'000'000); // 1 ms
 ```
 
-**`getCycles()`** is `rdtsc` on x86-64 and `cntvct_el0` on aarch64. No
-serializing barrier is issued; instruction reordering is not a concern for
-deadline calculation. For precise interval measurement, bracket the reads with
-`lfence`.
+**`getCycles()`** is `rdtsc` on x86-64 and `cntvct_el0` on aarch64. No serializing barrier is issued; instruction reordering is not a concern for deadline calculation. For precise interval measurement, bracket the reads with `lfence`.
 
 **Frequency detection** (x86-64, in order):
 1. KVM hypervisor leaf `0x40000010` EAX (kHz) -- AWS Nitro, GCP
@@ -61,25 +50,17 @@ On aarch64, frequency comes from `cntfrq_el0`.
 
 ## Spin Utilities (`spinlock.h`)
 
-**`spinWait(pred, count = 64)`** -- spins up to `count` iterations calling
-`cpuPause()` and checking `pred` after each. Returns `true` if `pred` returned
-`true`, `false` if the limit was exhausted. Default 64 iterations covers ~2 us
-on Skylake, roughly one OS context-switch latency.
+**`spinWait(pred, count = 64)`** -- spins up to `count` iterations calling `cpuPause()` and checking `pred` after each. Returns `true` if `pred` returned `true`, `false` if the limit was exhausted. Default 64 iterations covers ~2 us on Skylake, roughly one OS context-switch latency.
 
-**`SpinLock`** -- test-and-set spinlock with two-phase backoff: spin with
-`cpuPause()` for `SPIN_COUNT` iterations, then fall back to `schedYield()` and
-repeat. Conforms to `BasicLockable`. Used where fiber-aware suspension is not
-available (e.g. inside `MemoryPool`).
+**`SpinLock`** -- test-and-set spinlock with two-phase backoff: spin with `cpuPause()` for `SPIN_COUNT` iterations, then fall back to `schedYield()` and repeat. Conforms to `BasicLockable`. Used where fiber-aware suspension is not available (e.g. inside `MemoryPool`).
 
 ---
 
 ## LockFreeStack (`stack.h`)
 
-Lock-free intrusive LIFO stack. ABA-safe via 128-bit tagged pointer
-(`CMPXCHG16B` on x86-64, `CASP LSE` on aarch64).
+Lock-free intrusive LIFO stack. ABA-safe via 128-bit tagged pointer (`CMPXCHG16B` on x86-64, `CASP LSE` on aarch64).
 
-Objects must embed a `StackEntry` member. The typed wrapper takes a
-member pointer at compile time and handles object/entry conversion.
+Objects must embed a `StackEntry` member. The typed wrapper takes a member pointer at compile time and handles object/entry conversion.
 
 ```cpp
 struct MyNode {
@@ -98,22 +79,15 @@ while (list) {
 }
 ```
 
-`popAll()` detaches the entire chain atomically. Iteration uses the static
-`next()` helper to follow `stackEntry.next` pointers.
+`popAll()` detaches the entire chain atomically. Iteration uses the static `next()` helper to follow `stackEntry.next` pointers.
 
 ---
 
 ## ShardedStack (`sharded-stack.h`)
 
-Per-CPU intrusive LIFO stack backed by restartable sequences (rseq). The fast
-path (push/pop when the per-CPU list is non-empty/non-full) executes zero atomic
-instructions. The kernel aborts and restarts the rseq critical section on
-preemption or migration, so plain loads/stores suffice for per-CPU state. The
-slow path transfers a full batch to/from a global pool via a single 128-bit CAS,
-amortising its cost over `batchSize` operations.
+Per-CPU intrusive LIFO stack backed by restartable sequences (rseq). The fast path (push/pop when the per-CPU list is non-empty/non-full) executes zero atomic instructions. The kernel aborts and restarts the rseq critical section on preemption or migration, so plain loads/stores suffice for per-CPU state. The slow path transfers a full batch to/from a global pool via a single 128-bit CAS, amortising its cost over `batchSize` operations.
 
-Objects must embed a `StackEntry` member; the typed wrapper `ShardedStack` takes
-a member pointer as a template argument.
+Objects must embed a `StackEntry` member; the typed wrapper `ShardedStack` takes a member pointer as a template argument.
 
 ```cpp
 struct MyNode {
@@ -138,16 +112,13 @@ stack.flush();               // move per-CPU buffers to the global pool
 | 16 | 5.53 | 6092 | 1101x |
 | 32 | 10.7 | 22123 | 2068x |
 
-`ShardedStack` stays below 6 ns up to 16 threads; `LockFreeStack` degrades
-rapidly because every operation issues a `CMPXCHG16B` that bounces the cache
-line across all contending CPUs.
+`ShardedStack` stays below 6 ns up to 16 threads; `LockFreeStack` degrades rapidly because every operation issues a `CMPXCHG16B` that bounces the cache line across all contending CPUs.
 
 ---
 
 ## Queue (`queue.h`)
 
-Lock-free MPMC FIFO queue (Michael & Scott algorithm). Not intrusive -- nodes
-are allocated from a shared `MemoryPool<QueueNode>` and store a `void*` value.
+Lock-free MPMC FIFO queue (Michael & Scott algorithm). Not intrusive -- nodes are allocated from a shared `MemoryPool<QueueNode>` and store a `void*` value.
 
 ```cpp
 Queue<MyObject> queue;
@@ -155,16 +126,13 @@ queue.enqueue(&obj);
 MyObject * obj = queue.dequeue(); // nullptr if empty
 ```
 
-`empty()` is a relaxed check and may transiently return `true` during a
-concurrent enqueue. Use it as a hint only.
+`empty()` is a relaxed check and may transiently return `true` during a concurrent enqueue. Use it as a hint only.
 
 ---
 
 ## BoundedQueue (`bounded-queue.h`)
 
-Bounded lock-free MPMC FIFO queue (Dmitry Vyukov sequence-number algorithm).
-Capacity is fixed at construction and must be a power of two. Slots are
-heap-allocated once; no per-operation allocation.
+Bounded lock-free MPMC FIFO queue (Dmitry Vyukov sequence-number algorithm). Capacity is fixed at construction and must be a power of two. Slots are heap-allocated once; no per-operation allocation.
 
 ```cpp
 BoundedQueue<Fiber *> readyQueue(1024);
@@ -173,19 +141,15 @@ Fiber * fiber;
 bool ok = readyQueue.dequeue(&fiber); // false if empty
 ```
 
-Slots are cache-line aligned to prevent false sharing between the enqueue and
-dequeue positions. Used for the per-CPU ready queue in the fiber scheduler.
+Slots are cache-line aligned to prevent false sharing between the enqueue and dequeue positions. Used for the per-CPU ready queue in the fiber scheduler.
 
 ---
 
 ## Tree (`tree.h`)
 
-Intrusive red-black tree wrapping `boost::intrusive::set` / `multiset`. All
-operations are O(log n).
+Intrusive red-black tree wrapping `boost::intrusive::set` / `multiset`. All operations are O(log n).
 
-Objects must embed a `TreeEntry` member (`boost::intrusive::set_member_hook<>`).
-Template parameters: element type, member pointer to hook, comparator,
-`AllowDuplicates` (defaults to `false`).
+Objects must embed a `TreeEntry` member (`boost::intrusive::set_member_hook<>`). Template parameters: element type, member pointer to hook, comparator, `AllowDuplicates` (defaults to `false`).
 
 ```cpp
 struct Task {
@@ -203,21 +167,15 @@ Task * earliest = tree.min();
 tree.remove(earliest);
 ```
 
-`insert()` returns `nullptr` on success; for unique trees it returns the
-existing element if the key is already present. `remove()` returns the
-in-order successor, or `nullptr` if none. Used for sleep deadline ordering in
-the fiber scheduler and for the ordered waiter tree in `FiberSequencer`.
+`insert()` returns `nullptr` on success; for unique trees it returns the existing element if the key is already present. `remove()` returns the in-order successor, or `nullptr` if none. Used for sleep deadline ordering in the fiber scheduler and for the ordered waiter tree in `FiberSequencer`.
 
 ---
 
 ## MemoryPool (`memory-pool.h`)
 
-Lock-free per-CPU memory pool. Objects are allocated in 4-page chunks; freed
-objects go onto a per-CPU free list and are reused before a new chunk is
-allocated.
+Lock-free per-CPU memory pool. Objects are allocated in 4-page chunks; freed objects go onto a per-CPU free list and are reused before a new chunk is allocated.
 
-Objects must embed a `StackEntry` member. Pass a pointer-to-member as the
-second template argument to the typed wrapper.
+Objects must embed a `StackEntry` member. Pass a pointer-to-member as the second template argument to the typed wrapper.
 
 ```cpp
 struct MyNode {
@@ -230,21 +188,15 @@ MyNode * node = pool.allocate(); // nullptr if OOM
 pool.deallocate(node);
 ```
 
-**Per-CPU design** -- the free list is a `ShardedStack`: each CPU holds a local
-linked list updated via rseq critical sections (zero atomic instructions on the
-fast path). When the list fills or empties, a batch is transferred to/from a
-global pool via a single 128-bit CAS. Allocation and deallocation stay local to
-one CPU with no contention on the fast path.
+**Per-CPU design** -- the free list is a `ShardedStack`: each CPU holds a local linked list updated via rseq critical sections (zero atomic instructions on the fast path). When the list fills or empties, a batch is transferred to/from a global pool via a single 128-bit CAS. Allocation and deallocation stay local to one CPU with no contention on the fast path.
 
-Objects are constructed once (via placement new) when first carved from a
-chunk, and destroyed (via `std::destroy_at`) when the pool is torn down.
+Objects are constructed once (via placement new) when first carved from a chunk, and destroyed (via `std::destroy_at`) when the pool is torn down.
 
 ---
 
 ## CPU Topology (`cpu.h`)
 
-Reads CPU topology from sysfs and computes steal cost between two CPUs. Used
-by the work-stealing scheduler to order steal candidates.
+Reads CPU topology from sysfs and computes steal cost between two CPUs. Used by the work-stealing scheduler to order steal candidates.
 
 ```cpp
 std::vector<CpuTopology> topologies(processorCount);
@@ -257,8 +209,7 @@ uint64_t cost = topologyCostCycles(topologies[a], topologies[b]);
 - `/sys/devices/system/cpu/cpuN/topology/core_id`
 - `/sys/devices/system/node/nodeN/cpulist` (NUMA node membership)
 
-Fields are left as `UINT32_MAX` for CPUs whose sysfs entries are absent
-(containers, some VMs).
+Fields are left as `UINT32_MAX` for CPUs whose sysfs entries are absent (containers, some VMs).
 
 **`topologyCostCycles()`** returns estimated steal cost in TSC cycles:
 
@@ -272,11 +223,7 @@ Fields are left as `UINT32_MAX` for CPUs whose sysfs entries are absent
 
 ## Assert (`assert.h`)
 
-`ASSERT(condition[, message])` -- evaluates `condition` and, if false, prints a
-symbolized stack trace (via libbacktrace), the failed condition, file, line, and
-optional formatted message, then calls `abort()`. The condition string and
-location are captured at the call site; the optional message supports
-`std::format`-style arguments.
+`ASSERT(condition[, message])` -- evaluates `condition` and, if false, prints a symbolized stack trace (via libbacktrace), the failed condition, file, line, and optional formatted message, then calls `abort()`. The condition string and location are captured at the call site; the optional message supports `std::format`-style arguments.
 
 ```cpp
 ASSERT(ptr != nullptr);
@@ -296,16 +243,13 @@ LOG_WARN("io_uring submission queue full");
 LOG_ERROR("failed to allocate fiber stack: {}", strerror(errno));
 ```
 
-The level check is inlined at the call site so disabled levels have no
-formatting overhead. Default level is `INFO`. Change it with
-`Logger::setLevel(LogLevel::DEBUG)`.
+The level check is inlined at the call site so disabled levels have no formatting overhead. Default level is `INFO`. Change it with `Logger::setLevel(LogLevel::DEBUG)`.
 
 ---
 
 ## Sanitizer Support (`sanitizers.h`)
 
-Macros that expand to sanitizer runtime calls when the build is instrumented,
-and to no-ops otherwise.
+Macros that expand to sanitizer runtime calls when the build is instrumented, and to no-ops otherwise.
 
 | Macro | Purpose |
 |---|---|
@@ -315,6 +259,4 @@ and to no-ops otherwise.
 | `TSAN_ACQUIRE(addr)` / `TSAN_RELEASE(addr)` | Synthesize happens-before edges |
 | `TSAN_IGNORE_BEGIN()` / `TSAN_IGNORE_END()` | Suppress TSan reports for a region |
 
-These are called by the fiber scheduler around every `fcontext_t` switch so
-that TSan correctly tracks happens-before across fiber boundaries. Without them,
-TSan would report false positives for every access to fiber-local state.
+These are called by the fiber scheduler around every `fcontext_t` switch so that TSan correctly tracks happens-before across fiber boundaries. Without them, TSan would report false positives for every access to fiber-local state.

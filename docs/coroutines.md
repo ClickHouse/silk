@@ -98,8 +98,7 @@ Condition 2 is violated by any real scheduler (work-stealing or otherwise). HALO
 
 ### Context switch cost
 
-From "Stackless vs. Stackful Coroutines: A Comparative Study" (SC '25 Workshops, 2025):
-https://dl.acm.org/doi/10.1145/3731599.3767502
+From "Stackless vs. Stackful Coroutines: A Comparative Study" (SC '25 Workshops, 2025): https://dl.acm.org/doi/10.1145/3731599.3767502
 
 | | Context switch | Task creation |
 |---|---|---|
@@ -140,8 +139,7 @@ A stackless coroutine task creation (heap frame allocation + `get_return_object`
 
 ### Deep call chains
 
-From "Stackful Coroutine Made Fast" (Alibaba Photon, October 2024):
-https://photonlibos.github.io/blog-20241014/stackful-coroutine-made-fast.html
+From "Stackful Coroutine Made Fast" (Alibaba Photon, October 2024): https://photonlibos.github.io/blog-20241014/stackful-coroutine-made-fast.html
 
 Tower of Hanoi benchmark (recursive workload, increasing call depth):
 
@@ -169,8 +167,7 @@ With `mmap`-based stack allocation (4 KB alignment, ASLR), different fibers get 
 
 ### Heap allocation overhead per request
 
-From "CoroBase: Coroutine-Oriented Main-Memory Database Engine" (VLDB 2021):
-http://vldb.org/pvldb/vol14/p431-he.pdf
+From "CoroBase: Coroutine-Oriented Main-Memory Database Engine" (VLDB 2021): http://vldb.org/pvldb/vol14/p431-he.pdf
 
 Measured **808 bytes per request** in nested coroutine frames (5+ frames in a chain), demonstrating how heap allocation cost accumulates with call depth.
 
