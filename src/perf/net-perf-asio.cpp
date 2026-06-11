@@ -9,6 +9,7 @@
 #include <silk/util/tsc.h>
 
 #include <boost/asio.hpp>
+#include <boost/program_options.hpp>
 
 #include <atomic>
 #include <chrono>
@@ -23,8 +24,6 @@
 #include <vector>
 
 #include <pthread.h>
-
-#include <cxxopts.hpp>
 
 namespace asio = boost::asio;
 using tcp = asio::ip::tcp;
@@ -375,39 +374,43 @@ static void printJson(std::vector<uint64_t> & latNs, const ClientConfig & cfg)
 static void runServer(int argc, char ** argv)
 {
     ServerConfig cfg;
-    std::string delayStr = "0";
     bool verbose = false;
 
-    cxxopts::Options cli("net-perf-asio server", "net-perf-asio server options");
+    namespace po = boost::program_options;
+    po::options_description desc("net-perf-asio server options");
+
+    std::string delayStr = "0";
 
     // clang-format off
-    cli.add_options()
-        ("h,help",    "show this help")
-        ("host",      "listen host",                                     cxxopts::value<std::string>(cfg.host))
-        ("port",      "listen port",                                     cxxopts::value<uint16_t>(cfg.port))
-        ("msg-size",  "echo message size in bytes",                      cxxopts::value<uint32_t>(cfg.msgSize))
-        ("delay",     "server-side delay per message (e.g. 1ms, 100us)", cxxopts::value<std::string>(delayStr))
-        ("v,verbose", "enable debug logging",                            cxxopts::value<bool>(verbose))
+    desc.add_options()
+        ("help,h", "show this help")
+        ("host",      po::value(&cfg.host),      "listen host")
+        ("port",      po::value(&cfg.port),      "listen port")
+        ("msg-size",  po::value(&cfg.msgSize),   "echo message size in bytes")
+        ("delay",     po::value(&delayStr),      "server-side delay per message (e.g. 1ms, 100us)")
+        ("verbose,v", po::bool_switch(&verbose), "enable debug logging")
         ;
     // clang-format on
 
+    po::variables_map vm;
     try
     {
-        auto result = cli.parse(argc, argv);
-        if (result.count("help"))
+        po::store(po::parse_command_line(argc, argv, desc), vm);
+        if (vm.count("help"))
         {
-            std::cout << cli.help() << "\n";
+            std::cout << "usage: net-perf-asio server [options]\n" << desc << "\n";
             return;
         }
+        po::notify(vm);
         cfg.delayNs = parseDuration(delayStr);
         if (verbose)
         {
             silk::Logger::setLevel(silk::LogLevel::DEBUG);
         }
     }
-    catch (const cxxopts::exceptions::exception & ex)
+    catch (const po::error & ex)
     {
-        std::cerr << "error: " << ex.what() << "\n" << cli.help() << "\n";
+        std::cerr << "error: " << ex.what() << "\n" << desc << "\n";
         exit(1);
     }
 
@@ -447,36 +450,39 @@ static void runClient(int argc, char ** argv)
     ClientConfig cfg;
     bool verbose = false;
 
-    cxxopts::Options cli("net-perf-asio client", "net-perf-asio client options");
+    namespace po = boost::program_options;
+    po::options_description desc("net-perf-asio client options");
 
     std::string durationStr = "10s";
     std::string warmupStr = "2s";
     std::string stallDurationStr = "0";
 
     // clang-format off
-    cli.add_options()
-        ("h,help",         "show this help")
-        ("host",           "server host",                                                    cxxopts::value<std::string>(cfg.host))
-        ("port",           "server port",                                                    cxxopts::value<uint16_t>(cfg.port))
-        ("connections",    "parallel connections",                                           cxxopts::value<uint32_t>(cfg.numConnections))
-        ("msg-size",       "message size in bytes",                                          cxxopts::value<uint32_t>(cfg.msgSize))
-        ("duration",       "measurement duration (e.g. 10s, 500ms)",                         cxxopts::value<std::string>(durationStr))
-        ("warmup",         "warmup duration (e.g. 2s, 500ms)",                               cxxopts::value<std::string>(warmupStr))
-        ("stall-rate",     "per-connection Poisson rate of stall messages (Hz, 0 disables)", cxxopts::value<double>(cfg.stallRateHz))
-        ("stall-duration", "stall duration per stall event (e.g. 100us, 1ms)",               cxxopts::value<std::string>(stallDurationStr))
-        ("print-counters", "include counters in the JSON report",                            cxxopts::value<bool>(cfg.printCounters))
-        ("v,verbose",      "enable debug logging",                                           cxxopts::value<bool>(verbose))
+    desc.add_options()
+        ("help,h", "show this help")
+        ("host",        po::value(&cfg.host),           "server host")
+        ("port",        po::value(&cfg.port),           "server port")
+        ("connections", po::value(&cfg.numConnections), "parallel connections")
+        ("msg-size",    po::value(&cfg.msgSize),        "message size in bytes")
+        ("duration",    po::value(&durationStr),        "measurement duration (e.g. 10s, 500ms)")
+        ("warmup",      po::value(&warmupStr),          "warmup duration (e.g. 2s, 500ms)")
+        ("stall-rate",     po::value(&cfg.stallRateHz),    "per-connection Poisson rate of stall messages (Hz, 0 disables)")
+        ("stall-duration", po::value(&stallDurationStr),   "stall duration per stall event (e.g. 100us, 1ms)")
+        ("print-counters", po::bool_switch(&cfg.printCounters), "include counters in the JSON report")
+        ("verbose,v",   po::bool_switch(&verbose),      "enable debug logging")
         ;
     // clang-format on
 
+    po::variables_map vm;
     try
     {
-        auto result = cli.parse(argc, argv);
-        if (result.count("help"))
+        po::store(po::parse_command_line(argc, argv, desc), vm);
+        if (vm.count("help"))
         {
-            std::cout << cli.help() << "\n";
+            std::cout << "usage: net-perf-asio client [options]\n" << desc << "\n";
             return;
         }
+        po::notify(vm);
         cfg.durationNs = parseDuration(durationStr);
         cfg.warmupNs = parseDuration(warmupStr);
         cfg.stallNs = parseDuration(stallDurationStr);
@@ -485,9 +491,9 @@ static void runClient(int argc, char ** argv)
             silk::Logger::setLevel(silk::LogLevel::DEBUG);
         }
     }
-    catch (const cxxopts::exceptions::exception & ex)
+    catch (const po::error & ex)
     {
-        std::cerr << "error: " << ex.what() << "\n" << cli.help() << "\n";
+        std::cerr << "error: " << ex.what() << "\n" << desc << "\n";
         exit(1);
     }
 
