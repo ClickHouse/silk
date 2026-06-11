@@ -232,13 +232,39 @@ TEST(FiberBlockingQueue, teardownSubsequentCallsFail)
     EXPECT_EQ(queue.dequeue(&value), ECANCELED);
 }
 
-// After teardown, tryEnqueue and tryDequeue return false immediately.
+// After teardown, tryEnqueue and tryDequeue return false immediately on an empty queue.
 TEST(FiberBlockingQueue, teardownTryCallsFail)
 {
     FiberBlockingQueue<int> queue(4);
     queue.teardown();
     EXPECT_FALSE(queue.tryEnqueue(1));
     int value = 0;
+    EXPECT_FALSE(queue.tryDequeue(&value));
+}
+
+// A torn-down queue still drains: dequeue / tryDequeue yield the remaining items and report closed only once empty.
+TEST(FiberBlockingQueue, teardownDrainsRemaining)
+{
+    FiberBlockingQueue<int> queue(4);
+    EXPECT_EQ(queue.enqueue(1), 0);
+    EXPECT_EQ(queue.enqueue(2), 0);
+    EXPECT_EQ(queue.enqueue(3), 0);
+
+    queue.teardown();
+
+    EXPECT_EQ(queue.enqueue(4), ECANCELED);
+
+    int value = 0;
+    EXPECT_EQ(queue.dequeue(&value), 0);
+    EXPECT_EQ(value, 1);
+
+    EXPECT_TRUE(queue.tryDequeue(&value));
+    EXPECT_EQ(value, 2);
+
+    EXPECT_EQ(queue.dequeue(&value), 0);
+    EXPECT_EQ(value, 3);
+
+    EXPECT_EQ(queue.dequeue(&value), ECANCELED);
     EXPECT_FALSE(queue.tryDequeue(&value));
 }
 

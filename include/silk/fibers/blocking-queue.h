@@ -14,7 +14,9 @@ namespace silk
  *
  * enqueue and dequeue suspend the calling fiber when the queue is full or
  * empty, respectively, and resume when space or an item becomes available.
- * teardown unblocks all current and future waiters with ECANCELED.
+ * teardown stops new enqueues and unblocks waiters; a torn-down queue still
+ * drains - dequeue / tryDequeue yield the remaining items and report closed
+ * (ECANCELED / false) only once empty, so an owner can dequeue to clean up.
  */
 template <typename T>
 class FiberBlockingQueue
@@ -52,11 +54,11 @@ public:
 
     /**
      * Write the head value into @p value, suspending if empty.
-     * Returns 0 on success or ECANCELED if the queue has been torn down.
+     * Returns 0 on success, or ECANCELED once the queue is both empty and torn down (remaining items drain first).
      */
     [[nodiscard]] int dequeue(T * value) noexcept
     {
-        while (!itemAvailable.stopped())
+        for (;;)
         {
             uint64_t token = itemAvailable.get();
             if (queue.dequeue(value))
@@ -65,14 +67,19 @@ public:
                 return 0;
             }
 
+            // Drain before honoring teardown: a torn-down queue still yields its remaining items and reports
+            // ECANCELED only once empty, so an owner can dequeue to clean up after teardown.
+            if (itemAvailable.stopped())
+            {
+                return ECANCELED;
+            }
+
             int r = itemAvailable.wait(token + 1);
             if (r)
             {
                 return r;
             }
         }
-
-        return ECANCELED;
     }
 
     /** Append a value without suspending. Returns false if the queue is full or torn down. */
@@ -86,10 +93,10 @@ public:
         return false;
     }
 
-    /** Write the head value into @p value without suspending. Returns false if empty or torn down. */
+    /** Write the head value into @p value without suspending. Drains after teardown; returns false only when empty. */
     [[nodiscard]] bool tryDequeue(T * value) noexcept
     {
-        if (!itemAvailable.stopped() && queue.dequeue(value))
+        if (queue.dequeue(value))
         {
             spaceAvailable.post();
             return true;
@@ -97,7 +104,7 @@ public:
         return false;
     }
 
-    /** Unblock all current and future enqueue/dequeue callers with ECANCELED. */
+    /** Stop new enqueues and unblock waiters: enqueue returns ECANCELED; dequeue drains the rest, then ECANCELED. */
     void teardown() noexcept
     {
         spaceAvailable.stop();
