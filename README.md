@@ -25,7 +25,7 @@ Fibers are lightweight stackful coroutines that suspend rather than block their 
 - Ninja
 - Clang 21
 - ccache (optional)
-- Boost (`libboost-dev`, `libboost-program-options-dev`)
+- Boost (`libboost-dev`, `libboost-context-dev`, `libboost-program-options-dev`)
 - libelf (`libelf-dev`) — optional, required only for `src/profiler`; the profiler is silently skipped if absent.
 
 GTest, Google Benchmark, libbacktrace, liburing, librseq, libbpf, bpftool, and cxxopts are bundled as submodules under `contrib/` and do not need to be installed separately. The two Boost.Context asm sources used for fiber switching are vendored under `contrib/fcontext/`, and systemtap's USDT headers (`<sys/sdt.h>` + `<sys/sdt-config.h>`) under `contrib/systemtap-sdt/` (both vendored directly, no submodule). Poco, the AWS SDK, and jemalloc are built on demand via `--build-poco`, `--build-aws`, and `--build-jemalloc` passed to `configure`.
