@@ -20,7 +20,7 @@ static int parseMapsFile(const char * path, Callback callback) noexcept
     if (!f)
     {
         int r = errno;
-        SILK_ERROR("open %s: %s", path, ::strerror(r));
+        SILK_ERROR("open %s: %s", path, std::strerror(r));
         return r;
     }
 
@@ -81,7 +81,7 @@ int Symbolizer::readKallsyms() noexcept
     if (!f)
     {
         int r = errno;
-        SILK_ERROR("open /proc/kallsyms: %s", ::strerror(r));
+        SILK_ERROR("open /proc/kallsyms: %s", std::strerror(r));
         return r;
     }
 
@@ -267,7 +267,7 @@ void Symbolizer::backtraceErrorCb(void * data, const char * msg, int errnum)
 
     if (errnum)
     {
-        SILK_ERROR("libbacktrace: %s (%s)", msg, ::strerror(errnum));
+        SILK_ERROR("libbacktrace: %s (%s)", msg, std::strerror(errnum));
     }
     else
     {

@@ -134,7 +134,7 @@ int main(int argc, char ** argv)
     int r = symbolizer.readSelfMappings();
     if (r)
     {
-        SILK_ERROR("readSelfMappings: %s", strerror(r));
+        SILK_ERROR("readSelfMappings: %s", std::strerror(r));
         return r;
     }
 
@@ -142,7 +142,7 @@ int main(int argc, char ** argv)
     r = symbolizer.readMappings(targetPid);
     if (r)
     {
-        SILK_ERROR("readMappings: %s", strerror(r));
+        SILK_ERROR("readMappings: %s", std::strerror(r));
         return r;
     }
 
@@ -165,7 +165,7 @@ int main(int argc, char ** argv)
     r = profiler.start();
     if (r)
     {
-        SILK_ERROR("profiler start failed: %s", strerror(r));
+        SILK_ERROR("profiler start failed: %s", std::strerror(r));
         return r;
     }
 

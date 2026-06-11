@@ -148,7 +148,7 @@ int Profiler::start() noexcept
                     // CPU offline
                     continue;
                 }
-                SILK_WARN("perf_event_open cpu %d: %s", cpu, strerror(r));
+                SILK_WARN("perf_event_open cpu %d: %s", cpu, std::strerror(r));
                 continue;
             }
 
@@ -156,7 +156,7 @@ int Profiler::start() noexcept
             if (!link)
             {
                 int r = errno;
-                SILK_WARN("attach perf_event cpu %d: %s", cpu, strerror(r));
+                SILK_WARN("attach perf_event cpu %d: %s", cpu, std::strerror(r));
                 ::close(fd);
                 continue;
             }
