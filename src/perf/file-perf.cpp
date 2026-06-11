@@ -9,6 +9,8 @@
 #include <silk/util/platform.h>
 #include <silk/util/tsc.h>
 
+#include <boost/program_options.hpp>
+
 #include <atomic>
 #include <cerrno>
 #include <cmath>
@@ -25,7 +27,6 @@
 #include <pthread.h>
 #include <unistd.h>
 
-#include <cxxopts.hpp>
 #include <sys/stat.h>
 
 //
@@ -390,47 +391,45 @@ int main(int argc, char ** argv)
     std::string warmupStr = "2s";
     bool verbose = false;
 
-    cxxopts::Options cli("file-perf", "file-perf options");
+    namespace po = boost::program_options;
+    po::options_description desc("file-perf options");
 
     // clang-format off
-    cli.add_options()
-        ("h,help",         "show this help")
-        ("numjobs",        "number of concurrent worker fibers",                                            cxxopts::value<uint32_t>(cfg.numJobs))
-        ("iodepth",        "per-fiber IO queue depth",                                                      cxxopts::value<uint32_t>(cfg.iodepth))
-        ("bs",             "block size (e.g. 4k, 1m)",                                                      cxxopts::value<std::string>(bsStr))
-        ("rw",             "I/O mode: randread | seqread | randwrite",                                      cxxopts::value<std::string>(rwStr))
-        ("size",           "file size (e.g. 1g, 512m)",                                                     cxxopts::value<std::string>(sizeStr))
-        ("runtime",        "measurement duration (e.g. 10s, 500ms)",                                        cxxopts::value<std::string>(runtimeStr))
-        ("warmup",         "warmup duration (e.g. 2s, 500ms)",                                              cxxopts::value<std::string>(warmupStr))
-        ("filename",       "file path",                                                                     cxxopts::value<std::string>(cfg.filename))
-        ("direct",         "use O_DIRECT (bypass page cache)",                                              cxxopts::value<bool>(cfg.direct))
-        ("fixed-buffers",  "use registered buffers (IORING_OP_READ_FIXED / WRITE_FIXED)",                   cxxopts::value<bool>(cfg.fixedBuffers))
-        ("print-counters", "enable per-CPU profiler and include counters in the JSON report",               cxxopts::value<bool>(cfg.printCounters))
-        ("v,verbose",      "enable debug logging",                                                          cxxopts::value<bool>(verbose))
+    desc.add_options()
+        ("help,h",                                                "show this help")
+        ("numjobs",         po::value(&cfg.numJobs),              "number of concurrent worker fibers")
+        ("iodepth",         po::value(&cfg.iodepth),              "per-fiber IO queue depth")
+        ("bs",              po::value(&bsStr),                    "block size (e.g. 4k, 1m)")
+        ("rw",              po::value(&rwStr),                    "I/O mode: randread | seqread | randwrite")
+        ("size",            po::value(&sizeStr),                  "file size (e.g. 1g, 512m)")
+        ("runtime",         po::value(&runtimeStr),               "measurement duration (e.g. 10s, 500ms)")
+        ("warmup",          po::value(&warmupStr),                "warmup duration (e.g. 2s, 500ms)")
+        ("filename",        po::value(&cfg.filename)->required(), "file path")
+        ("direct",          po::bool_switch(&cfg.direct),         "use O_DIRECT (bypass page cache)")
+        ("fixed-buffers",   po::bool_switch(&cfg.fixedBuffers),   "use registered buffers (IORING_OP_READ_FIXED / WRITE_FIXED)")
+        ("print-counters",  po::bool_switch(&cfg.printCounters),  "enable per-CPU profiler and include counters in the JSON report")
+        ("verbose,v",       po::bool_switch(&verbose),            "enable debug logging")
         ;
     // clang-format on
 
+    po::variables_map vm;
     try
     {
-        auto result = cli.parse(argc, argv);
-        if (result.count("help"))
+        po::store(po::parse_command_line(argc, argv, desc), vm);
+        if (vm.count("help"))
         {
-            std::cout << cli.help() << "\n";
+            std::cout << "usage: file-perf [options]\n" << desc << "\n";
             return 0;
         }
-        if (result.count("filename") == 0)
-        {
-            std::cerr << "error: --filename is required\n" << cli.help() << "\n";
-            return 1;
-        }
+        po::notify(vm);
         if (verbose)
         {
             silk::Logger::setLevel(silk::LogLevel::DEBUG);
         }
     }
-    catch (const cxxopts::exceptions::exception & ex)
+    catch (const po::error & ex)
     {
-        std::cerr << "error: " << ex.what() << "\n" << cli.help() << "\n";
+        std::cerr << "error: " << ex.what() << "\n" << desc << "\n";
         return 1;
     }
 

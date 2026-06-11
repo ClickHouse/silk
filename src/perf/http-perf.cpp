@@ -26,6 +26,7 @@
 #include <Poco/Net/NetException.h>
 #include <Poco/Net/ServerSocket.h>
 #include <Poco/Net/StreamSocket.h>
+#include <boost/program_options.hpp>
 
 #include <atomic>
 #include <chrono>
@@ -42,8 +43,6 @@
 #include <vector>
 
 #include <pthread.h>
-
-#include <cxxopts.hpp>
 
 //
 // Client
@@ -258,30 +257,33 @@ static void runClient(int argc, char ** argv)
     std::string warmupStr = "2s";
     bool verbose = false;
 
-    cxxopts::Options cli("http-perf client", "http-perf client options");
+    namespace po = boost::program_options;
+    po::options_description desc("http-perf client options");
 
     // clang-format off
-    cli.add_options()
-        ("h,help",         "show this help")
-        ("host",           "server host",                                                       cxxopts::value<std::string>(cfg.host))
-        ("port",           "server port",                                                       cxxopts::value<uint16_t>(cfg.port))
-        ("connections",    "parallel connections or threads",                                   cxxopts::value<uint32_t>(cfg.numConnections))
-        ("threads",        "use OS threads instead of fibers",                                  cxxopts::value<bool>(cfg.useThreads))
-        ("duration",       "measurement duration (e.g. 10s, 500ms)",                            cxxopts::value<std::string>(durationStr))
-        ("warmup",         "warmup duration (e.g. 2s, 500ms)",                                  cxxopts::value<std::string>(warmupStr))
-        ("print-counters", "enable per-CPU profiler and include counters in the JSON report",   cxxopts::value<bool>(cfg.printCounters))
-        ("v,verbose",      "enable debug logging",                                              cxxopts::value<bool>(verbose))
+    desc.add_options()
+        ("help,h",      "show this help")
+        ("host",        po::value(&cfg.host),             "server host")
+        ("port",        po::value(&cfg.port),             "server port")
+        ("connections", po::value(&cfg.numConnections),   "parallel connections or threads")
+        ("threads",     po::bool_switch(&cfg.useThreads), "use OS threads instead of fibers")
+        ("duration",    po::value(&durationStr),          "measurement duration (e.g. 10s, 500ms)")
+        ("warmup",      po::value(&warmupStr),            "warmup duration (e.g. 2s, 500ms)")
+        ("print-counters", po::bool_switch(&cfg.printCounters), "enable per-CPU profiler and include counters in the JSON report")
+        ("verbose,v",   po::bool_switch(&verbose),        "enable debug logging")
         ;
     // clang-format on
 
+    po::variables_map vm;
     try
     {
-        auto result = cli.parse(argc, argv);
-        if (result.count("help"))
+        po::store(po::parse_command_line(argc, argv, desc), vm);
+        if (vm.count("help"))
         {
-            std::cout << cli.help() << "\n";
+            std::cout << "usage: http-perf client [options]\n" << desc << "\n";
             return;
         }
+        po::notify(vm);
         cfg.durationNs = parseDuration(durationStr);
         cfg.warmupNs = parseDuration(warmupStr);
         if (verbose)
@@ -289,9 +291,9 @@ static void runClient(int argc, char ** argv)
             silk::Logger::setLevel(silk::LogLevel::DEBUG);
         }
     }
-    catch (const cxxopts::exceptions::exception & ex)
+    catch (const po::error & ex)
     {
-        std::cerr << "error: " << ex.what() << "\n" << cli.help() << "\n";
+        std::cerr << "error: " << ex.what() << "\n" << desc << "\n";
         exit(1);
     }
 
@@ -605,37 +607,40 @@ static void runServer(int argc, char ** argv)
     std::string delayStr = "0";
     bool verbose = false;
 
-    cxxopts::Options cli("http-perf server", "http-perf server options");
+    namespace po = boost::program_options;
+    po::options_description desc("http-perf server options");
 
     // clang-format off
-    cli.add_options()
-        ("h,help",         "show this help")
-        ("port",           "listen port",                                                       cxxopts::value<uint16_t>(cfg.port))
-        ("queued",         "max queued connections (default: 4 * available CPUs)",              cxxopts::value<uint32_t>(cfg.maxQueued))
-        ("delay",          "per-request response delay (e.g. 5ms, 100us)",                      cxxopts::value<std::string>(delayStr))
-        ("threads",        "use OS threads instead of fibers",                                  cxxopts::value<bool>(cfg.useThreads))
-        ("print-counters", "enable per-CPU profiler and include counters in the JSON report",   cxxopts::value<bool>(cfg.printCounters))
-        ("v,verbose",      "enable debug logging",                                              cxxopts::value<bool>(verbose))
+    desc.add_options()
+        ("help,h",    "show this help")
+        ("port",      po::value(&cfg.port),       "listen port")
+        ("queued",    po::value(&cfg.maxQueued),  "max queued connections (default: 4 * available CPUs)")
+        ("delay",     po::value(&delayStr),       "per-request response delay (e.g. 5ms, 100us)")
+        ("threads",   po::bool_switch(&cfg.useThreads), "use OS threads instead of fibers")
+        ("print-counters", po::bool_switch(&cfg.printCounters), "enable per-CPU profiler and include counters in the JSON report")
+        ("verbose,v", po::bool_switch(&verbose),  "enable debug logging")
         ;
     // clang-format on
 
+    po::variables_map vm;
     try
     {
-        auto result = cli.parse(argc, argv);
-        if (result.count("help"))
+        po::store(po::parse_command_line(argc, argv, desc), vm);
+        if (vm.count("help"))
         {
-            std::cout << cli.help() << "\n";
+            std::cout << "usage: http-perf server [options]\n" << desc << "\n";
             return;
         }
+        po::notify(vm);
         cfg.delayNs = parseDuration(delayStr);
         if (verbose)
         {
             silk::Logger::setLevel(silk::LogLevel::DEBUG);
         }
     }
-    catch (const cxxopts::exceptions::exception & ex)
+    catch (const po::error & ex)
     {
-        std::cerr << "error: " << ex.what() << "\n" << cli.help() << "\n";
+        std::cerr << "error: " << ex.what() << "\n" << desc << "\n";
         exit(1);
     }
 
