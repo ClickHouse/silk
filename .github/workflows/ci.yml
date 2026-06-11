@@ -76,7 +76,6 @@ jobs:
           git submodule update --init --depth=1 \
             contrib/benchmark \
             contrib/bpftool \
-            contrib/cxxopts \
             contrib/googletest \
             contrib/libbacktrace \
             contrib/libbpf \
@@ -123,6 +122,7 @@ jobs:
             ninja-build \
             ccache \
             libboost-dev \
+            libboost-program-options-dev \
             libdouble-conversion-dev \
             libelf-dev \
             zlib1g-dev
