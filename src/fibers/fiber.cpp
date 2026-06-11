@@ -17,6 +17,8 @@
 #include <silk/util/stack.h>
 #include <silk/util/tsc.h>
 
+#include <boost/context/detail/fcontext.hpp>
+
 #include <algorithm>
 #include <atomic>
 #include <cerrno>
@@ -28,7 +30,6 @@
 #include <utility>
 
 #include <cxxabi.h>
-#include <fcontext.h>
 #include <liburing.h>
 #include <poll.h>
 #include <pthread.h>
@@ -163,7 +164,7 @@ public:
     void parkThread() noexcept;
 
     // Fiber entry point.  Called once when the fiber is first activated.
-    [[noreturn]] static void fiberContextMain(transfer_t transfer) noexcept;
+    [[noreturn]] static void fiberContextMain(boost::context::detail::transfer_t transfer) noexcept;
 
     // Cache line 0: scheduling + per-suspend hot path. Touched on every
     // dispatch and every suspension. runFiber's full read/write set lives on
@@ -211,10 +212,10 @@ public:
     // waitingFuture) piggyback for free.
     struct alignas(kCacheLineSize)
     {
-        // mmap'd stack and fcontext handles for cooperative switching.
+        // mmap'd stack and Boost.Context fcontext handles for cooperative switching.
         void * stack = nullptr;
-        fcontext_t fiberContext = nullptr;
-        fcontext_t threadContext = nullptr;
+        boost::context::detail::fcontext_t fiberContext = nullptr;
+        boost::context::detail::fcontext_t threadContext = nullptr;
 
         // Entry point and optional parameters destructor. parametersDtor is set
         // by run for non-trivially-destructible T and called by
@@ -372,7 +373,7 @@ bool Fiber::initialize(
 
     fiberMain = fiberMain_;
     parametersDtor = parametersDtor_;
-    fiberContext = make_fcontext(static_cast<uint8_t *>(stack) + getPageSize() + fiberStackSize, fiberStackSize, fiberContextMain);
+    fiberContext = boost::context::detail::make_fcontext(static_cast<uint8_t *>(stack) + getPageSize() + fiberStackSize, fiberStackSize, fiberContextMain);
 
     return true;
 }
@@ -410,7 +411,7 @@ void Fiber::switchToFiberContext() noexcept
     CxaEhGlobals schedulerEh = loadExceptionState();
     storeExceptionState(cxaEhGlobals);
 
-    auto transfer = jump_fcontext(fiberContext, this);
+    auto transfer = boost::context::detail::jump_fcontext(fiberContext, this);
     // transfer is populated by the uninstrumented jump_fcontext assembly; MSan cannot see those
     // writes, so mark it initialized (as fiberContextMain does on first entry).
     MSAN_UNPOISON(&transfer, sizeof(transfer));
@@ -440,7 +441,7 @@ void Fiber::switchToThreadContext(bool final) noexcept
     // before this fiber next resumes.
     cxaEhGlobals = loadExceptionState();
 
-    auto transfer = jump_fcontext(threadContext, nullptr);
+    auto transfer = boost::context::detail::jump_fcontext(threadContext, nullptr);
     // transfer is populated by the uninstrumented jump_fcontext assembly; MSan cannot see those
     // writes, so mark it initialized (as fiberContextMain does on first entry).
     MSAN_UNPOISON(&transfer, sizeof(transfer));
@@ -453,9 +454,9 @@ void Fiber::switchToThreadContext(bool final) noexcept
 #endif
 }
 
-void Fiber::fiberContextMain(transfer_t transfer) noexcept
+void Fiber::fiberContextMain(boost::context::detail::transfer_t transfer) noexcept
 {
-    // transfer is populated by uninstrumented assembly code (jump_fcontext).
+    // transfer is populated by Boost.Context's uninstrumented assembly code.
     // MSan cannot see those writes, so mark the struct as initialized here.
     MSAN_UNPOISON(&transfer, sizeof(transfer));
 
