@@ -15,13 +15,14 @@
 #include <silk/util/stack.h>
 #include <silk/util/tsc.h>
 
+#include <boost/context/detail/fcontext.hpp>
+
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <thread>
 
-#include <fcontext.h>
 #include <liburing.h>
 #include <sched.h>
 #include <semaphore.h>
@@ -127,7 +128,7 @@ public:
     void parkThread() noexcept;
 
     // Fiber entry point.  Called once when the fiber is first activated.
-    [[noreturn]] static void fiberContextMain(transfer_t transfer) noexcept;
+    [[noreturn]] static void fiberContextMain(boost::context::detail::transfer_t transfer) noexcept;
 
     // Cache line 0: scheduling + per-suspend hot path. Touched on every
     // dispatch and every suspension. runFiber's full read/write set lives on
@@ -177,8 +178,8 @@ public:
     {
         // mmap'd stack and fcontext handles for cooperative switching.
         void * stack = nullptr;
-        fcontext_t fiberContext = nullptr;
-        fcontext_t threadContext = nullptr;
+        boost::context::detail::fcontext_t fiberContext = nullptr;
+        boost::context::detail::fcontext_t threadContext = nullptr;
 
         // Entry point and optional parameters destructor. parametersDtor is set
         // by run for non-trivially-destructible T and called by
