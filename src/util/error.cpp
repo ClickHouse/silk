@@ -83,6 +83,7 @@ std::string Error::format() const noexcept
     std::string result;
     try
     {
+        char buf[128];
         bool first = true;
         for (const Frame * frame = top(); frame; frame = next(frame))
         {
@@ -105,7 +106,7 @@ std::string Error::format() const noexcept
 
             result += " (errno=";
             result += std::to_string(frame->code);
-            const char * description = strerrordesc_np(frame->code);
+            const char * description = silk::strerror(frame->code, buf, sizeof(buf));
             if (description)
             {
                 result += ": ";

@@ -447,7 +447,7 @@ int Server::acceptFiberMain(AcceptFiberParams * params) noexcept
             delete connection;
             if (!isExpectedShutdown(r))
             {
-                SILK_ERROR("accept failed: %s", strerror(r));
+                SILK_ERROR("accept failed: %s", std::strerror(r));
             }
             break;
         }
@@ -480,7 +480,7 @@ int Server::serverFiberMain(ServerFiberParams * params) noexcept
         {
             if (!isExpectedShutdown(r))
             {
-                SILK_ERROR("read failed: %s", strerror(r));
+                SILK_ERROR("read failed: %s", std::strerror(r));
             }
             break;
         }
@@ -501,7 +501,7 @@ int Server::serverFiberMain(ServerFiberParams * params) noexcept
         {
             if (!isExpectedShutdown(r))
             {
-                SILK_ERROR("write failed: %s", strerror(r));
+                SILK_ERROR("write failed: %s", std::strerror(r));
             }
             break;
         }
@@ -635,7 +635,7 @@ int Client::clientFiberMain(ClientFiberParams * params) noexcept
         {
             if (!isExpectedShutdown(r))
             {
-                SILK_ERROR("write failed: %s", strerror(r));
+                SILK_ERROR("write failed: %s", std::strerror(r));
             }
             break;
         }
@@ -645,7 +645,7 @@ int Client::clientFiberMain(ClientFiberParams * params) noexcept
         {
             if (!isExpectedShutdown(r))
             {
-                SILK_ERROR("read failed: %s", strerror(r));
+                SILK_ERROR("read failed: %s", std::strerror(r));
             }
             break;
         }

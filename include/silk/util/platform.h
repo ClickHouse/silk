@@ -5,6 +5,7 @@
 #include <bit>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 
 #include <sched.h>
 #include <time.h>
@@ -164,6 +165,16 @@ static constexpr uint64_t intHash(uint64_t key) noexcept
     key *= 0xc4ceb9fe1a85ec53ULL;
     key ^= key >> 33;
     return key;
+}
+
+/** Thread-safe strerror_r into a caller-provided buffer; may return nullptr for an unknown code. */
+static inline const char * strerror(int code, char * buf, size_t size) noexcept
+{
+#if defined(_GNU_SOURCE)
+    return ::strerror_r(code, buf, size);
+#else
+    return ::strerror_r(code, buf, size) == 0 ? buf : nullptr;
+#endif
 }
 
 } // namespace silk
