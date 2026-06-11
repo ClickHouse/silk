@@ -32,8 +32,7 @@ if(POLICY CMP0167)
     cmake_policy(SET CMP0167 NEW)
 endif()
 
-# Boost headers only - context is vendored under contrib/fcontext.
-find_package(Boost REQUIRED program_options)
+find_package(Boost REQUIRED context program_options)
 
 if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64")
     add_compile_options(-march=x86-64-v3)
@@ -85,7 +84,6 @@ if(SANITIZER STREQUAL "memory")
 endif()
 
 add_subdirectory(contrib/benchmark-cmake)
-add_subdirectory(contrib/fcontext)
 add_subdirectory(contrib/googletest-cmake)
 # libbpf-cmake must precede bpftool-cmake: bpftool's wrapper early-exits if
 # Libbpf::Libbpf is not yet a target.

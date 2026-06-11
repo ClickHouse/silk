@@ -1,5 +1,5 @@
 add_subdirectory(util)
-#add_subdirectory(simulator)
+# add_subdirectory(simulator)
 
 add_executable(file-perf file-perf.cpp)
 target_link_libraries(file-perf PRIVATE silk-perf Boost::program_options)
