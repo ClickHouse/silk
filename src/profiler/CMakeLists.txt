@@ -94,7 +94,7 @@ add_executable(profiler main.cpp profiler.cpp)
 add_dependencies(profiler profiler-skel)
 
 target_include_directories(profiler PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
-target_link_libraries(profiler PRIVATE Libbpf::Libbpf symbolizer cxxopts::cxxopts)
+target_link_libraries(profiler PRIVATE Libbpf::Libbpf symbolizer Boost::program_options)
 
 if(BUILD_TESTING)
     add_subdirectory(tests)
