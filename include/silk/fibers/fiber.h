@@ -417,6 +417,36 @@ public:
     static void write(int fd, iovec * iov, uint32_t iov_len, uint64_t offset, uint64_t * bytesWritten, IoFuture * future) noexcept;
 
     /**
+     * Async fixed-buffer read: submits IORING_OP_READ_FIXED against the buffer
+     * previously registered at @p bufIndex (see registerBuffers). @p buf must lie
+     * within that registered buffer. Single contiguous region (no iovec import);
+     * the kernel skips the per-IO page-pin by reusing the pre-pinned registration.
+     *
+     * @param fd        File descriptor to read from.
+     * @param buf       Destination, inside the registered buffer at @p bufIndex.
+     * @param len       Number of bytes to read.
+     * @param offset    Byte offset within the file.
+     * @param bufIndex  Index into the registered buffer table.
+     * @param bytesRead If not null, receives the number of bytes read on success.
+     * @param future    Completion handle.
+     */
+    static void readFixed(int fd, void * buf, uint64_t len, uint64_t offset, int bufIndex, uint64_t * bytesRead, IoFuture * future) noexcept;
+
+    /**
+     * Async fixed-buffer write: IORING_OP_WRITE_FIXED. See readFixed.
+     */
+    static void
+    writeFixed(int fd, const void * buf, uint64_t len, uint64_t offset, int bufIndex, uint64_t * bytesWritten, IoFuture * future) noexcept;
+
+    /**
+     * Register a fixed buffer set on every per-CPU io_uring ring, so a fiber that
+     * is work-stolen to another CPU can still submit READ_FIXED/WRITE_FIXED
+     * referencing the same index. Call once after initialize(), before issuing any
+     * fixed-buffer IO. @p count buffers are addressable as bufIndex 0..count-1.
+     */
+    static void registerBuffers(const iovec * iovecs, unsigned count) noexcept;
+
+    /**
      * Blocking poll: suspend the calling fiber until one of the requested
      * events becomes ready on @p fd.
      *
