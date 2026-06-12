@@ -1424,6 +1424,10 @@ void FiberScheduler::enqueueIo(IoFuture * future, Setup && setup) noexcept
 void FiberScheduler::read(int fd, iovec * iov, uint64_t iov_len, uint64_t offset, uint64_t * bytesRead, IoFuture * future) noexcept
 {
     future->result = bytesRead;
+#if defined(__SANITIZE_MEMORY__)
+    future->readIov = iov;
+    future->readIovLen = iov_len;
+#endif
     enqueueIo(future, [=](io_uring_sqe * sqe) noexcept { ::io_uring_prep_readv(sqe, fd, iov, iov_len, offset); });
 }
 
@@ -1801,6 +1805,16 @@ __attribute__((noinline)) bool FiberScheduler::handleCompletionQueueSlow(Process
                 {
                     *future->result = static_cast<uint64_t>(result);
                 }
+#if defined(__SANITIZE_MEMORY__)
+                // MSan cannot see the kernel filling read buffers via io_uring.
+                uint64_t remaining = static_cast<uint64_t>(result);
+                for (uint64_t i = 0; i < future->readIovLen && remaining > 0; ++i)
+                {
+                    const uint64_t n = std::min<uint64_t>(remaining, future->readIov[i].iov_len);
+                    MSAN_UNPOISON(future->readIov[i].iov_base, n);
+                    remaining -= n;
+                }
+#endif
                 future->set(0);
             }
             else
