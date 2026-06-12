@@ -129,6 +129,8 @@ struct ClientConfig
     uint64_t warmupNs = 2'000'000'000ULL;
     bool direct = false;
     bool printCounters = false;
+    // use registered buffers (IORING_OP_READ_FIXED / IORING_OP_WRITE_FIXED).
+    bool fixedBuffers = false;
 };
 
 class Benchmark
@@ -157,6 +159,7 @@ private:
         std::unique_ptr<char, decltype(&std::free)> bufs{nullptr, std::free};
         std::unique_ptr<Slot[]> slots;
         uint32_t head = 0;
+        uint32_t index = 0;
     };
 
     //
@@ -199,6 +202,7 @@ void Benchmark::start()
     uint32_t i = 0;
     for (Job & job : jobs)
     {
+        job.index = i;
         job.strategy = OffsetStrategy(cfg.mode, cfg.fileSize, cfg.blockSize, i++, static_cast<uint32_t>(jobs.size()));
 
         // O_DIRECT requires 512-byte-aligned buffers.
@@ -214,6 +218,19 @@ void Benchmark::start()
             job.slots[s].iov.iov_base = job.bufs.get() + static_cast<uint64_t>(s) * cfg.blockSize;
             job.slots[s].iov.iov_len = cfg.blockSize;
         }
+    }
+
+    // register one fixed buffer per job (each covering its whole
+    // iodepth*blockSize block) on every per-CPU ring. bufIndex == job.index.
+    if (cfg.fixedBuffers)
+    {
+        std::vector<iovec> regBufs(jobs.size());
+        for (Job & job : jobs)
+        {
+            regBufs[job.index].iov_base = job.bufs.get();
+            regBufs[job.index].iov_len = static_cast<uint64_t>(cfg.iodepth) * cfg.blockSize;
+        }
+        silk::FiberScheduler::registerBuffers(regBufs.data(), static_cast<unsigned>(regBufs.size()));
     }
 
     for (Job & job : jobs)
@@ -249,6 +266,23 @@ void Benchmark::submit(Job * job, Slot * slot)
 {
     slot->startCycles = silk::Tsc::getCycles();
     uint64_t offset = job->strategy.next();
+
+    if (cfg.fixedBuffers)
+    {
+        // READ_FIXED / WRITE_FIXED against the buffer registered for this job.
+        int bufIndex = static_cast<int>(job->index);
+        if (cfg.mode == MODE_RANDWRITE)
+        {
+            silk::FiberScheduler::writeFixed(fd, slot->iov.iov_base, slot->iov.iov_len, offset, bufIndex, nullptr, &slot->future);
+        }
+        else
+        {
+            silk::FiberScheduler::readFixed(fd, slot->iov.iov_base, slot->iov.iov_len, offset, bufIndex, nullptr, &slot->future);
+        }
+        return;
+    }
+
+    // Baseline: vectored READV / WRITEV with a 1-element iovec.
     if (cfg.mode == MODE_RANDWRITE)
     {
         silk::FiberScheduler::write(fd, &slot->iov, 1, offset, nullptr, &slot->future);
@@ -319,6 +353,7 @@ static void printJson(std::vector<uint64_t> & latNs, const ClientConfig & cfg)
     printf("  \"iodepth\": %u,\n", cfg.iodepth);
     printf("  \"block_size_bytes\": %u,\n", cfg.blockSize);
     printf("  \"mode\": \"%s\",\n", modeName(cfg.mode));
+    printf("  \"fixed_buffers\": %s,\n", cfg.fixedBuffers ? "true" : "false");
     printf("  \"file_size_bytes\": %lu,\n", cfg.fileSize);
     printf("  \"duration_s\": %.3f,\n", durationS);
     printf("  \"total\": %lu,\n", total);
@@ -362,6 +397,7 @@ int main(int argc, char ** argv)
         ("warmup",         "warmup duration (e.g. 2s, 500ms)",                                              cxxopts::value<std::string>(warmupStr))
         ("filename",       "file path",                                                                     cxxopts::value<std::string>(cfg.filename))
         ("direct",         "use O_DIRECT (bypass page cache)",                                              cxxopts::value<bool>(cfg.direct))
+        ("fixed-buffers",  "use registered buffers (IORING_OP_READ_FIXED / WRITE_FIXED)",               cxxopts::value<bool>(cfg.fixedBuffers))
         ("print-counters", "enable per-CPU profiler and include counters in the JSON report",               cxxopts::value<bool>(cfg.printCounters))
         ("v,verbose",      "enable debug logging",                                                          cxxopts::value<bool>(verbose))
         ;

@@ -741,6 +741,7 @@ class FilePerfParams:
     rw: list[str] = field(default_factory=lambda: ["randread"])
     flamegraph: bool = False
     print_counters: bool = False
+    fixed_buffers: bool = False
     timeout: int = 180
 
 
@@ -777,6 +778,7 @@ def cmd_file_perf(preset: str, params: FilePerfParams) -> None:
     file_perf = os.path.join(ROOT, f"build/{preset}/bin/file-perf")
     verbose_flag = ["--verbose"] if log.isEnabledFor(logging.DEBUG) else []
     print_counters_flag = ["--print-counters"] if params.print_counters else []
+    fixed_buffers_flag = ["--fixed-buffers"] if params.fixed_buffers else []
 
     try:
         if params.flamegraph:
@@ -802,6 +804,7 @@ def cmd_file_perf(preset: str, params: FilePerfParams) -> None:
                     str(params.warmup),
                     "--filename",
                     params.file,
+                    *fixed_buffers_flag,
                     *verbose_flag,
                 ],
             )
@@ -828,6 +831,7 @@ def cmd_file_perf(preset: str, params: FilePerfParams) -> None:
                     str(params.warmup),
                     "--filename",
                     params.file,
+                    *fixed_buffers_flag,
                     *print_counters_flag,
                     *verbose_flag,
                     timeout=params.timeout or None,
@@ -1547,6 +1551,12 @@ def _build_parser() -> argparse.ArgumentParser:
         help="warmup duration applied to every benchmark (e.g. 10s); per-binary defaults are used when omitted",
     )
     perf_parser.add_argument(
+        "--fixed-buffers",
+        dest="fixed_buffers",
+        action="store_true",
+        help="run file-perf with registered buffers (IORING_OP_READ_FIXED / WRITE_FIXED)",
+    )
+    perf_parser.add_argument(
         "targets",
         nargs="+",
         metavar="TARGET",
@@ -1627,6 +1637,12 @@ def _build_parser() -> argparse.ArgumentParser:
         dest="file_print_counters",
         action="store_true",
         help="print perf counters after each run",
+    )
+    file_perf_parser.add_argument(
+        "--fixed-buffers",
+        dest="file_fixed_buffers",
+        action="store_true",
+        help="use registered buffers (IORING_OP_READ_FIXED / WRITE_FIXED)",
     )
     file_perf_parser.add_argument(
         "--timeout",
@@ -2054,6 +2070,7 @@ def main() -> None:
             iodepth=[1, 16],
             rw=["randwrite", "randread"],
             timeout=args.timeout,
+            fixed_buffers=args.fixed_buffers,
             **timing_overrides,
         )
         if "file" in targets:
