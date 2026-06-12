@@ -1,6 +1,7 @@
 #pragma once
 
 #include <silk/fibers/future.h>
+#include <silk/util/sanitizers.h>
 #include <silk/util/stack.h>
 #include <silk/util/tree.h>
 
@@ -349,6 +350,11 @@ public:
         // Processor whose io_uring ring holds this SQE; cancelIo must submit
         // the cancel to the same ring to avoid a cross-ring -ENOENT failure.
         uint32_t processorNumber = INVALID_PROCESSOR_NUMBER;
+#if defined(__SANITIZE_MEMORY__)
+        // Used to mark the kernel-written bytes as initialized for MSan.
+        iovec * readIov = nullptr;
+        uint64_t readIovLen = 0;
+#endif
     };
 
     /**

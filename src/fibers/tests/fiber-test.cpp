@@ -227,7 +227,8 @@ TEST(Fiber, asyncIoFromThread)
     EXPECT_EQ(r, 0);
     EXPECT_EQ(bytesWritten, sizeof(msg));
 
-    char buf[sizeof(msg)] = {};
+    // Deliberately uninitialized to verify MSan unpoisoning works correctly.
+    char buf[sizeof(msg)];
     iovec riov{buf, sizeof(buf)};
     uint64_t bytesRead = 0;
     FiberScheduler::IoFuture rf;
