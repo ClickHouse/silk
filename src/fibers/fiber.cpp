@@ -1501,6 +1501,7 @@ void FiberScheduler::writeFixed(
 
 void FiberScheduler::registerBuffers(const iovec * iovecs, unsigned count) noexcept
 {
+    SILK_ASSERT(scheduler, "registerBuffers called before initialize()");
     for (uint32_t cpu = 0; cpu < scheduler->processorCount; ++cpu)
     {
         ProcessorState * processor = &scheduler->processorState[cpu];

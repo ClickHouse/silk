@@ -447,6 +447,15 @@ public:
      * is work-stolen to another CPU can still submit READ_FIXED/WRITE_FIXED
      * referencing the same index. Call once after initialize(), before issuing any
      * fixed-buffer IO. @p count buffers are addressable as bufIndex 0..count-1.
+     *
+     * You can only call this once. io_uring allows one buffer set per ring, and
+     * there is no way to undo or change it, so a second call fails (-EBUSY) and
+     * trips an assert.
+     *
+     * Each ring pins its own copy of the buffers in memory, so the total locked
+     * memory is (number of CPUs) * (size of all buffers). With many CPUs or large
+     * buffers this can go over the RLIMIT_MEMLOCK limit; if it does, registration
+     * fails and trips an assert.
      */
     static void registerBuffers(const iovec * iovecs, unsigned count) noexcept;
 

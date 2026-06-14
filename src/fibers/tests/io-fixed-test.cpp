@@ -12,8 +12,8 @@
 namespace silk
 {
 
-// writeFixed then readFixed against a registered buffer. It must test 
-// round-trip all the three apis, including reads into a non-base offset 
+// writeFixed then readFixed against a registered buffer. It must test
+// round-trip all the three apis, including reads into a non-base offset
 // within the registered region.
 TEST(IoFixed, writeReadRoundTrip)
 {
@@ -81,5 +81,12 @@ TEST(IoFixed, writeReadRoundTrip)
     std::free(buf);
     ::close(fd);
 }
+
+// TODO(kavi): this test runs a single fiber on one CPU. The whole point of
+// registering buffers on every ring is that a fiber can move to another CPU and
+// still use the same bufIndex. We don't test that here because we can't reliably
+// force a fiber to move to a specific CPU, so the test would be flaky. If we need
+// to be sure this works, add a second test that forces the move and checks the
+// fixed IO still works.
 
 } // namespace silk

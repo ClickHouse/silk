@@ -397,7 +397,7 @@ int main(int argc, char ** argv)
         ("warmup",         "warmup duration (e.g. 2s, 500ms)",                                              cxxopts::value<std::string>(warmupStr))
         ("filename",       "file path",                                                                     cxxopts::value<std::string>(cfg.filename))
         ("direct",         "use O_DIRECT (bypass page cache)",                                              cxxopts::value<bool>(cfg.direct))
-        ("fixed-buffers",  "use registered buffers (IORING_OP_READ_FIXED / WRITE_FIXED)",               cxxopts::value<bool>(cfg.fixedBuffers))
+        ("fixed-buffers",  "use registered buffers (IORING_OP_READ_FIXED / WRITE_FIXED)",                   cxxopts::value<bool>(cfg.fixedBuffers))
         ("print-counters", "enable per-CPU profiler and include counters in the JSON report",               cxxopts::value<bool>(cfg.printCounters))
         ("v,verbose",      "enable debug logging",                                                          cxxopts::value<bool>(verbose))
         ;
