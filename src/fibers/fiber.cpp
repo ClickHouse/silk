@@ -1510,7 +1510,7 @@ void FiberScheduler::registerBuffers(const iovec * iovecs, unsigned count) noexc
             continue;
         }
         int r = ::io_uring_register_buffers(&processor->ring, iovecs, count);
-        SILK_ASSERT(r == 0, "io_uring_register_buffers failed on cpu %u: %d", cpu, r);
+        SILK_ASSERT(r == 0, "io_uring_register_buffers failed: cpu=%u, ret=%d", cpu, r);
     }
 }
 
