@@ -8,7 +8,7 @@ The main tables are reproducible with `./bb -b release perf --duration 60s --war
 
 ## file-perf -- async file I/O
 
-`/dev/shm` (tmpfs, in-memory), bs=4k, size=1 GiB, 60 s measurement, 10 s warmup. Uses `FiberScheduler::read`/`write` (`IORING_OP_READV` / `IORING_OP_WRITEV`). `numjobs` = concurrent worker fibers; `iodepth` = per-fiber async IO queue depth (ring of `IoFuture`s).
+`/dev/shm` (tmpfs, in-memory), bs=4k, size=1 GiB, 60 s measurement, 10 s warmup. Uses `FiberScheduler::read`/`write` (`IORING_OP_READV` / `IORING_OP_WRITEV`). `numjobs` = concurrent worker fibers; `iodepth` = per-fiber async IO queue depth (ring of `IoFuture`s). Pass `--fixed-buffers` to switch to registered buffers (`IORING_OP_READ_FIXED` / `IORING_OP_WRITE_FIXED`) -- see the subsection below.
 
 | numjobs | iodepth | mode | IOPS | BW | avg | p50 | p95 | p99 | p99.9 |
 |---|---|---|---|---|---|---|---|---|---|
@@ -26,6 +26,12 @@ The main tables are reproducible with `./bb -b release perf --duration 60s --war
 **Best latency** (`numjobs=1 iodepth=1`): 3-4 µs p50 for both read and write.
 
 **Note on batching**: The default `Options::ioUringFlushThreshold = 64` defers `io_uring_submit` until the SQ ring has accumulated enough work to amortize the syscall -- the right trade for network/HTTP/S3 workloads where completion latency dwarfs the few-µs batching delay (see net-perf below for the resulting p99 win). On tmpfs the kernel completes reads inline at submit time, so any deferral pushes submissions off the inline-completion fast path. `file-perf` therefore initializes the scheduler with `ioUringFlushThreshold = 1`, equivalent to per-fiber submit. Measured under the default threshold (64), `16/1 randread` lands at ~1.6M IOPS and `16/16 randread` at ~4.2M -- the override recovers full throughput without any kernel or scheduler change.
+
+### Registered buffers (`--fixed-buffers`)
+
+`./bb -b release perf --duration 60s --warmup 10s file --fixed-buffers` reruns the same matrix with registered buffers: each worker registers one buffer (covering its whole `iodepth * blockSize` block) on every per-CPU ring via `FiberScheduler::registerBuffers`, then issues `readFixed`/`writeFixed` against it (see `docs/scheduler.md`). The kernel reuses the pre-pinned mapping and skips the per-IO page-pin and iovec import.
+
+The win is largest where per-IO buffer setup is the dominant cost: high-concurrency writes (`16` jobs) gain the most IOPS and shed the most average and tail latency. Reads, already inline-completed on tmpfs, see smaller gains except at `16/16`. 
 
 ---
 
