@@ -353,7 +353,7 @@ public:
 #if defined(__SANITIZE_MEMORY__)
         // Used to mark the kernel-written bytes as initialized for MSan.
         iovec * readIov = nullptr;
-        uint64_t readIovLen = 0;
+        uint32_t readIovLen = 0;
 #endif
     };
 
@@ -387,7 +387,7 @@ public:
      * @param bytesRead If not null, receives the number of bytes read on success.
      * @param future    Completion handle; wait() returns 0 on success or a errno on failure.
      */
-    static void read(int fd, iovec * iov, uint64_t iov_len, uint64_t offset, uint64_t * bytesRead, IoFuture * future) noexcept;
+    static void read(int fd, iovec * iov, uint32_t iov_len, uint64_t offset, uint64_t * bytesRead, IoFuture * future) noexcept;
 
     /**
      * Blocking write: submit a write from @p buf and suspend the calling fiber
@@ -419,7 +419,7 @@ public:
      * @param bytesWritten If not null, receives the number of bytes written on success.
      * @param future       Completion handle; wait() returns 0 on success or a errno on failure.
      */
-    static void write(int fd, iovec * iov, uint64_t iov_len, uint64_t offset, uint64_t * bytesWritten, IoFuture * future) noexcept;
+    static void write(int fd, iovec * iov, uint32_t iov_len, uint64_t offset, uint64_t * bytesWritten, IoFuture * future) noexcept;
 
     /**
      * Blocking poll: suspend the calling fiber until one of the requested
