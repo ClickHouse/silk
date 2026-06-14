@@ -1481,21 +1481,22 @@ void FiberScheduler::write(int fd, iovec * iov, uint32_t iov_len, uint64_t offse
 }
 
 void FiberScheduler::readFixed(
-    int fd, void * buf, uint64_t len, uint64_t offset, int bufIndex, uint64_t * bytesRead, IoFuture * future) noexcept
+    int fd, void * buf, uint32_t len, uint64_t offset, int bufIndex, uint64_t * bytesRead, IoFuture * future) noexcept
 {
     future->result = bytesRead;
-    enqueueIo(
-        future,
-        [=](io_uring_sqe * sqe) noexcept { ::io_uring_prep_read_fixed(sqe, fd, buf, static_cast<unsigned>(len), offset, bufIndex); });
+#if defined(__SANITIZE_MEMORY__)
+    future->readIovStorage = {buf, len};
+    future->readIov = &future->readIovStorage;
+    future->readIovLen = 1;
+#endif
+    enqueueIo(future, [=](io_uring_sqe * sqe) noexcept { ::io_uring_prep_read_fixed(sqe, fd, buf, len, offset, bufIndex); });
 }
 
 void FiberScheduler::writeFixed(
-    int fd, const void * buf, uint64_t len, uint64_t offset, int bufIndex, uint64_t * bytesWritten, IoFuture * future) noexcept
+    int fd, const void * buf, uint32_t len, uint64_t offset, int bufIndex, uint64_t * bytesWritten, IoFuture * future) noexcept
 {
     future->result = bytesWritten;
-    enqueueIo(
-        future,
-        [=](io_uring_sqe * sqe) noexcept { ::io_uring_prep_write_fixed(sqe, fd, buf, static_cast<unsigned>(len), offset, bufIndex); });
+    enqueueIo(future, [=](io_uring_sqe * sqe) noexcept { ::io_uring_prep_write_fixed(sqe, fd, buf, len, offset, bufIndex); });
 }
 
 void FiberScheduler::registerBuffers(const iovec * iovecs, unsigned count) noexcept

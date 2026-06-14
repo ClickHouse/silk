@@ -349,6 +349,10 @@ public:
         // Used to mark the kernel-written bytes as initialized for MSan.
         iovec * readIov = nullptr;
         uint32_t readIovLen = 0;
+        // Backing storage for the single contiguous region of a fixed read
+        // (readFixed api has no caller-owned iovec to point at).
+        // readIov is pointed here in that case. Needed for Memory sanitizer.
+        iovec readIovStorage{};
 #endif
     };
 
@@ -430,13 +434,13 @@ public:
      * @param bytesRead If not null, receives the number of bytes read on success.
      * @param future    Completion handle.
      */
-    static void readFixed(int fd, void * buf, uint64_t len, uint64_t offset, int bufIndex, uint64_t * bytesRead, IoFuture * future) noexcept;
+    static void readFixed(int fd, void * buf, uint32_t len, uint64_t offset, int bufIndex, uint64_t * bytesRead, IoFuture * future) noexcept;
 
     /**
      * Async fixed-buffer write: IORING_OP_WRITE_FIXED. See readFixed.
      */
     static void
-    writeFixed(int fd, const void * buf, uint64_t len, uint64_t offset, int bufIndex, uint64_t * bytesWritten, IoFuture * future) noexcept;
+    writeFixed(int fd, const void * buf, uint32_t len, uint64_t offset, int bufIndex, uint64_t * bytesWritten, IoFuture * future) noexcept;
 
     /**
      * Register a fixed buffer set on every per-CPU io_uring ring, so a fiber that
