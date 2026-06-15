@@ -26,7 +26,7 @@ _CHECKOUT_TEST_SUBMODULES = "python3 ./ci/jobs/init_submodules.py"
 
 _TEST_ARM = Job.Config(
     name="Test ARM",
-    runs_on=[RunnerLabels.SMALL_ARM],
+    runs_on=[RunnerLabels.MEDIUM_ARM],
     command="python3 ./ci/jobs/test_job.py {PARAMETER}",
     needs_submodules=True,
     pre_hooks=[_CHECKOUT_TEST_SUBMODULES],
@@ -36,7 +36,7 @@ _TEST_ARM = Job.Config(
 
 _TEST_AMD = Job.Config(
     name="Test AMD",
-    runs_on=[RunnerLabels.SMALL_AMD],
+    runs_on=[RunnerLabels.MEDIUM_AMD],
     command="python3 ./ci/jobs/test_job.py {PARAMETER}",
     needs_submodules=True,
     pre_hooks=[_CHECKOUT_TEST_SUBMODULES],

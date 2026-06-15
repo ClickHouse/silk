@@ -142,7 +142,7 @@ def _silk_ci_image_components():
 
 
 def _image_builders():
-    image_recipe_version = "1.0.5"
+    image_recipe_version = "1.0.6"
     prebuilt_venvs = [
         Components.create_praktika_venv_config(
             PRAKTIKA_BASE_VENV,

@@ -1,5 +1,6 @@
-import os
 import subprocess
+
+from praktika.info import Info
 
 
 COMMON_SUBMODULES = [
@@ -40,7 +41,7 @@ def checkout_submodules(paths):
 
 
 if __name__ == "__main__":
-    job_name = os.environ["JOB_NAME"]
+    job_name = Info().job_name
 
     run("git", "submodule", "sync")
     checkout_submodules(COMMON_SUBMODULES)
