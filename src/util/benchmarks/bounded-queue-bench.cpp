@@ -38,7 +38,7 @@ protected:
         {
             for (uint64_t i = 0; i < CAPACITY; ++i)
             {
-                bool b = queue.enqueue(i);
+                bool b = queue.enqueue(static_cast<int>(i));
                 SILK_ASSERT(b);
             }
         }

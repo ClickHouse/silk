@@ -637,7 +637,7 @@ struct FiberScheduler::ProcessorState
 void FiberScheduler::ProcessorState::initialize(uint32_t cpu) noexcept
 {
     SILK_ASSERT(cpu < INVALID_PROCESSOR_NUMBER);
-    number = cpu;
+    number = static_cast<uint16_t>(cpu);
 
     readyQueue.initialize(options.readyQueueCapacity);
 
@@ -1041,7 +1041,7 @@ void FiberScheduler::initialize(const Options * userOptions) noexcept
         if (CPU_ISSET(cpu, &processCpuSet))
         {
             ProcessorState * processor = &scheduler->processorState[cpu];
-            processor->number = cpu;
+            processor->number = static_cast<uint16_t>(cpu);
         }
     }
 
@@ -1266,7 +1266,7 @@ void FiberScheduler::enqueueReady(Fiber * fiber) noexcept
         {
             if (fiber->processorNumber == INVALID_PROCESSOR_NUMBER)
             {
-                fiber->processorNumber = getCurrentProcessor();
+                fiber->processorNumber = static_cast<uint16_t>(getCurrentProcessor());
             }
 
             ProcessorState * processor = &scheduler->processorState[fiber->processorNumber];
