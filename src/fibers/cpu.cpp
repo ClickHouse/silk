@@ -36,7 +36,7 @@ static int readSysfsUint32(const char * path, uint32_t * out) noexcept
     buf[n] = '\0';
 
     char * end;
-    uint32_t val = ::strtoul(buf, &end, 10);
+    uint32_t val = static_cast<uint32_t>(::strtoul(buf, &end, 10));
     if (end == buf)
     {
         return EINVAL;

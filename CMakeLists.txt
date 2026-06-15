@@ -136,6 +136,36 @@ include(GoogleTest)
 include_directories(include)
 include_directories(src)
 
+# Stricter implicit-conversion warnings for first-party code only. Placed after
+# all contrib add_subdirectory() calls so third-party sources (librseq,
+# libbacktrace, liburing, etc.) keep compiling under their own assumptions;
+# add_compile_options only affects targets created later in this scope. Catches
+# silent value-altering conversions: integer narrowing (uint64_t -> uint32_t),
+# float-to-int truncation, and float-precision loss.
+# None of these are enabled by -Wall/-Wextra.
+# Third-party headers we include (e.g. liburing) are marked SYSTEM so their
+# inline functions do not trip these here.
+add_compile_options(
+    # Integer narrowing. Already includes the -Wshorten-64-to-32 subgroup, so
+    # that 64->32 flag would be redundant here.
+    -Wimplicit-int-conversion
+
+    # float/double -> int truncation.
+    -Wfloat-conversion
+
+    # double -> float narrowing, and int -> float precision loss
+    # (-Wimplicit-float-conversion includes the -Wimplicit-int-float-conversion
+    # subgroup). Also bit noisy
+    # -Wimplicit-float-conversion
+
+    # Signed <-> unsigned changes. Correct in principle but very noisy on
+    # existing code; enable once the tree is clean.
+    # -Wsign-conversion
+
+    # This catches all types of implicit conversations. But currently too noisy
+    # -Wconversion
+)
+
 add_subdirectory(src/util)
 add_subdirectory(src/fibers)
 add_subdirectory(src/gdb)
