@@ -11,35 +11,18 @@ FMT_JOB = Job.Config(
 )
 
 _TEST_DIGEST = Job.CacheDigestConfig(
-    include_paths=["src", "include", "CMakeLists.txt", "CMakePresets.json", "bb"],
+    include_paths=[
+        "src",
+        "include",
+        "CMakeLists.txt",
+        "CMakePresets.json",
+        "bb",
+        "ci/jobs/init_submodules.py",
+    ],
     with_git_submodules=True,
 )
 
-_CHECKOUT_TEST_SUBMODULES = r"""
-set -euo pipefail
-git submodule sync
-git submodule update --init --no-fetch --depth=1 --jobs 8 \
-    contrib/benchmark \
-    contrib/bpftool \
-    contrib/cxxopts \
-    contrib/googletest \
-    contrib/libbacktrace \
-    contrib/libbpf \
-    contrib/librseq \
-    contrib/liburing
-
-case "$JOB_NAME" in
-    *"(release)"*)
-        git submodule update --init --no-fetch --depth=1 --jobs 8 contrib/poco contrib/jemalloc
-        ;;
-    *"(tsan)"*)
-        git submodule update --init --no-fetch --depth=1 --jobs 8 contrib/poco
-        ;;
-    *"(msan)"*)
-        git submodule update --init --no-fetch --depth=1 --jobs 8 contrib/llvm-project
-        ;;
-esac
-"""
+_CHECKOUT_TEST_SUBMODULES = "python3 ./ci/jobs/init_submodules.py"
 
 _TEST_ARM = Job.Config(
     name="Test ARM",
