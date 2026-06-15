@@ -52,6 +52,7 @@ WORKFLOWS = [
             *_TEST_ARM.parametrize(*_BUILD_VARIANTS),
             *_TEST_AMD.parametrize(*_BUILD_VARIANTS),
         ],
+        enable_cache=True,
         enable_report=True,
         enable_gh_summary_comment=True,
         enable_exit_code_result=True,

@@ -4,7 +4,29 @@ from praktika.infrastructure.cloud import CloudInfrastructure
 
 
 # until published in pip
+_PRAKTIKA_WHL = "https://praktika-artifacts-eu-north-1.s3.amazonaws.com/packages/praktika-0.1.2-py3-none-any.whl"
 _PRAKTIKA_CONTROLLER_WHL = "https://praktika-artifacts-eu-north-1.s3.amazonaws.com/packages/praktika_controller-0.1.1-py3-none-any.whl"
+
+
+def _runner_user_data():
+    return "\n".join(
+        [
+            "#!/usr/bin/env bash",
+            "set -xeuo pipefail",
+            "",
+            "# Force-reinstall praktika so the runner uses the version pinned here",
+            "# rather than whatever was baked into the AMI at image-build time.",
+            (
+                f"/opt/praktika/base-venvs/{PRAKTIKA_BASE_VENV}/bin/python "
+                f"-m pip install --force-reinstall {_PRAKTIKA_WHL}"
+            ),
+            "# Add any host customization you need above this line.",
+            "/usr/local/bin/praktika-configure-cloudwatch-agent",
+            "/opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl -a fetch-config -m ec2 -c file:/etc/praktika/amazon-cloudwatch-agent.json -s",
+            "systemctl enable --now praktika-controller",
+            "",
+        ]
+    )
 
 
 def _silk_ci_dependencies_component():
@@ -180,24 +202,29 @@ PROJECTS = [
             size=0,
             max_size=50,
             capacity_reserve=1,
+            volume_size_gb=100,
             image_builder=_IMAGE_BUILDERS_BY_NAME["ci-arm64-image"],
         ),
         runner_pools=[
             Components.RunnerPool(
                 name="arm-small",
-                instance_type="t4g.small",
+                instance_type="t4g.medium",
                 scaling=Components.RunnerPool.Scaling.Auto,
                 size=0,
                 max_size=50,
+                volume_size_gb=100,
                 image_builder=_IMAGE_BUILDERS_BY_NAME["ci-arm64-image"],
+                user_data=_runner_user_data(),
             ),
             Components.RunnerPool(
                 name="amd-small",
-                instance_type="t3.small",
+                instance_type="t3.medium",
                 scaling=Components.RunnerPool.Scaling.Auto,
                 size=0,
                 max_size=50,
+                volume_size_gb=100,
                 image_builder=_IMAGE_BUILDERS_BY_NAME["ci-x86_64-image"],
+                user_data=_runner_user_data(),
             ),
             Components.RunnerPool(
                 name="arm-medium",
@@ -205,7 +232,7 @@ PROJECTS = [
                 scaling=Components.RunnerPool.Scaling.Auto,
                 size=0,
                 max_size=50,
-                volume_size_gb=30,
+                volume_size_gb=100,
                 image_builder=_IMAGE_BUILDERS_BY_NAME["ci-arm64-image"],
             ),
             Components.RunnerPool(
@@ -214,7 +241,7 @@ PROJECTS = [
                 scaling=Components.RunnerPool.Scaling.Auto,
                 size=0,
                 max_size=50,
-                volume_size_gb=30,
+                volume_size_gb=100,
                 image_builder=_IMAGE_BUILDERS_BY_NAME["ci-x86_64-image"],
             ),
         ],
