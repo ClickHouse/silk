@@ -15,11 +15,38 @@ _TEST_DIGEST = Job.CacheDigestConfig(
     with_git_submodules=True,
 )
 
+_CHECKOUT_TEST_SUBMODULES = r"""
+set -euo pipefail
+git submodule sync
+git submodule update --init --no-fetch --depth=1 --jobs 8 \
+    contrib/benchmark \
+    contrib/bpftool \
+    contrib/cxxopts \
+    contrib/googletest \
+    contrib/libbacktrace \
+    contrib/libbpf \
+    contrib/librseq \
+    contrib/liburing
+
+case "$JOB_NAME" in
+    *"(release)"*)
+        git submodule update --init --no-fetch --depth=1 --jobs 8 contrib/poco contrib/jemalloc
+        ;;
+    *"(tsan)"*)
+        git submodule update --init --no-fetch --depth=1 --jobs 8 contrib/poco
+        ;;
+    *"(msan)"*)
+        git submodule update --init --no-fetch --depth=1 --jobs 8 contrib/llvm-project
+        ;;
+esac
+"""
+
 _TEST_ARM = Job.Config(
     name="Test ARM",
     runs_on=[RunnerLabels.SMALL_ARM],
     command="python3 ./ci/jobs/test_job.py {PARAMETER}",
     needs_submodules=True,
+    pre_hooks=[_CHECKOUT_TEST_SUBMODULES],
     timeout=2 * 3600,
     digest_config=_TEST_DIGEST,
 )
@@ -29,6 +56,7 @@ _TEST_AMD = Job.Config(
     runs_on=[RunnerLabels.SMALL_AMD],
     command="python3 ./ci/jobs/test_job.py {PARAMETER}",
     needs_submodules=True,
+    pre_hooks=[_CHECKOUT_TEST_SUBMODULES],
     timeout=2 * 3600,
     digest_config=_TEST_DIGEST,
 )
