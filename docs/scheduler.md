@@ -12,7 +12,7 @@ Source lives under `src/fibers/`. Data structures and utilities are in `src/util
 
 `FiberScheduler` runs one scheduler thread per CPU, each owning:
 
-- An io_uring ring (128 entries) for async IO
+- An io_uring ring (256 entries by default, `Options::ioUringQueueSize`) for async IO
 - An eventfd for cross-CPU wakeup signaling
 - A per-CPU ready queue (`BoundedQueue`) of runnable fibers
 - A sleep tree (`SleepTree`) ordered by TSC deadline
@@ -46,6 +46,19 @@ The callback and its context are stored on the `Fiber` itself (`suspendCallback`
 
 ---
 
+## Proxy Fibers
+
+A non-fiber OS thread (the application's `main`, a thread-pool worker, any external thread) can still participate in every fiber-aware API. The first time such a thread calls `getCurrentFiber()`, the scheduler lazily allocates a `thread_local` **proxy fiber** (`isProxyFiber = true`) that represents the thread itself. The proxy is created on demand and lives for the thread's lifetime; it owns no stack.
+
+Proxy fibers do not context-switch — they **block and wake on a POSIX semaphore** instead of `jump_fcontext`:
+
+- `suspend()` detects `isProxyFiber`, runs the suspend callback inline (the callback arranges the wakeup exactly as for a real fiber), then, if the fiber is still `SUSPENDED`, calls `parkThread()` (`sem_wait`). On return it transitions `READY -> RUNNING`.
+- `enqueueReady()` detects `isProxyFiber` and calls `wakeThread()` (`sem_post`) instead of pushing onto a ready queue. There is no scheduler thread to dispatch a proxy; the parked OS thread resumes itself.
+
+The consequence is **uniform thread/fiber interop**: every primitive that keys off `getCurrentFiber()` — `FiberFuture::wait`, `FiberMutex`, `FiberFutex`, the rest of `docs/sync.md` — works identically whether the caller is a real fiber or a plain thread, because each side just suspends "the current fiber" and the other side wakes it. A fiber can hand a result to a waiting thread (and vice versa) through the same `FiberFuture`. It is also what lets the blocking `FiberScheduler::run(fiberMain, params)` overload work from a non-fiber thread: the caller becomes a proxy that parks on its semaphore until the spawned fiber sets the result future. Thread mode (below) is the inverse direction — a real fiber temporarily borrowing a worker thread — so the two mechanisms bracket the fiber/thread boundary from both sides.
+
+---
+
 ## Thread Mode
 
 A fiber that needs to make blocking syscalls or perform heavy CPU work can escape the cooperative scheduler without stalling its scheduler thread by entering thread mode.
@@ -60,7 +73,7 @@ A fiber that needs to make blocking syscalls or perform heavy CPU work can escap
 There are two ready queues:
 
 - **Per-CPU ready queue** (`ProcessorState::readyQueue`) - bounded MPMC queue drained by the CPU's scheduler thread. Normal cooperative fibers live here.
-- **Shared ready queue** (`SchedulerState::readyQueue`) - unbounded MPMC queue drained by the worker thread pool. Thread-mode fibers live here, and normal fibers overflow here when a CPU ready queue is full.
+- **Shared ready queue** (`SchedulerState::readyQueue`) - unbounded MPMC queue drained by the worker thread pool (one worker thread per CPU, sized `workerThreadCount == schedulerThreadCount`, running `runThreadWorker`). Thread-mode fibers live here, and normal fibers overflow here when a CPU ready queue is full.
 
 `enterThreadMode()` sets `fiber->inThreadMode` and calls `schedule()`, which routes the fiber to the shared ready queue. A worker thread dequeues it and runs it via `runFiber(nullptr, fiber)`, where it may block freely. When the fiber suspends inside thread mode (e.g. waiting on a future), `schedule()` re-enqueues it to the shared ready queue when it is woken - any free worker picks it up.
 
@@ -83,11 +96,12 @@ There are two ready queues:
 
 ## Data Structures
 
-The scheduler uses `LockFreeStack`, `BoundedQueue`, `Queue`, `Tree`, and `MemoryPool` from `src/util/`. See `docs/util.md` for full descriptions.
+The scheduler uses `LockFreeStack`, `BoundedQueue`, `IntrusiveQueue`, `Tree`, and `MemoryPool` from `src/util/`. See `docs/util.md` for full descriptions.
 
 Key usages:
-- `MemoryPool` - fiber allocation (rseq fast path, zero atomics)
-- `BoundedQueue` - per-CPU ready queue (MPMC, fixed capacity)
+- `MemoryPool` - `Fiber` object allocation only (rseq fast path, zero atomics). The pool recycles fibers rather than freeing, so each fiber keeps the 64 KB stack it `mmap`s once on first init.
+- `BoundedQueue` - per-CPU ready queue (MPMC, fixed capacity; holds `Fiber *`)
+- `IntrusiveQueue<Fiber, &Fiber::reservedNode>` - shared overflow / thread-mode ready queue; the node is embedded in each fiber, so enqueuing never allocates
 - `LockFreeStack` - sleep inbox, cancel inbox
 - `Tree` - sleep deadline ordering (keyed by TSC deadline)
 

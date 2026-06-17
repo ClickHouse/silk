@@ -2,6 +2,8 @@
 
 All primitives are fiber-aware: waiting suspends the calling fiber rather than blocking the OS thread. Source lives in `src/fibers/`.
 
+They are also usable from **non-fiber threads**. A plain OS thread that calls any of these gets a lazily-created *proxy fiber* (see "Proxy Fibers" in `docs/scheduler.md`) that blocks and wakes on a POSIX semaphore instead of context switching. Because every primitive keys off `getCurrentFiber()`, a thread and a fiber can synchronize and pass results through the same `FiberFuture` / `FiberMutex` / `FiberFutex` with no special bridging — the thread just suspends "its" proxy fiber and a fiber wakes it (and vice versa).
+
 ---
 
 ## Layering
@@ -36,6 +38,15 @@ int err = future.wait(); // suspends until set
 `reset()` clears the future so it can be reused for the next operation.
 
 **State** -- packed `uint64_t`: `{waiter:61, multipleWait:1, hasCallback:1, isSet:1}`. The `waiter` field holds a `Fiber*` (normal wait), a `MultipleWaitState*` (multiple wait), or a `SubscribeCallback*` (subscribe). The `multipleWait` and `hasCallback` bits select the dispatch path in `signal()`; only one is ever set on a given future.
+
+**No allocation, no shared control block** -- a `FiberFuture` is just that one atomic word plus an `int error` (~16 bytes) and lives on the caller's stack. There is no separate, heap-allocated shared state shared between a future/promise pair: the "shared state" is the inline atomic word, the registered waiter is stored inline as the `Fiber*` itself, and `set()` wakes it with a direct scheduler enqueue. The SPSC contract is what makes this safe -- exactly one producer (`set`) and one consumer (`wait`/`isSet`/`subscribe`), so no reference counting is needed to decide who frees the state.
+
+This is a deliberate contrast with general-purpose future/promise types:
+
+- `std::promise`/`std::future` allocate a reference-counted shared state on the heap, jointly owned by the two ends -- `std::promise`'s `allocator_arg_t` constructor exists specifically to control that allocation -- and synchronize `get()` via a mutex + condition variable (libc++) or a futex (libstdc++).
+- `folly::Future`/`folly::Promise` heap-allocate a `Core<T>` via the static factory `Core::make()`; it carries `result_` + `callback_` + `executor_` + an atomic `state_` and is atomically reference-counted so both ends share one Core.
+
+Both pay a heap allocation plus an atomic refcount per future on creation and teardown; `FiberFuture` pays neither. This is the leaf-level reason the scheduler's blocking `read`/`write`/`poll`/`accept`/`connect`/`sleep` wrappers can declare their completion handle as a plain stack local and the hot path stays allocation-free.
 
 **suspendCallback race** -- the waiter pointer is installed inside `suspendCallback`, which runs after the fiber is parked. If `signal()` arrives between `wait()` reading `isSet=false` and the callback running, the callback finds `isSet=true` and reschedules the fiber immediately rather than parking it.
 
