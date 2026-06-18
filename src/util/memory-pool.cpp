@@ -12,7 +12,7 @@ MemoryPoolBase::MemoryPoolBase(
     uint32_t objectSize, uint32_t alignment, uint32_t stackEntryOffset, InitFn * initialize, DestroyFn * destroy) noexcept
     : objectSize(alignUp(objectSize, alignment))
     , alignment(alignment)
-    , chunkSize(alignUp<uint32_t>(slotsOffset() + MIN_BATCH_SIZE * this->objectSize, PAGE_SIZE))
+    , chunkSize(alignUp<uint32_t>(slotsOffset() + MIN_BATCH_SIZE * this->objectSize, kPageSize))
     , stackEntryOffset(stackEntryOffset)
     , initialize(initialize)
     , destroy(destroy)

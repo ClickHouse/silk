@@ -40,13 +40,21 @@ namespace silk
 {
 
 /** System page size in bytes. */
-static constexpr uint64_t PAGE_SIZE = 4096;
+#if defined(PAGE_SIZE)
+static constexpr uint64_t kPageSize = PAGE_SIZE;
+#else
+static constexpr uint64_t kPageSize = 4096;
+#endif
 
 /** Cache line size in bytes. */
-static constexpr uint64_t CACHELINE_SIZE = 64;
+#if defined(CACHE_LINESIZE)
+static constexpr uint64_t kCacheLineSize = CACHE_LINESIZE;
+#else
+static constexpr uint64_t kCacheLineSize = 64;
+#endif
 
 /** Hard cap on CPU index (largest known socket: 384 cores). */
-static constexpr uint16_t INVALID_PROCESSOR_NUMBER = (1 << 10);
+static constexpr uint16_t kInvalidProcessorNumber = (1 << 10);
 
 /** Round @p value up to the nearest multiple of @p align (must be a power of two). */
 template <typename T>

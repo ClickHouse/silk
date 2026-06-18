@@ -80,7 +80,7 @@ private:
      * objects or corruption. rseq guarantees the head update is atomic with
      * respect to preemption; count is updated after the rseq commit.
      */
-    struct alignas(CACHELINE_SIZE) ProcessorState
+    struct alignas(kCacheLineSize) ProcessorState
     {
         std::atomic<StackEntry *> head{};
         std::atomic<uint32_t> count{};

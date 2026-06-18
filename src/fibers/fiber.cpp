@@ -133,7 +133,7 @@ public:
     // dispatch and every suspension. runFiber's full read/write set lives on
     // this single line, so dispatch never pulls a second cache line on the
     // common path.
-    struct alignas(CACHELINE_SIZE)
+    struct alignas(kCacheLineSize)
     {
         // Intrusive node for pool free-list and WaitStack membership.
         StackEntry stackEntry;
@@ -150,10 +150,10 @@ public:
         bool inThreadMode = false;
 
         // CPU this fiber is assigned to.
-        uint16_t processorNumber = INVALID_PROCESSOR_NUMBER;
+        uint16_t processorNumber = kInvalidProcessorNumber;
 
         // Processor whose suspendedList this fiber is currently in.
-        uint16_t suspendedProcessorNumber = INVALID_PROCESSOR_NUMBER;
+        uint16_t suspendedProcessorNumber = kInvalidProcessorNumber;
 
         // Suspend callback set by suspend, invoked by runFiber after the
         // context switch back to the scheduler or thread worker.
@@ -173,7 +173,7 @@ public:
     // Cache line 1: context-switch state and profiler timestamps; touched on
     // every dispatch. Per-fiber-once fields (fiberMain, parametersDtor,
     // waitingFuture) piggyback for free.
-    struct alignas(CACHELINE_SIZE)
+    struct alignas(kCacheLineSize)
     {
         // mmap'd stack and fcontext handles for cooperative switching.
         void * stack = nullptr;
@@ -266,7 +266,7 @@ Fiber::~Fiber() noexcept
 
     if (stack)
     {
-        int r = ::munmap(stack, FiberScheduler::getOptions().fiberStackSize + 2 * PAGE_SIZE);
+        int r = ::munmap(stack, FiberScheduler::getOptions().fiberStackSize + 2 * kPageSize);
         SILK_ASSERT(!r);
     }
 }
@@ -277,8 +277,8 @@ bool Fiber::initialize(
     state.store(FiberState::SUSPENDED, std::memory_order_relaxed);
 
     inThreadMode = false;
-    processorNumber = INVALID_PROCESSOR_NUMBER;
-    suspendedProcessorNumber = INVALID_PROCESSOR_NUMBER;
+    processorNumber = kInvalidProcessorNumber;
+    suspendedProcessorNumber = kInvalidProcessorNumber;
     suspendCallback = nullptr;
     suspendContext = nullptr;
     fiberId = fiberId_;
@@ -291,17 +291,17 @@ bool Fiber::initialize(
 
     if (!stack)
     {
-        stack = ::mmap(nullptr, fiberStackSize + 2 * PAGE_SIZE, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        stack = ::mmap(nullptr, fiberStackSize + 2 * kPageSize, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
         if (stack == MAP_FAILED) [[unlikely]]
         {
             stack = nullptr;
             return false;
         }
 
-        int r = ::mprotect(stack, PAGE_SIZE, PROT_NONE);
+        int r = ::mprotect(stack, kPageSize, PROT_NONE);
         SILK_ASSERT(!r);
 
-        r = ::mprotect(static_cast<uint8_t *>(stack) + PAGE_SIZE + fiberStackSize, PAGE_SIZE, PROT_NONE);
+        r = ::mprotect(static_cast<uint8_t *>(stack) + kPageSize + fiberStackSize, kPageSize, PROT_NONE);
         SILK_ASSERT(!r);
     }
 
@@ -317,7 +317,7 @@ bool Fiber::initialize(
 
     fiberMain = fiberMain_;
     parametersDtor = parametersDtor_;
-    fiberContext = make_fcontext(static_cast<uint8_t *>(stack) + PAGE_SIZE + fiberStackSize, fiberStackSize, fiberContextMain);
+    fiberContext = make_fcontext(static_cast<uint8_t *>(stack) + kPageSize + fiberStackSize, fiberStackSize, fiberContextMain);
 
     return true;
 }
@@ -342,7 +342,7 @@ void Fiber::switchToFiberContext() noexcept
 #if defined(__SANITIZE_ADDRESS__)
     void * schedulerFakeStack = nullptr;
     __sanitizer_start_switch_fiber(
-        &schedulerFakeStack, static_cast<uint8_t *>(stack) + PAGE_SIZE, FiberScheduler::getOptions().fiberStackSize);
+        &schedulerFakeStack, static_cast<uint8_t *>(stack) + kPageSize, FiberScheduler::getOptions().fiberStackSize);
 #endif
 
 #if defined(__SANITIZE_THREAD__)
@@ -539,10 +539,10 @@ struct FiberScheduler::ProcessorState
     void removeSuspended(Fiber * fiber) noexcept;
 
     // Cache line 0: scheduling hot path.
-    struct alignas(CACHELINE_SIZE)
+    struct alignas(kCacheLineSize)
     {
         // CPU index this processor is pinned to.
-        uint16_t number = INVALID_PROCESSOR_NUMBER;
+        uint16_t number = kInvalidProcessorNumber;
 
         // Set to true by runScheduler after initialization completes.
         // The steal loop checks this before accessing the ring,
@@ -636,7 +636,7 @@ struct FiberScheduler::ProcessorState
 
 void FiberScheduler::ProcessorState::initialize(uint16_t cpu) noexcept
 {
-    SILK_ASSERT(cpu < INVALID_PROCESSOR_NUMBER);
+    SILK_ASSERT(cpu < kInvalidProcessorNumber);
     number = cpu;
 
     readyQueue.initialize(options.readyQueueCapacity);
@@ -1023,7 +1023,7 @@ void FiberScheduler::initialize(const Options * userOptions) noexcept
         options = *userOptions;
     }
 
-    SILK_ASSERT(options.fiberStackSize >= PAGE_SIZE && (options.fiberStackSize % PAGE_SIZE) == 0);
+    SILK_ASSERT(options.fiberStackSize >= kPageSize && (options.fiberStackSize % kPageSize) == 0);
     SILK_ASSERT(options.readyQueueCapacity >= 2 && (options.readyQueueCapacity & (options.readyQueueCapacity - 1)) == 0);
     SILK_ASSERT(options.ioUringQueueSize >= 2 && (options.ioUringQueueSize & (options.ioUringQueueSize - 1)) == 0);
     SILK_ASSERT(options.ioUringFlushThreshold >= 1 && options.ioUringFlushThreshold <= options.ioUringQueueSize);
@@ -1096,7 +1096,7 @@ void FiberScheduler::buildStealCandidates() noexcept
     for (uint16_t cpu = 0; cpu < scheduler->processorCount; ++cpu)
     {
         ProcessorState * processor = &scheduler->processorState[cpu];
-        if (processor->number == INVALID_PROCESSOR_NUMBER)
+        if (processor->number == kInvalidProcessorNumber)
         {
             continue;
         }
@@ -1112,7 +1112,7 @@ void FiberScheduler::buildStealCandidates() noexcept
                 continue;
             }
             uint64_t cost = UINT64_MAX;
-            if (scheduler->processorState[other].number != INVALID_PROCESSOR_NUMBER)
+            if (scheduler->processorState[other].number != kInvalidProcessorNumber)
             {
                 cost = topologyCostCycles(topologies[cpu], topologies[other]);
             }
@@ -1156,7 +1156,7 @@ void FiberScheduler::destroy() noexcept
     for (uint16_t cpu = 0; cpu < scheduler->processorCount; ++cpu)
     {
         ProcessorState * processor = &scheduler->processorState[cpu];
-        if (processor->number != INVALID_PROCESSOR_NUMBER)
+        if (processor->number != kInvalidProcessorNumber)
         {
             processor->wakeThread();
         }
@@ -1273,7 +1273,7 @@ void FiberScheduler::enqueueReady(Fiber * fiber) noexcept
 
         if (!fiber->inThreadMode)
         {
-            if (fiber->processorNumber == INVALID_PROCESSOR_NUMBER)
+            if (fiber->processorNumber == kInvalidProcessorNumber)
             {
                 fiber->processorNumber = getCurrentProcessor();
             }
@@ -1472,7 +1472,7 @@ void FiberScheduler::cancelIo(IoFuture * future) noexcept
     // it), io_uring returns -ENOENT and the original operation is never removed,
     // leaving the caller's IoFuture::wait() blocked forever.
     uint16_t processorNumber = future->processorNumber;
-    if (processorNumber == INVALID_PROCESSOR_NUMBER)
+    if (processorNumber == kInvalidProcessorNumber)
     {
         processorNumber = getCurrentProcessor();
     }
@@ -1992,11 +1992,11 @@ void FiberScheduler::runFiber(Fiber * fiber, CpuTimer * timer) noexcept
     // Maintain the per-CPU suspended list for GDB debuggability.
     // suspendedLock and suspendedList are co-located in ProcessorState cache line 0.
     // Benchmarking showed no net cost.
-    if (fiber->suspendedProcessorNumber != INVALID_PROCESSOR_NUMBER)
+    if (fiber->suspendedProcessorNumber != kInvalidProcessorNumber)
     {
         ProcessorState * processor = &scheduler->processorState[fiber->suspendedProcessorNumber];
         processor->removeSuspended(fiber);
-        fiber->suspendedProcessorNumber = INVALID_PROCESSOR_NUMBER;
+        fiber->suspendedProcessorNumber = kInvalidProcessorNumber;
     }
 
     ProcessorState * processor = &scheduler->processorState[fiber->processorNumber];
