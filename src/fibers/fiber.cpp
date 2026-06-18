@@ -741,8 +741,9 @@ void FiberScheduler::ProcessorState::parkThread(uint64_t waitNs, CpuTimer * time
         if (r < 0)
         {
             // io_uring_enter2 returns -errno directly; it does not set errno.
-            // ETIME: timeout expired with no CQE (normal); EINTR: signal interrupted (normal).
-            SILK_ASSERT(-r == ETIME || -r == EINTR);
+            // ETIME: timeout expired with no CQE (normal); EINTR: signal interrupted (normal);
+            // EBUSY: a full CQ blocked the overflow flush (the drain below clears it).
+            SILK_ASSERT(-r == ETIME || -r == EINTR || -r == EBUSY);
         }
 
         timer->reset(simpleCounters[SCHEDULER_SYSTEM_TIME], number);
@@ -933,17 +934,30 @@ __attribute__((noinline)) bool FiberScheduler::ProcessorState::submitIoSlow(uint
     // TSan needs an explicit barrier between submission/completion.
     TSAN_RELEASE(this);
 
-    lastSubmitCycles.store(startCycles, std::memory_order_relaxed);
-
     int r = ::io_uring_submit(&ring);
-    SILK_ASSERT(r >= 0);
+
+    // Under IORING_FEAT_NODROP the kernel returns EBUSY (EINTR/EAGAIN are likewise
+    // transient) when the CQ ring is full of unreaped completions: it refuses new
+    // SQEs whose completions it could not store. The SQEs stay queued, so defer
+    // rather than abort - the service loop drains the CQ, which schedules fibers and
+    // re-submits via handleReadyQueue. lastSubmitCycles is left stale on deferral so
+    // the staleness gate in submitIo retries promptly.
+    if (r < 0)
+    {
+        SILK_ASSERT(r == -EBUSY || r == -EINTR || r == -EAGAIN);
+        return false;
+    }
+
+    lastSubmitCycles.store(startCycles, std::memory_order_relaxed);
 
     if (profiler)
     {
         profileEvent(ProfileEventKind::SUBMIT_IO, 0, Tsc::getCycles() - startCycles);
     }
 
-    Perf::getSimpleCounter(simpleCounters[IO_ENQUEUED], number).increment(count);
+    // io_uring_submit reports how many SQEs it actually consumed, which can be fewer
+    // than were ready on a partial submit; count the real number, not sq_ready.
+    Perf::getSimpleCounter(simpleCounters[IO_ENQUEUED], number).increment(static_cast<uint64_t>(r));
     Perf::getSimpleCounter(simpleCounters[IO_SUBMITTED], number).increment();
     return true;
 }
@@ -1820,7 +1834,12 @@ __attribute__((noinline)) bool FiberScheduler::handleCompletionQueueSlow(Process
                 continue;
             }
 
-            // IO completion
+            // IO completion. Every IO op is one-shot - only the doorbell is multishot -
+            // so each IoFuture completes exactly once. A multishot IO op added later
+            // (recv/accept multishot) would deliver IORING_CQE_F_MORE here and set the
+            // same future repeatedly; trip loudly rather than double-complete silently.
+            SILK_ASSERT(!(cqe->flags & IORING_CQE_F_MORE));
+
             IoFuture * future = reinterpret_cast<IoFuture *>(tag);
             TSAN_ACQUIRE(future);
 
