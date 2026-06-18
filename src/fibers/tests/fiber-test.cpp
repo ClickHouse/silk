@@ -864,7 +864,7 @@ TEST(Fiber, WorkStealing)
     {
         std::atomic<bool> * started;
         std::atomic<bool> * stop;
-        std::atomic<uint32_t> * cpu;
+        std::atomic<uint16_t> * cpu;
 
         static int fiberMain(BlockerParams * p) noexcept
         {
@@ -885,7 +885,7 @@ TEST(Fiber, WorkStealing)
 
     std::atomic<bool> started{false};
     std::atomic<bool> stop{false};
-    std::atomic<uint32_t> blockerCpuAtom{UINT32_MAX};
+    std::atomic<uint16_t> blockerCpuAtom{INVALID_PROCESSOR_NUMBER};
 
     FiberFuture blocker;
     int r = FiberScheduler::run(BlockerParams::fiberMain, {&started, &stop, &blockerCpuAtom}, &blocker);
