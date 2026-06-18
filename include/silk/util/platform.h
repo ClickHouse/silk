@@ -45,6 +45,9 @@ static constexpr uint64_t PAGE_SIZE = 4096;
 /** Cache line size in bytes. */
 static constexpr uint64_t CACHELINE_SIZE = 64;
 
+/** Hard cap on CPU index (largest known socket: 384 cores). */
+static constexpr uint16_t INVALID_PROCESSOR_NUMBER = (1 << 10);
+
 /** Round @p value up to the nearest multiple of @p align (must be a power of two). */
 template <typename T>
 static constexpr T alignUp(T value, T align) noexcept
@@ -82,21 +85,21 @@ static T * containerOf(M * member, M T::* memberPtr) noexcept
 }
 
 /** Return the total number of online processors. */
-static inline uint32_t getProcessorCount() noexcept
+static inline uint16_t getProcessorCount() noexcept
 {
-    return static_cast<uint32_t>(sysconf(_SC_NPROCESSORS_ONLN));
+    return static_cast<uint16_t>(sysconf(_SC_NPROCESSORS_ONLN));
 }
 
 /** Return the number of processors available to the calling process (respects taskset/cgroup affinity). */
-static inline uint32_t getAvailableProcessorCount() noexcept
+static inline uint16_t getAvailableProcessorCount() noexcept
 {
     cpu_set_t cpuSet;
     sched_getaffinity(0, sizeof(cpuSet), &cpuSet);
-    return static_cast<uint32_t>(CPU_COUNT(&cpuSet));
+    return static_cast<uint16_t>(CPU_COUNT(&cpuSet));
 }
 
 /** Return the index of the CPU the calling thread is currently running on. */
-static inline uint32_t getCurrentProcessor() noexcept
+static inline uint16_t getCurrentProcessor() noexcept
 {
     // The thread pointer is read through volatile asm rather than __builtin_thread_pointer(). A fiber
     // may suspend on one OS thread and resume on another (work-stealing, or the SQ-ring-overflow yield
@@ -119,7 +122,7 @@ static inline uint32_t getCurrentProcessor() noexcept
     // which is the same rseq read we do here. We skip the function call and the cpu_id >= 0
     // fallback to vDSO/syscall -- safe on Linux 4.18+ / glibc 2.35+ where rseq is always registered.
     struct rseq * rseq = reinterpret_cast<struct rseq *>(threadPointer + __rseq_offset);
-    return rseq->cpu_id;
+    return static_cast<uint16_t>(rseq->cpu_id);
 }
 
 /** Yield the calling thread's remaining timeslice to the OS scheduler. */

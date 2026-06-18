@@ -27,11 +27,6 @@ static constexpr uint64_t FIBER_PARAMETERS_SIZE = 64;
 static constexpr uint64_t FIBER_PARAMETERS_OFFSET = 224;
 
 /**
- * Hard cap on CPU index (largest known socket: 384 cores).
- */
-static constexpr uint16_t INVALID_PROCESSOR_NUMBER = (1 << 10);
-
-/**
  * Fiber entry point signature. Returns an integer result code.
  */
 using FiberMain = int(void * parameters) noexcept;
@@ -349,7 +344,7 @@ public:
         uint8_t category = 0;
         // Processor whose io_uring ring holds this SQE; cancelIo must submit
         // the cancel to the same ring to avoid a cross-ring -ENOENT failure.
-        uint32_t processorNumber = INVALID_PROCESSOR_NUMBER;
+        uint16_t processorNumber = INVALID_PROCESSOR_NUMBER;
 #if defined(__SANITIZE_MEMORY__)
         // Used to mark the kernel-written bytes as initialized for MSan.
         iovec * readIov = nullptr;
@@ -526,7 +521,7 @@ public:
         StackEntry stackEntry;
         TreeEntry treeEntry;
         uint64_t deadlineCycles = 0;
-        uint32_t processorNumber = INVALID_PROCESSOR_NUMBER;
+        uint16_t processorNumber = INVALID_PROCESSOR_NUMBER;
         std::atomic<uint32_t> state{};
     };
 

@@ -499,7 +499,7 @@ struct FiberScheduler::CpuTimer
         counterRunning = counter;
     }
 
-    void reset(uint32_t counter, uint32_t cpu) noexcept
+    void reset(uint32_t counter, uint16_t cpu) noexcept
     {
         uint64_t now = Tsc::getCycles();
         uint64_t elapsedNs = Tsc::cyclesToNanoseconds(now - startedCycles);
@@ -518,7 +518,7 @@ struct FiberScheduler::CpuTimer
  */
 struct FiberScheduler::ProcessorState
 {
-    void initialize(uint32_t cpu) noexcept;
+    void initialize(uint16_t cpu) noexcept;
     void destroy() noexcept;
 
     FiberId allocateFiberId(uint8_t category) noexcept;
@@ -634,10 +634,10 @@ struct FiberScheduler::ProcessorState
     BoundedQueue<Fiber *> readyQueue;
 };
 
-void FiberScheduler::ProcessorState::initialize(uint32_t cpu) noexcept
+void FiberScheduler::ProcessorState::initialize(uint16_t cpu) noexcept
 {
     SILK_ASSERT(cpu < INVALID_PROCESSOR_NUMBER);
-    number = static_cast<uint16_t>(cpu);
+    number = cpu;
 
     readyQueue.initialize(options.readyQueueCapacity);
 
@@ -958,9 +958,9 @@ struct FiberScheduler::SchedulerState
 
     std::atomic<bool> stopping{};
 
-    uint32_t processorCount = 0;
-    uint32_t schedulerThreadCount = 0;
-    uint32_t workerThreadCount = 0;
+    uint16_t processorCount = 0;
+    uint16_t schedulerThreadCount = 0;
+    uint16_t workerThreadCount = 0;
 
     std::unique_ptr<ProcessorState[]> processorState;
     std::unique_ptr<std::thread[]> schedulerThreads;
@@ -1042,22 +1042,22 @@ void FiberScheduler::initialize(const Options * userOptions) noexcept
     CPU_ZERO(&processCpuSet);
     sched_getaffinity(0, sizeof(processCpuSet), &processCpuSet);
 
-    scheduler->schedulerThreadCount = CPU_COUNT(&processCpuSet);
+    scheduler->schedulerThreadCount = static_cast<uint16_t>(CPU_COUNT(&processCpuSet));
     scheduler->schedulerThreads = std::make_unique<std::thread[]>(scheduler->schedulerThreadCount);
 
-    for (uint32_t cpu = 0; cpu < scheduler->processorCount; ++cpu)
+    for (uint16_t cpu = 0; cpu < scheduler->processorCount; ++cpu)
     {
         if (CPU_ISSET(cpu, &processCpuSet))
         {
             ProcessorState * processor = &scheduler->processorState[cpu];
-            processor->number = static_cast<uint16_t>(cpu);
+            processor->number = cpu;
         }
     }
 
     buildStealCandidates();
 
-    uint32_t threadIndex = 0;
-    for (uint32_t cpu = 0; cpu < scheduler->processorCount; ++cpu)
+    uint16_t threadIndex = 0;
+    for (uint16_t cpu = 0; cpu < scheduler->processorCount; ++cpu)
     {
         if (CPU_ISSET(cpu, &processCpuSet))
         {
@@ -1066,7 +1066,7 @@ void FiberScheduler::initialize(const Options * userOptions) noexcept
         }
     }
 
-    for (uint32_t cpu = 0; cpu < scheduler->processorCount; ++cpu)
+    for (uint16_t cpu = 0; cpu < scheduler->processorCount; ++cpu)
     {
         if (CPU_ISSET(cpu, &processCpuSet))
         {
@@ -1081,7 +1081,7 @@ void FiberScheduler::initialize(const Options * userOptions) noexcept
     scheduler->workerThreadCount = scheduler->schedulerThreadCount;
     scheduler->workerThreads = std::make_unique<std::thread[]>(scheduler->workerThreadCount);
 
-    for (uint32_t i = 0; i < scheduler->workerThreadCount; ++i)
+    for (uint16_t i = 0; i < scheduler->workerThreadCount; ++i)
     {
         scheduler->workerThreads[i] = std::thread(runThreadWorker);
     }
@@ -1092,8 +1092,8 @@ void FiberScheduler::buildStealCandidates() noexcept
     auto topologies = std::make_unique<CpuTopology[]>(scheduler->processorCount);
     readCpuTopologies(topologies.get(), scheduler->processorCount);
 
-    uint32_t candidateCount = scheduler->processorCount - 1;
-    for (uint32_t cpu = 0; cpu < scheduler->processorCount; ++cpu)
+    uint16_t candidateCount = scheduler->processorCount - 1;
+    for (uint16_t cpu = 0; cpu < scheduler->processorCount; ++cpu)
     {
         ProcessorState * processor = &scheduler->processorState[cpu];
         if (processor->number == INVALID_PROCESSOR_NUMBER)
@@ -1104,8 +1104,8 @@ void FiberScheduler::buildStealCandidates() noexcept
         // Build an array of CPUs with the estimated stealing cost.
         processor->stealCandidates = std::make_unique<StealCandidate[]>(candidateCount);
 
-        uint32_t i = 0;
-        for (uint32_t other = 0; other < scheduler->processorCount; ++other)
+        uint16_t i = 0;
+        for (uint16_t other = 0; other < scheduler->processorCount; ++other)
         {
             if (other == cpu)
             {
@@ -1125,10 +1125,10 @@ void FiberScheduler::buildStealCandidates() noexcept
         // deterministic rotation by cpu % groupSize. Avoids the thundering
         // herd of every CPU racing the same first target while keeping the
         // candidate order reproducible across runs.
-        for (uint32_t start = 0; start < candidateCount;)
+        for (uint16_t start = 0; start < candidateCount;)
         {
             uint64_t groupCost = processor->stealCandidates[start].costCycles;
-            uint32_t end = start;
+            uint16_t end = start;
             while (end < candidateCount && processor->stealCandidates[end].costCycles == groupCost)
             {
                 ++end;
@@ -1153,7 +1153,7 @@ void FiberScheduler::destroy() noexcept
 
     scheduler->stopping.store(true, std::memory_order_release);
 
-    for (uint32_t cpu = 0; cpu < scheduler->processorCount; ++cpu)
+    for (uint16_t cpu = 0; cpu < scheduler->processorCount; ++cpu)
     {
         ProcessorState * processor = &scheduler->processorState[cpu];
         if (processor->number != INVALID_PROCESSOR_NUMBER)
@@ -1162,23 +1162,23 @@ void FiberScheduler::destroy() noexcept
         }
     }
 
-    for (uint32_t i = 0; i < scheduler->schedulerThreadCount; ++i)
+    for (uint16_t i = 0; i < scheduler->schedulerThreadCount; ++i)
     {
         scheduler->schedulerThreads[i].join();
     }
 
-    for (uint32_t cpu = 0; cpu < scheduler->processorCount; ++cpu)
+    for (uint16_t cpu = 0; cpu < scheduler->processorCount; ++cpu)
     {
         ProcessorState * processor = &scheduler->processorState[cpu];
         processor->destroy();
     }
 
-    for (uint32_t i = 0; i < scheduler->workerThreadCount; ++i)
+    for (uint16_t i = 0; i < scheduler->workerThreadCount; ++i)
     {
         scheduler->wakeThread();
     }
 
-    for (uint32_t i = 0; i < scheduler->workerThreadCount; ++i)
+    for (uint16_t i = 0; i < scheduler->workerThreadCount; ++i)
     {
         scheduler->workerThreads[i].join();
     }
@@ -1275,7 +1275,7 @@ void FiberScheduler::enqueueReady(Fiber * fiber) noexcept
         {
             if (fiber->processorNumber == INVALID_PROCESSOR_NUMBER)
             {
-                fiber->processorNumber = static_cast<uint16_t>(getCurrentProcessor());
+                fiber->processorNumber = getCurrentProcessor();
             }
 
             ProcessorState * processor = &scheduler->processorState[fiber->processorNumber];
@@ -1471,7 +1471,7 @@ void FiberScheduler::cancelIo(IoFuture * future) noexcept
     // was work-stolen to another CPU between registering the poll and cancelling
     // it), io_uring returns -ENOENT and the original operation is never removed,
     // leaving the caller's IoFuture::wait() blocked forever.
-    uint32_t processorNumber = future->processorNumber;
+    uint16_t processorNumber = future->processorNumber;
     if (processorNumber == INVALID_PROCESSOR_NUMBER)
     {
         processorNumber = getCurrentProcessor();
@@ -1547,7 +1547,7 @@ void FiberScheduler::cancelSleep(SleepFuture * future) noexcept
 LatencyReport FiberScheduler::reportLatency(ProfileEventKind kind, uint8_t category) noexcept
 {
     Histogram merged;
-    for (uint32_t cpu = 0; cpu < scheduler->processorCount; ++cpu)
+    for (uint16_t cpu = 0; cpu < scheduler->processorCount; ++cpu)
     {
         ProcessorState * processor = &scheduler->processorState[cpu];
         if (processor->profiler)
@@ -1664,8 +1664,8 @@ bool FiberScheduler::runStealLoop(ProcessorState * processor, uint64_t idleSince
     uint64_t idleCycles = now - idleSinceCycles;
     uint64_t deadlineCycles = now + idleCycles;
 
-    uint32_t candidateCount = scheduler->processorCount - 1;
-    for (uint32_t i = 0; i < candidateCount && now < deadlineCycles; ++i)
+    uint16_t candidateCount = scheduler->processorCount - 1;
+    for (uint16_t i = 0; i < candidateCount && now < deadlineCycles; ++i)
     {
         // Candidates are sorted cheapest first. Once the threshold exceeds our
         // idle duration all remaining candidates are even more expensive.
