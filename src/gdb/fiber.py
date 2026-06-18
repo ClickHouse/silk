@@ -437,7 +437,13 @@ _saved_ctx = None  # {"arch": str, "thread_num": int, "regs": {name: int}}
 
 
 def _get_reg(name):
-    return int(gdb.parse_and_eval(f"${name}"))
+    value = gdb.parse_and_eval(f"${name}")
+    try:
+        return int(value)
+    except gdb.error:
+        # Flag registers (x86 eflags, arm64 pstate) are TYPE_CODE_FLAGS, which
+        # int() rejects; the C-cast evaluator coerces them to an integer.
+        return int(gdb.parse_and_eval(f"(unsigned long)${name}"))
 
 
 def _set_reg(name, value):
