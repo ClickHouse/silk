@@ -3,6 +3,7 @@ class RunnerLabels:
     SMALL_AMD = "amd-small"
     MEDIUM_ARM = "arm-medium"
     MEDIUM_AMD = "amd-medium"
+    LARGE_ARM = "arm-large"
 
 
 PROJECT_NAME = "silk"

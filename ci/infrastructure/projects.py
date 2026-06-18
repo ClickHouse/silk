@@ -236,6 +236,15 @@ PROJECTS = [
                 image_builder=_IMAGE_BUILDERS_BY_NAME["ci-arm64-image"],
             ),
             Components.RunnerPool(
+                name="arm-large",
+                instance_type="c7g.8xlarge",
+                scaling=Components.RunnerPool.Scaling.Auto,
+                size=0,
+                max_size=50,
+                volume_size_gb=100,
+                image_builder=_IMAGE_BUILDERS_BY_NAME["ci-arm64-image"],
+            ),
+            Components.RunnerPool(
                 name="amd-medium",
                 instance_type="c7a.4xlarge",
                 scaling=Components.RunnerPool.Scaling.Auto,
