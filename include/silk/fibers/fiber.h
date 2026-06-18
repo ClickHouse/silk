@@ -344,7 +344,7 @@ public:
         uint8_t category = 0;
         // Processor whose io_uring ring holds this SQE; cancelIo must submit
         // the cancel to the same ring to avoid a cross-ring -ENOENT failure.
-        uint16_t processorNumber = INVALID_PROCESSOR_NUMBER;
+        uint16_t processorNumber = kInvalidProcessorNumber;
 #if defined(__SANITIZE_MEMORY__)
         // Used to mark the kernel-written bytes as initialized for MSan.
         iovec * readIov = nullptr;
@@ -521,7 +521,7 @@ public:
         StackEntry stackEntry;
         TreeEntry treeEntry;
         uint64_t deadlineCycles = 0;
-        uint16_t processorNumber = INVALID_PROCESSOR_NUMBER;
+        uint16_t processorNumber = kInvalidProcessorNumber;
         std::atomic<uint32_t> state{};
     };
 

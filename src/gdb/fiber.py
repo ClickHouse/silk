@@ -340,7 +340,7 @@ def _walk_bounded_queue(val):
 
     for i in range(num_items):
         pos = dequeue_pos + i
-        slot_addr = slots_base + (pos & mask) * 64  # stride = CACHELINE_SIZE
+        slot_addr = slots_base + (pos & mask) * 64  # stride = kCacheLineSize
         seq = _u64(slot_addr)
         if seq == pos + 1:  # slot has a valid value
             value = _ptr(slot_addr + 8)

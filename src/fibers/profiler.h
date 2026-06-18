@@ -71,8 +71,8 @@ private:
     // State.
     //
 
-    alignas(CACHELINE_SIZE) std::atomic<uint64_t> writeIndex{};
-    alignas(CACHELINE_SIZE) std::atomic<uint64_t> readIndex{};
+    alignas(kCacheLineSize) std::atomic<uint64_t> writeIndex{};
+    alignas(kCacheLineSize) std::atomic<uint64_t> readIndex{};
     std::atomic<uint64_t> events[RING_CAPACITY];
     Histogram histograms[NUM_KINDS][NUM_CATEGORIES];
 };
