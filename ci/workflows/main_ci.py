@@ -6,12 +6,12 @@ WORKFLOWS = [
     Workflow.Config(
         name="Main CI",
         event=Workflow.Event.PUSH,
-        branches=["main"],
+        branches=["main", "add-praktika-ci-config"],
         jobs=[
             Job.Config(
-                name="Smoke Test",
+                name="Hello World Test",
                 runs_on=[RunnerLabels.SMALL_ARM],
-                command='python3 -c \'print("hello from main ci")\'',
+                command='python3 -c \'print("hello world")\'',
             ),
         ],
         enable_report=True,

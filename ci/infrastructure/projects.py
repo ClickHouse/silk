@@ -4,7 +4,7 @@ from praktika.infrastructure.cloud import CloudInfrastructure
 
 
 # until published in pip
-_PRAKTIKA_WHL = "https://praktika-artifacts-eu-north-1.s3.amazonaws.com/packages/praktika-0.1.2-py3-none-any.whl"
+_PRAKTIKA_WHL = "https://praktika-artifacts-eu-north-1.s3.amazonaws.com/packages/praktika-0.1.3-py3-none-any.whl"
 _PRAKTIKA_CONTROLLER_WHL = "https://praktika-artifacts-eu-north-1.s3.amazonaws.com/packages/praktika_controller-0.1.1-py3-none-any.whl"
 
 
@@ -142,11 +142,11 @@ def _silk_ci_image_components():
 
 
 def _image_builders():
-    image_recipe_version = "1.0.6"
+    image_recipe_version = "1.0.7"
     prebuilt_venvs = [
         Components.create_praktika_venv_config(
             PRAKTIKA_BASE_VENV,
-            "0.1.2",
+            "0.1.3",
         ),
     ]
     return [
@@ -178,7 +178,7 @@ _IMAGE_BUILDERS_BY_NAME = {builder.name: builder for builder in _IMAGE_BUILDERS}
 PROJECTS = [
     CloudInfrastructure.Config(
         name=PROJECT_NAME,
-        min_praktika_version="0.1.2",
+        min_praktika_version="0.1.3",
         vpcs=[
             VPC.Config(
                 subnets=[
@@ -204,6 +204,7 @@ PROJECTS = [
             capacity_reserve=1,
             volume_size_gb=100,
             image_builder=_IMAGE_BUILDERS_BY_NAME["ci-arm64-image"],
+            ext={"allowed_push_branches": ["main", "add-praktika-ci-config"]}
         ),
         runner_pools=[
             Components.RunnerPool(
