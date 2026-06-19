@@ -13,6 +13,7 @@ FiberFuture         -- single-producer/single-consumer result handle
 FiberFutex          -- counter-based wakeup (Linux futex pattern)
 FiberMutex          -- mutual exclusion, unfair
 FiberCondVar        -- condition variable (mirrors std::condition_variable)
+FiberMultiLock      -- keyed lock; per-key FIFO mutual exclusion
 
 FiberSequencer      -- monotone counter with ordered, cancellable waiters
   FiberEvent        -- manual-reset event (built on FiberSequencer)
@@ -136,6 +137,31 @@ cv.notify_one();   // or cv.notify_all()
 **wait_for** -- `cv.wait_for(lock, nanoseconds)` returns 0 on a notify-driven wakeup or `ETIMEDOUT` on timeout. Implemented via `FiberFuture::waitWithTimeout`; on timeout the future cancels itself, which removes it from the waiter list. A notify that races at the boundary may consume our future but `wait_for` still returns `ETIMEDOUT` -- the predicate re-check handles the lost wakeup, per the usual cv contract.
 
 **Cancel/notify race** -- a single `inWaiters` bool per waiter, read and written only under `spinLock`, serializes timeout-triggered self-cancel against `notify_one` / `notify_all`. Exactly one of those paths removes the future from the list and calls `set()`; the other observes `inWaiters` is false and bails. `notify_all` splices the waiter list into a local snapshot and clears `inWaiters` on each, all under the lock; the actual `set(0)` calls fire outside the lock.
+
+---
+
+## FiberMultiLock
+
+Keyed lock over a `uint64_t` key space: the same key gives mutual exclusion while distinct keys proceed independently, and contenders for a held key are granted it in FIFO order. Non-reentrant. Useful when a fiber must serialize work per logical resource (a row, a partition, a shard) without standing up a lock object per resource.
+
+```cpp
+FiberMultiLock multiLock;
+{
+    FiberMultiLock::ScopedLock scopedLock;
+    multiLock.lock(key, &scopedLock);   // suspends until the key is free
+    /* critical section */
+}                                       // destructor releases the key to the next waiter
+```
+
+`try_lock(key, &scopedLock)` is the non-suspending variant: it returns true and populates the handle when the key is free, or returns false and leaves the handle empty when the key is held.
+
+**No allocation** -- Each acquisition's `WaitEntry` (which inherits `FiberFuture`) lives inside the caller's `ScopedLock` on the calling fiber's stack. A holder's entry stays alive for the whole hold and a waiter's stays alive while it is parked inside `lock`, which is what lets a releaser safely wake a successor that still owns its entry on another fiber's stack.
+
+**State** -- a `SpinLock` protects a `Tree<WaitEntry>` keyed by `key`. The tree holds exactly one entry per held key, and that entry is the holder; each holder owns an intrusive `List<WaitEntry>` of the fibers queued behind it in arrival order.
+
+**lock** -- under the spinlock, look the key up in the tree. If absent, insert the caller's entry as the holder and return without suspending. If present, push the caller's entry onto the holder's waiter list, drop the spinlock, and park on the entry's own `FiberFuture`.
+
+**unlock** -- under the spinlock, pop the front of the holder's waiter list. A popped successor splices the remaining queue onto itself and replaces the holder in the tree; with an empty queue the holder's entry is just removed. The successor's future is set outside the spinlock, waking it to return from its own `lock` already holding the key. Because the queue moves intact across each handoff, arrival order is preserved end to end, giving per-key FIFO fairness.
 
 ---
 
