@@ -442,8 +442,9 @@ def _get_reg(name):
         return int(value)
     except gdb.error:
         # Flag registers (x86 eflags, arm64 pstate) are TYPE_CODE_FLAGS, which
-        # int() rejects; the C-cast evaluator coerces them to an integer.
-        return int(gdb.parse_and_eval(f"(unsigned long)${name}"))
+        # int() rejects and a C-cast coerces only on some targets (it raises
+        # "Invalid cast" for arm64 pstate). Read the raw register bytes instead.
+        return int.from_bytes(value.bytes, "little")
 
 
 def _set_reg(name, value):
