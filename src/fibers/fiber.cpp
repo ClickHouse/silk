@@ -1269,6 +1269,7 @@ void FiberScheduler::enqueueReady(Fiber * fiber) noexcept
                 fiber->processorNumber = getCurrentProcessor();
             }
 
+#ifndef __SANITIZE_THREAD__
             ProcessorState * processor = &scheduler->processorState[fiber->processorNumber];
             if (processor->readyQueue.enqueue(fiber))
             {
@@ -1279,6 +1280,7 @@ void FiberScheduler::enqueueReady(Fiber * fiber) noexcept
 
             // Ready queue full: fall back to worker thread pool.
             Perf::getSimpleCounter(simpleCounters[READY_QUEUE_FULL], processor->number).increment();
+#endif
         }
 
         scheduler->readyQueue.enqueue(fiber);
