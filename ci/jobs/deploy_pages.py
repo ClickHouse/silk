@@ -1,4 +1,3 @@
-import os
 import shutil
 import tarfile
 from pathlib import Path
@@ -40,18 +39,6 @@ def _extract_coverage_archive():
 
 def main():
     info = Info()
-    branch = info.git_branch or os.environ.get("GITHUB_REF_NAME", "")
-    main_branch = Settings.MAIN_BRANCH or "main"
-    if branch != main_branch:
-        print(
-            f"Skip GitHub Pages deployment for branch [{branch}], "
-            f"expected [{main_branch}]"
-        )
-        return Result.create_from(
-            name="Publish Coverage Report",
-            status=Result.Status.SKIPPED,
-            info=f"GitHub Pages deployment runs only on {main_branch}",
-        ).complete_job()
 
     _extract_coverage_archive()
     url = GH.publish_gh_pages(

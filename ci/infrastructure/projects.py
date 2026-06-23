@@ -170,6 +170,15 @@ def _image_builders():
 
 
 _GH_TOKEN_MINTER = Components.GitHubTokenMinter(
+    permissions={
+        "checks": "write",
+        "contents": "write",
+        "issues": "write",
+        "metadata": "read",
+        "pages": "write",
+        "pull_requests": "write",
+        "statuses": "write",
+    },
     repositories=[PROJECT_NAME],
 )
 _IMAGE_BUILDERS = _image_builders()
