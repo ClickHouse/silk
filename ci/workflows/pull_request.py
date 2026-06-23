@@ -1,67 +1,15 @@
-from praktika import Job, Workflow
-from ci.settings.settings import RunnerLabels
-
-FMT_JOB = Job.Config(
-    name="Formatting",
-    runs_on=[RunnerLabels.SMALL_ARM],
-    command="python3 ./ci/jobs/fmt_job.py",
-    digest_config=Job.CacheDigestConfig(
-        include_paths=["src", "include"],
-    ),
-)
-
-_TEST_DIGEST = Job.CacheDigestConfig(
-    include_paths=[
-        "src",
-        "include",
-        "CMakeLists.txt",
-        "CMakePresets.json",
-        "bb",
-        "ci/jobs/init_submodules.py",
-    ],
-    with_git_submodules=True,
-)
-
-_CHECKOUT_TEST_SUBMODULES = "python3 ./ci/jobs/init_submodules.py"
-
-_TEST_ARM = Job.Config(
-    name="Test ARM",
-    runs_on=[RunnerLabels.MEDIUM_ARM],
-    command="python3 ./ci/jobs/test_job.py {PARAMETER}",
-    needs_submodules=True,
-    pre_hooks=[_CHECKOUT_TEST_SUBMODULES],
-    timeout=2 * 3600,
-    digest_config=_TEST_DIGEST,
-)
-
-_TEST_AMD = Job.Config(
-    name="Test AMD",
-    runs_on=[RunnerLabels.MEDIUM_AMD],
-    command="python3 ./ci/jobs/test_job.py {PARAMETER}",
-    needs_submodules=True,
-    pre_hooks=[_CHECKOUT_TEST_SUBMODULES],
-    timeout=2 * 3600,
-    digest_config=_TEST_DIGEST,
-)
-
-_BUILD_VARIANTS = [
-    Job.ParamSet(parameter="coverage"),
-    Job.ParamSet(parameter="release"),
-    Job.ParamSet(parameter="tsan"),
-    Job.ParamSet(parameter="asan"),
-    Job.ParamSet(parameter="ubsan"),
-    Job.ParamSet(parameter="msan"),
-]
+from praktika import Workflow
+from ci.workflows.jobs import BUILD_VARIANTS, FMT_JOB, TEST_AMD, TEST_ARM
 
 WORKFLOWS = [
     Workflow.Config(
-        name="Pull Request CI",
+        name="PR",
         event=Workflow.Event.PULL_REQUEST,
         base_branches=["main"],
         jobs=[
-            FMT_JOB,
-            *_TEST_ARM.parametrize(*_BUILD_VARIANTS),
-            *_TEST_AMD.parametrize(*_BUILD_VARIANTS),
+            FMT_JOB.copy(),
+            *TEST_ARM.parametrize(*BUILD_VARIANTS),
+            *TEST_AMD.parametrize(*BUILD_VARIANTS),
         ],
         enable_cache=True,
         enable_report=True,

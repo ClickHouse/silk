@@ -2,6 +2,10 @@
 .claude/*.local.*
 .vscode/
 .tools/
+__pycache__/
+*.py[cod]
 build/
 compile_commands.json
 ci/tmp/
+ci/infrastructure/*.secret
+ci/infrastructure/*_api_gateway.txt

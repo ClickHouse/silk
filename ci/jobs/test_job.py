@@ -5,6 +5,10 @@ from praktika.result import Result
 _CONFIGS = {
     "coverage": {
         "test": "./bb -b debug test --coverage",
+        "package_coverage": (
+            "mkdir -p ci/tmp && "
+            "tar -C build/debug-coverage/html -czf ci/tmp/coverage-html.tar.gz ."
+        ),
     },
     "release": {
         "configure": "./bb -b release configure --build-poco --build-jemalloc",
@@ -48,6 +52,14 @@ if __name__ == "__main__":
             command=[config["test"]],
         )
     )
+
+    if "package_coverage" in config:
+        results.append(
+            Result.from_commands_run(
+                name="Package coverage HTML",
+                command=[config["package_coverage"]],
+            )
+        )
 
     if "bench" in config:
         results.append(
