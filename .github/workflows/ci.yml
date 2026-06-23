@@ -1,8 +1,12 @@
 name: CI
 
 on:
-  push:
-    branches: [main]
+  ## PR, Main workflow managed by praktika and defined in ./ci/workflows
+  # push:
+  #   branches: [main]
+  # pull_request:
+  #   branches: [main]
+  ## Dispatch workflow preserved enabled until supported natively by praktika
   workflow_dispatch:
 
 jobs:

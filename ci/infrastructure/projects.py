@@ -1,32 +1,11 @@
-from ci.settings.settings import PROJECT_NAME, PROJECT_SLUG, PRAKTIKA_BASE_VENV
+from ci.settings.settings import PROJECT_NAME, PRAKTIKA_BASE_VENV
 from praktika.infrastructure import Components, Storage, VPC
 from praktika.infrastructure.cloud import CloudInfrastructure
 
 
 # until published in pip
-_PRAKTIKA_WHL = "https://praktika-artifacts-eu-north-1.s3.amazonaws.com/packages/praktika-0.1.3-py3-none-any.whl"
 _PRAKTIKA_CONTROLLER_WHL = "https://praktika-artifacts-eu-north-1.s3.amazonaws.com/packages/praktika_controller-0.1.1-py3-none-any.whl"
 
-
-def _runner_user_data():
-    return "\n".join(
-        [
-            "#!/usr/bin/env bash",
-            "set -xeuo pipefail",
-            "",
-            "# Force-reinstall praktika so the runner uses the version pinned here",
-            "# rather than whatever was baked into the AMI at image-build time.",
-            (
-                f"/opt/praktika/base-venvs/{PRAKTIKA_BASE_VENV}/bin/python "
-                f"-m pip install --force-reinstall {_PRAKTIKA_WHL}"
-            ),
-            "# Add any host customization you need above this line.",
-            "/usr/local/bin/praktika-configure-cloudwatch-agent",
-            "/opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl -a fetch-config -m ec2 -c file:/etc/praktika/amazon-cloudwatch-agent.json -s",
-            "systemctl enable --now praktika-controller",
-            "",
-        ]
-    )
 
 
 def _silk_ci_dependencies_component():
@@ -142,11 +121,11 @@ def _silk_ci_image_components():
 
 
 def _image_builders():
-    image_recipe_version = "1.0.7"
+    image_recipe_version = "1.0.8"
     prebuilt_venvs = [
         Components.create_praktika_venv_config(
             PRAKTIKA_BASE_VENV,
-            "0.1.3",
+            "0.1.4",
         ),
     ]
     return [
@@ -187,7 +166,7 @@ _IMAGE_BUILDERS_BY_NAME = {builder.name: builder for builder in _IMAGE_BUILDERS}
 PROJECTS = [
     CloudInfrastructure.Config(
         name=PROJECT_NAME,
-        min_praktika_version="0.1.3",
+        min_praktika_version="0.1.4",
         vpcs=[
             VPC.Config(
                 subnets=[
@@ -210,10 +189,10 @@ PROJECTS = [
             scaling=Components.OrchestratorPool.Scaling.Auto,
             size=0,
             max_size=50,
-            capacity_reserve=1,
             volume_size_gb=100,
+            capacity_reserve=1,
             image_builder=_IMAGE_BUILDERS_BY_NAME["ci-arm64-image"],
-            ext={"allowed_push_branches": ["main", "add-praktika-ci-config"]}
+            ext={"allowed_push_branches": ["main"]}
         ),
         runner_pools=[
             Components.RunnerPool(
@@ -224,7 +203,13 @@ PROJECTS = [
                 max_size=50,
                 volume_size_gb=100,
                 image_builder=_IMAGE_BUILDERS_BY_NAME["ci-arm64-image"],
-                user_data=_runner_user_data(),
+                allowed_ssm_parameters=[],
+                allowed_secrets=[],
+                allowed_s3_prefixes=["artifacts-eu-north-1"],
+                allow_all_ssm_parameters=False,
+                allow_all_secrets=False,
+                allow_all_s3_prefixes=False,
+                allow_ssm_debug=False,
             ),
             Components.RunnerPool(
                 name="amd-small",
@@ -234,7 +219,13 @@ PROJECTS = [
                 max_size=50,
                 volume_size_gb=100,
                 image_builder=_IMAGE_BUILDERS_BY_NAME["ci-x86_64-image"],
-                user_data=_runner_user_data(),
+                allowed_ssm_parameters=[],
+                allowed_secrets=[],
+                allowed_s3_prefixes=["artifacts-eu-north-1"],
+                allow_all_ssm_parameters=False,
+                allow_all_secrets=False,
+                allow_all_s3_prefixes=False,
+                allow_ssm_debug=False,
             ),
             Components.RunnerPool(
                 name="arm-medium",
@@ -244,15 +235,13 @@ PROJECTS = [
                 max_size=50,
                 volume_size_gb=100,
                 image_builder=_IMAGE_BUILDERS_BY_NAME["ci-arm64-image"],
-            ),
-            Components.RunnerPool(
-                name="arm-large",
-                instance_type="c7g.8xlarge",
-                scaling=Components.RunnerPool.Scaling.Auto,
-                size=0,
-                max_size=50,
-                volume_size_gb=100,
-                image_builder=_IMAGE_BUILDERS_BY_NAME["ci-arm64-image"],
+                allowed_ssm_parameters=[],
+                allowed_secrets=[],
+                allowed_s3_prefixes=["artifacts-eu-north-1"],
+                allow_all_ssm_parameters=False,
+                allow_all_secrets=False,
+                allow_all_s3_prefixes=False,
+                allow_ssm_debug=False,
             ),
             Components.RunnerPool(
                 name="amd-medium",
@@ -262,6 +251,13 @@ PROJECTS = [
                 max_size=50,
                 volume_size_gb=100,
                 image_builder=_IMAGE_BUILDERS_BY_NAME["ci-x86_64-image"],
+                allowed_ssm_parameters=[],
+                allowed_secrets=[],
+                allowed_s3_prefixes=["artifacts-eu-north-1"],
+                allow_all_ssm_parameters=False,
+                allow_all_secrets=False,
+                allow_all_s3_prefixes=False,
+                allow_ssm_debug=False,
             ),
         ],
     )

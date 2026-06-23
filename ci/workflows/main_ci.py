@@ -20,7 +20,7 @@ WORKFLOWS = [
     Workflow.Config(
         name="Main",
         event=Workflow.Event.PUSH,
-        branches=["main", "add-praktika-ci-config"],
+        branches=["main"],
         jobs=[
             *_TEST_JOBS,
             PUBLISH_COVERAGE_REPORT_JOB.set_run_after(_TEST_JOBS),
