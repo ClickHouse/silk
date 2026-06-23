@@ -48,13 +48,14 @@ bool FiberSequencer::advance(uint64_t value) noexcept
         {
             return false;
         }
-
         if (counter.compare_exchange_weak(current, value, std::memory_order_release, std::memory_order_relaxed))
         {
-            drain();
-            return true;
+            break;
         }
     }
+
+    drain();
+    return true;
 }
 
 void FiberSequencer::cancelWait(Future * future) noexcept
@@ -82,6 +83,11 @@ void FiberSequencer::cancelWait(Future * future) noexcept
 
 void FiberSequencer::drain() noexcept
 {
+    // Producer half of a StoreLoad (Dekker) handshake on counter vs combinerState (acquire / release cannot
+    // do StoreLoad): order a caller's preceding counter advance before the combinerState observe below, so a
+    // combiner found already running is guaranteed to see the advance - else it skips a reached waiter and exits.
+    std::atomic_thread_fence(std::memory_order_seq_cst);
+
     // Only one combiner runs at a time; others signal PENDING and return.
     if (!acquireCombiner())
     {
@@ -91,9 +97,7 @@ void FiberSequencer::drain() noexcept
     WaitList wakeList;
     WaitList cancelList;
 
-    // Repeat if another thread signalled PENDING while we were draining,
-    // meaning new work (increments or cancellations) arrived during this pass.
-    do
+    for (;;)
     {
         uint64_t current = counter.load(std::memory_order_acquire);
 
@@ -140,7 +144,17 @@ void FiberSequencer::drain() noexcept
             wakeList.push(future);
         }
 
-    } while (!releaseCombiner());
+        // Repeat if another thread signalled PENDING while we were draining,
+        // meaning new work (increments or cancellations) arrived during this pass.
+        if (releaseCombiner())
+        {
+            break;
+        }
+
+        // Combiner half: order the PENDING -> BUSY restore before the next counter load, so the re-read sees
+        // the advance that signalled PENDING. (First pass needs none - PENDING forces this re-loop.)
+        std::atomic_thread_fence(std::memory_order_seq_cst);
+    }
 
     // Wake outside the combiner so set can itself call drain without deadlocking.
     while (Future * future = wakeList.pop())
