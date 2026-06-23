@@ -72,6 +72,20 @@ static constexpr T alignDown(T value, T align) noexcept
     return value & ~(align - 1);
 }
 
+/** Round @p value up to the nearest multiple of @p align (must be a power of two). */
+template <typename T>
+static T * alignUp(T * ptr, size_t align) noexcept
+{
+    return reinterpret_cast<T *>(alignUp<uintptr_t>(reinterpret_cast<uintptr_t>(ptr), align));
+}
+
+/** Round @p value down to the nearest multiple of @p align (must be a power of two). */
+template <typename T>
+static T * alignDown(T * ptr, size_t align) noexcept
+{
+    return reinterpret_cast<T *>(alignDown<uintptr_t>(reinterpret_cast<uintptr_t>(ptr), align));
+}
+
 /**
  * Return the byte offset of a member within its containing object.
  * C++ equivalent of offsetof, but works with a pointer-to-member instead of a name.
