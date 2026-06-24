@@ -5,6 +5,18 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
+#include <atomic>
+#include <cerrno>
+#include <cstdint>
+#include <cstdlib>
+#include <string>
+#include <thread>
+#include <vector>
+
+#include <pthread.h>
+#include <sched.h>
+
 namespace silk
 {
 
@@ -467,6 +479,93 @@ TEST(FiberSequencer, advancePastMultipleTokens)
     }
 
     ASSERT_EQ(sequencer.get(), 4u);
+}
+
+// Regression guard for the StoreLoad (Dekker) handshakes in drain() - the producer/combiner half that the
+// fences in advance/increment/drain protect. Several incrementer threads contend for the single flat-combiner
+// while one waiter sits at the FINAL token: the wakeup it depends on is the very last increment, so if a
+// contended combiner reads a stale counter (its relaxed BUSY restore reordered past the counter re-read, or
+// the advance reordered past the combinerState observe) and skips the waiter, nothing later re-wakes it and
+// the loss is permanent. Registering at the final token is the crux: concurrentIncrement sits at token 1,
+// which any later increment re-wakes, so it cannot see this. Driven from raw OS threads pinned across cores so
+// the increments genuinely contend. This reproduces on x86 (the relaxed BUSY store is the reordering one);
+// with the drain fences removed the lost-wakeup count is non-zero, with them in place it is exactly zero.
+TEST(FiberSequencer, lostWakeupUnderContention)
+{
+    const unsigned cores = std::thread::hardware_concurrency();
+    if (cores < 3)
+    {
+        GTEST_SKIP() << "needs >= 3 cores to contend for the combiner";
+    }
+    const uint32_t threads = std::min(8u, cores); // incrementers, and the waiter's (final) token
+
+    uint64_t iters = 200'000;
+    if (const char * env = std::getenv("SILK_SEQ_LITMUS_ITERS"))
+    {
+        iters = std::strtoull(env, nullptr, 10);
+    }
+
+    std::atomic<uint64_t> go{0};
+    std::atomic<uint64_t> done{0};
+    std::atomic<FiberSequencer *> seqPtr{nullptr};
+
+    std::vector<std::thread> incrementers;
+    for (uint32_t t = 0; t < threads; ++t)
+    {
+        incrementers.emplace_back(
+            [&, t]
+            {
+                cpu_set_t set;
+                CPU_ZERO(&set);
+                CPU_SET(int(t % cores), &set);
+                pthread_setaffinity_np(pthread_self(), sizeof(set), &set);
+
+                for (uint64_t i = 1; i <= iters; ++i)
+                {
+                    while (go.load(std::memory_order_acquire) != i)
+                    {
+                    }
+                    seqPtr.load(std::memory_order_relaxed)->increment();
+                    done.fetch_add(1, std::memory_order_release);
+                }
+            });
+    }
+
+    uint64_t lost = 0;
+    for (uint64_t i = 1; i <= iters; ++i)
+    {
+        FiberSequencer sequencer;
+        FiberSequencer::Future future;
+        // Token == final counter value: the waiter's wakeup rests on the last of the contended increments,
+        // so a wakeup lost in that drain is never repaired by a later one.
+        sequencer.wait(threads, &future);
+        seqPtr.store(&sequencer, std::memory_order_relaxed);
+        done.store(0, std::memory_order_relaxed);
+        go.store(i, std::memory_order_release); // release publishes the fresh sequencer to the incrementers
+        while (done.load(std::memory_order_acquire) != threads)
+        {
+        }
+
+        int err;
+        if (!future.isSet(&err))
+        {
+            ++lost; // counter reached the token but the waiter was never woken
+            // The lost future is still linked in the sequencer's tree/queue; unlink it (all incrementers are
+            // parked, so this drain is uncontended) before it is destroyed, else safe_link asserts in debug.
+            future.cancel();
+        }
+        // sequencer and future are destroyed here; all incrementers are parked on go for the next iteration.
+    }
+
+    for (std::thread & thread : incrementers)
+    {
+        thread.join();
+    }
+
+    RecordProperty("iterations", std::to_string(iters));
+    RecordProperty("threads", std::to_string(threads));
+    RecordProperty("lost_wakeups", std::to_string(lost));
+    ASSERT_EQ(lost, 0u) << lost << " permanent lost wakeups over " << iters << " iterations with " << threads << " contending incrementers";
 }
 
 } // namespace silk
