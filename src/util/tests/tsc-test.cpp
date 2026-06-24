@@ -12,10 +12,11 @@ TEST(Tsc, FrequencyIsReasonable)
     uint64_t freq = Tsc::getFrequency();
 #if defined(__aarch64__)
     // On ARM getFrequency() returns cntfrq_el0, the architectural system counter
-    // frequency, which is unrelated to the CPU clock and runs much slower -- e.g.
-    // ~122 MHz on AWS Graviton. Bound it loosely to catch a garbage reading.
+    // frequency, which is unrelated to the CPU clock -- e.g. ~122 MHz on AWS
+    // Graviton, but other parts run it faster (1.05 GHz observed). Bound it
+    // loosely to catch a garbage reading.
     EXPECT_GE(freq, 1'000'000ULL); // >= 1 MHz
-    EXPECT_LE(freq, 1'000'000'000ULL); // <= 1 GHz
+    EXPECT_LE(freq, 4'000'000'000ULL); // <= 4 GHz
 #else
     // On x86 the TSC is anchored to the CPU clock.
     EXPECT_GE(freq, 1'000'000'000ULL); // >= 1 GHz
