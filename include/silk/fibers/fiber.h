@@ -349,6 +349,10 @@ public:
         // Used to mark the kernel-written bytes as initialized for MSan.
         iovec * readIov = nullptr;
         uint32_t readIovLen = 0;
+        // Backing storage for the single contiguous region of a fixed read
+        // (readFixed api has no caller-owned iovec to point at).
+        // readIov is pointed here in that case. Needed for Memory sanitizer.
+        iovec readIovStorage{};
 #endif
     };
 
@@ -415,6 +419,52 @@ public:
      * @param future       Completion handle; wait() returns 0 on success or a errno on failure.
      */
     static void write(int fd, iovec * iov, uint32_t iov_len, uint64_t offset, uint64_t * bytesWritten, IoFuture * future) noexcept;
+
+    /**
+     * Async fixed-buffer read: submits IORING_OP_READ_FIXED against the buffer
+     * previously registered at @p bufIndex (see registerBuffers). @p buf must lie
+     * within that registered buffer. Single contiguous region (no iovec import);
+     * the kernel skips the per-IO page-pin by reusing the pre-pinned registration.
+     *
+     * @param fd        File descriptor to read from.
+     * @param buf       Destination, inside the registered buffer at @p bufIndex.
+     * @param len       Number of bytes to read.
+     * @param offset    Byte offset within the file.
+     * @param bufIndex  Index into the registered buffer table.
+     * @param bytesRead If not null, receives the number of bytes read on success.
+     * @param future    Completion handle.
+     */
+    static void readFixed(int fd, void * buf, uint32_t len, uint64_t offset, int bufIndex, uint64_t * bytesRead, IoFuture * future) noexcept;
+
+    /**
+     * Async fixed-buffer write: IORING_OP_WRITE_FIXED. See readFixed.
+     */
+    static void
+    writeFixed(int fd, const void * buf, uint32_t len, uint64_t offset, int bufIndex, uint64_t * bytesWritten, IoFuture * future) noexcept;
+
+    /**
+     * Register a fixed buffer set on every per-CPU io_uring ring, so a fiber that
+     * is work-stolen to another CPU can still submit READ_FIXED/WRITE_FIXED
+     * referencing the same index. Call once after initialize(), before issuing any
+     * fixed-buffer IO. @p count buffers are addressable as bufIndex 0..count-1.
+     *
+     * You can only call this once. io_uring allows one buffer set per ring, and
+     * there is no way to undo or change it, so a second call fails (-EBUSY) and
+     * trips an assert.
+     *
+     * Each ring pins its own copy of the buffers in memory, so the total locked
+     * memory is (number of CPUs) * (size of all buffers). With many CPUs or large
+     * buffers this can go over the RLIMIT_MEMLOCK limit; if it does, registration
+     * fails and trips an assert.
+     *
+     * Not NUMA-aware. Registration only pins the existing pages (it never copies
+     * or migrates them), so the physical pages stay on whatever node first-touched
+     * them, regardless of which CPU's ring they are registered on or which CPU a
+     * fiber is later work-stolen to. If NUMA placement matters, control it at
+     * allocation/first-touch time on the caller side (e.g. mbind/set_mempolicy
+     * before writing the buffer); this API cannot influence it.
+     */
+    static void registerBuffers(const iovec * iovecs, unsigned count) noexcept;
 
     /**
      * Blocking poll: suspend the calling fiber until one of the requested

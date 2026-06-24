@@ -117,6 +117,17 @@ All sleep deadlines are in TSC cycles. `Tsc::getCycles()` is `rdtsc` / `cntvct_e
 
 Each of `read`, `write`, and `poll` has two overloads: a blocking form that submits an io_uring SQE and suspends the fiber until completion, and an async form that submits the SQE and returns immediately with an `IoFuture*` the caller waits on separately. `handleCompletionQueue` processes CQEs, extracts the `IoFuture*` from the CQE user data, and calls `future->set()` to wake the waiting fiber.
 
+### Registered (fixed) buffers
+
+`readFixed` / `writeFixed` are async-only counterparts to `read`/`write` that submit `IORING_OP_READ_FIXED` / `IORING_OP_WRITE_FIXED` against a buffer that was pre-registered with the kernel via `registerBuffers`. Instead of passing an iovec the kernel must pin per IO, the caller passes a `(buf, len)` plus the `bufIndex` of a previously registered buffer; the kernel reuses the pre-pinned page mapping and skips the per-IO page-pin and iovec import. `buf` must lie inside the registered buffer at `bufIndex`.
+
+`registerBuffers(iovecs, count)` registers one buffer set on **every** per-CPU io_uring ring, so a fiber that is work-stolen to another CPU can still submit fixed IO referencing the same index. Buffers are addressable as `bufIndex` `0..count-1`. Constraints:
+
+- Call once, after `initialize()` and before issuing any fixed-buffer IO. io_uring allows a single buffer set per ring with no way to undo or change it, so a second call fails (`-EBUSY`) and trips an assert.
+- Each ring pins its own copy, so total locked memory is `(number of CPUs) * (size of all buffers)`. With many CPUs or large buffers this can exceed `RLIMIT_MEMLOCK`; registration then fails and trips an assert.
+
+The underlying liburing helpers are `io_uring_register_buffers`, `io_uring_prep_read_fixed`, and `io_uring_prep_write_fixed`. `file-perf --fixed-buffers` exercises this path (see `docs/perf.md`).
+
 ---
 
 ## Sleep Cancellation
