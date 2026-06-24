@@ -23,6 +23,11 @@ void FiberSequencer::wait(uint64_t token, Future * future) noexcept
     // Slow path: register future in the request queue for the next combiner to process.
     requestQueue.push(future);
 
+    // Waiter half of a StoreLoad (Dekker) handshake on requestQueue vs counter (acquire / release cannot do
+    // StoreLoad), symmetric to the producer half in drain: order the push above before the counter re-read
+    // below, so a registration racing an advance is never missed by both the re-read and the combiner's scan.
+    std::atomic_thread_fence(std::memory_order_seq_cst);
+
     // Re-check after push: handles the race where increment fired between
     // the check above and the push. If the counter is now satisfied, become
     // the combiner and drain the queue (which will set our future immediately).
