@@ -1505,7 +1505,7 @@ void FiberScheduler::registerBuffers(const iovec * iovecs, unsigned count) noexc
     for (uint32_t cpu = 0; cpu < scheduler->processorCount; ++cpu)
     {
         ProcessorState * processor = &scheduler->processorState[cpu];
-        if (processor->number == INVALID_PROCESSOR_NUMBER)
+        if (processor->number == kInvalidProcessorNumber)
         {
             continue;
         }

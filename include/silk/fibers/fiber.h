@@ -456,6 +456,13 @@ public:
      * memory is (number of CPUs) * (size of all buffers). With many CPUs or large
      * buffers this can go over the RLIMIT_MEMLOCK limit; if it does, registration
      * fails and trips an assert.
+     *
+     * Not NUMA-aware. Registration only pins the existing pages (it never copies
+     * or migrates them), so the physical pages stay on whatever node first-touched
+     * them, regardless of which CPU's ring they are registered on or which CPU a
+     * fiber is later work-stolen to. If NUMA placement matters, control it at
+     * allocation/first-touch time on the caller side (e.g. mbind/set_mempolicy
+     * before writing the buffer); this API cannot influence it.
      */
     static void registerBuffers(const iovec * iovecs, unsigned count) noexcept;
 
