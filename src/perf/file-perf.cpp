@@ -271,13 +271,17 @@ void Benchmark::submit(Job * job, Slot * slot)
     {
         // READ_FIXED / WRITE_FIXED against the buffer registered for this job.
         int bufIndex = static_cast<int>(job->index);
+        // io_uring's fixed-buffer ops take a __u32 length; iov_len is size_t but
+        // always holds cfg.blockSize (uint32_t), so the cast cannot truncate.
+        SILK_ASSERT(slot->iov.iov_len <= UINT32_MAX, "block too large for fixed I/O: len=%zu", slot->iov.iov_len);
+        auto len = static_cast<uint32_t>(slot->iov.iov_len);
         if (cfg.mode == MODE_RANDWRITE)
         {
-            silk::FiberScheduler::writeFixed(fd, slot->iov.iov_base, slot->iov.iov_len, offset, bufIndex, nullptr, &slot->future);
+            silk::FiberScheduler::writeFixed(fd, slot->iov.iov_base, len, offset, bufIndex, nullptr, &slot->future);
         }
         else
         {
-            silk::FiberScheduler::readFixed(fd, slot->iov.iov_base, slot->iov.iov_len, offset, bufIndex, nullptr, &slot->future);
+            silk::FiberScheduler::readFixed(fd, slot->iov.iov_base, len, offset, bufIndex, nullptr, &slot->future);
         }
         return;
     }
