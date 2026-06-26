@@ -108,6 +108,11 @@ public:
         // Sized to absorb dispatch bursts without falling back to the global queue.
         uint32_t readyQueueCapacity = 1024;
 
+        // Max fibers handleReadyQueue dispatches before yielding to runServiceLoop.
+        // Bounds the queue so a self-re-enqueuing yield loop cannot starve timer
+        // expiry and io_uring completions; the rest run on the next pass.
+        uint32_t readyDispatchBatch = 256;
+
         // Hash-table size for futex-style waiter lookups. Must be a power of two.
         uint32_t waiterTableSize = 4096;
 
