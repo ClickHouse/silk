@@ -1059,6 +1059,7 @@ void FiberScheduler::initialize(const Options * userOptions) noexcept
 
     SILK_ASSERT(options.fiberStackSize >= kPageSize && (options.fiberStackSize % kPageSize) == 0);
     SILK_ASSERT(options.readyQueueCapacity >= 2 && (options.readyQueueCapacity & (options.readyQueueCapacity - 1)) == 0);
+    SILK_ASSERT(options.readyDispatchBatch >= 1);
     SILK_ASSERT(options.ioUringQueueSize >= 2 && (options.ioUringQueueSize & (options.ioUringQueueSize - 1)) == 0);
     SILK_ASSERT(options.ioUringFlushThreshold >= 1 && options.ioUringFlushThreshold <= options.ioUringQueueSize);
     SILK_ASSERT(options.waiterTableSize >= 2 && (options.waiterTableSize & (options.waiterTableSize - 1)) == 0);
@@ -1786,11 +1787,20 @@ bool FiberScheduler::handleReadyQueue(ProcessorState * processor, CpuTimer * tim
 {
     bool didWork = false;
 
-    Fiber * fiber;
-    while (processor->readyQueue.dequeue(&fiber))
+    // Bound the batch so runServiceLoop runs every pass: an unbounded drain lets
+    // a self-re-enqueuing yield loop starve timer expiry and io_uring completions.
+    for (uint32_t i = 0; i < options.readyDispatchBatch; ++i)
     {
-        runFiber(fiber, timer);
-        didWork = true;
+        Fiber * fiber;
+        if (processor->readyQueue.dequeue(&fiber))
+        {
+            runFiber(fiber, timer);
+            didWork = true;
+        }
+        else
+        {
+            break;
+        }
     }
 
     // Drain whatever the dispatch left below the pressure-relief threshold

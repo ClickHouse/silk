@@ -1,11 +1,14 @@
 #include <silk/fibers/fiber.h>
 
 #include <silk/fibers/future.h>
+#include <silk/util/assert.h>
 #include <silk/util/platform.h>
 #include <silk/util/tsc.h>
 
 #include <gtest/gtest.h>
 
+#include <atomic>
+#include <memory>
 #include <set>
 #include <string_view>
 
@@ -1075,6 +1078,125 @@ TEST(Fiber, sqeRingExhaustion)
 
     ::close(pipeFds[0]);
     ::close(pipeFds[1]);
+}
+
+// A busy-yield loop must not starve the per-CPU service loop. runScheduler drains
+// the ready queue (handleReadyQueue) before runServiceLoop, and yield re-enqueues
+// the fiber on the same CPU, so without a dispatch bound (Options.readyDispatchBatch)
+// the queue never empties and timer expiry never runs. Each worker arms a sleep then
+// busy-yields waiting for it: a starved sleep keeps its worker yielding, which keeps
+// its CPU saturated - self-sustaining, so the storm holds across work stealing. With
+// the bound the sleeps keep completing; without it progress freezes.
+TEST(Fiber, yieldStormDoesNotStarveSleep)
+{
+    static constexpr uint64_t WORKER_SLEEP_NS = 1'000'000; // 1ms per worker cycle
+    static constexpr uint64_t SETTLE_NS = 1'000'000'000; // let the storm reach steady-state saturation
+    static constexpr uint64_t PROGRESS_NS = 3'000'000'000; // window over which sleeps must keep completing
+    static constexpr uint64_t YIELD_CAP_NS = 60'000'000'000; // backstop so a worker cannot spin forever
+
+    struct Shared
+    {
+        std::atomic<bool> stop{false};
+        std::atomic<uint64_t> completed{0};
+    };
+
+    struct Worker
+    {
+        Shared * shared;
+
+        static int fiberMain(Worker * params) noexcept
+        {
+            uint64_t capCycles = Tsc::getCycles() + Tsc::nanosecondsToCycles(YIELD_CAP_NS);
+            for (;;)
+            {
+                bool stop = params->shared->stop.load(std::memory_order_acquire);
+                if (stop)
+                {
+                    break;
+                }
+
+                FiberScheduler::SleepFuture future;
+                FiberScheduler::sleep(WORKER_SLEEP_NS, &future);
+
+                int err;
+                for (;;)
+                {
+                    bool fired = future.isSet(&err);
+                    if (fired)
+                    {
+                        break;
+                    }
+
+                    bool abandon = params->shared->stop.load(std::memory_order_acquire);
+                    uint64_t now = Tsc::getCycles();
+                    if (abandon || now > capCycles)
+                    {
+                        future.cancel();
+                        future.wait();
+                        return 0;
+                    }
+
+                    FiberScheduler::yield();
+                }
+
+                params->shared->completed.fetch_add(1, std::memory_order_relaxed);
+            }
+            return 0;
+        }
+    };
+
+    uint16_t cpuCount = getProcessorCount();
+    uint32_t workerCount = 4 * cpuCount;
+
+    Shared shared;
+    std::unique_ptr<FiberFuture[]> workerFutures(new FiberFuture[workerCount]);
+
+    for (uint32_t i = 0; i < workerCount; ++i)
+    {
+        int r = FiberScheduler::run(Worker::fiberMain, {&shared}, &workerFutures[i]);
+        ASSERT_FALSE(r);
+    }
+
+    // Let the storm reach steady-state saturation before measuring.
+    uint64_t settleEnd = getTimeNanoseconds() + SETTLE_NS;
+    for (;;)
+    {
+        uint64_t now = getTimeNanoseconds();
+        if (now >= settleEnd)
+        {
+            break;
+        }
+
+        schedYield();
+    }
+
+    // Under sustained saturation, sleeps keep completing only if the service loop
+    // still runs. Without the dispatch bound it is starved and progress freezes.
+    uint64_t baseline = shared.completed.load(std::memory_order_relaxed);
+    uint64_t progressEnd = getTimeNanoseconds() + PROGRESS_NS;
+    for (;;)
+    {
+        uint64_t now = getTimeNanoseconds();
+        if (now >= progressEnd)
+        {
+            break;
+        }
+
+        schedYield();
+    }
+    uint64_t progress = shared.completed.load(std::memory_order_relaxed) - baseline;
+
+    shared.stop.store(true, std::memory_order_release);
+
+    if (progress < workerCount)
+    {
+        SILK_FAIL("yield storm starved the service loop: %lu sleeps completed under load (expected >= %u)", progress, workerCount);
+    }
+
+    for (uint32_t i = 0; i < workerCount; ++i)
+    {
+        workerFutures[i].wait();
+    }
 }
 
 } // namespace silk
