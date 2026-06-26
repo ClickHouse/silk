@@ -441,10 +441,19 @@ def _get_reg(name):
     try:
         return int(value)
     except gdb.error:
-        # Flag registers (x86 eflags, arm64 pstate) are TYPE_CODE_FLAGS, which
-        # int() rejects and a C-cast coerces only on some targets (it raises
-        # "Invalid cast" for arm64 pstate). Read the raw register bytes instead.
-        return int.from_bytes(value.bytes, "little")
+        pass
+
+    # Flag registers (x86 eflags, arm64 pstate) are TYPE_CODE_FLAGS, which int() rejects and a C-cast coerces
+    # only on some targets (it raises "Invalid cast" for arm64 pstate). value.bytes reads the raw bytes on
+    # gdb >= 14; older gdb has no such accessor, so format the value as hex. The flag register is not needed to
+    # unwind a fiber, so fall back to 0 rather than abort the whole dump if neither path works.
+    raw = getattr(value, "bytes", None)
+    if raw is not None:
+        return int.from_bytes(raw, "little")
+    try:
+        return int(value.format_string(format="x"), 16)
+    except (gdb.error, ValueError):
+        return 0
 
 
 def _set_reg(name, value):
