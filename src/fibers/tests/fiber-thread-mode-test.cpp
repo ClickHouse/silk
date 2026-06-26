@@ -15,7 +15,7 @@
 namespace silk
 {
 
-TEST(ThreadMode, enterExit)
+TEST(FiberThreadMode, enterExit)
 {
     struct Params
     {
@@ -35,7 +35,7 @@ TEST(ThreadMode, enterExit)
 // A fiber in thread mode making a real blocking syscall does not stall other
 // fibers: a concurrent fiber must complete while the thread-mode fiber is
 // blocked inside usleep.
-TEST(ThreadMode, doesNotStallScheduler)
+TEST(FiberThreadMode, doesNotStallScheduler)
 {
     struct Blocker
     {
@@ -84,7 +84,7 @@ TEST(ThreadMode, doesNotStallScheduler)
 
 // A fiber in thread mode can wait on a FiberFuture set by another fiber,
 // exercising the full suspend/reschedule path through the worker pool.
-TEST(ThreadMode, waitOnFuture)
+TEST(FiberThreadMode, waitOnFuture)
 {
     struct Waiter
     {
@@ -123,7 +123,7 @@ TEST(ThreadMode, waitOnFuture)
 
 // A fiber in thread mode can acquire a FiberMutex locked by another fiber,
 // verifying that contended lock/unlock works across the thread-mode boundary.
-TEST(ThreadMode, mutex)
+TEST(FiberThreadMode, mutex)
 {
     struct Params
     {
@@ -158,7 +158,7 @@ TEST(ThreadMode, mutex)
 }
 
 // Multiple enter/exit cycles in a single fiber all complete correctly.
-TEST(ThreadMode, multipleCycles)
+TEST(FiberThreadMode, multipleCycles)
 {
     struct Params
     {
@@ -178,7 +178,7 @@ TEST(ThreadMode, multipleCycles)
 }
 
 // Many fibers in thread mode concurrently: all must complete correctly.
-TEST(ThreadMode, concurrent)
+TEST(FiberThreadMode, concurrent)
 {
     static constexpr int N = 64;
 
@@ -209,7 +209,7 @@ TEST(ThreadMode, concurrent)
 
 // Ready queue overflow: schedule enough fibers to exceed READY_QUEUE_CAPACITY
 // so some spill to the worker thread pool. All must complete correctly.
-TEST(ThreadMode, readyQueueOverflow)
+TEST(FiberThreadMode, readyQueueOverflow)
 {
     static constexpr int N = 2048; // > READY_QUEUE_CAPACITY (1024)
 
