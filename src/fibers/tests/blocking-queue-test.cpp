@@ -8,11 +8,10 @@
 #include <atomic>
 #include <cerrno>
 
-// Basic SPSC: enqueue then dequeue without blocking (capacity never reached).
-
 namespace silk
 {
 
+// Basic SPSC: enqueue then dequeue without blocking (capacity never reached).
 TEST(FiberBlockingQueue, basicEnqueueDequeue)
 {
     FiberBlockingQueue<int> queue(4);

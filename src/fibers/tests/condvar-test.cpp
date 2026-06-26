@@ -11,20 +11,15 @@
 namespace silk
 {
 
-namespace
-{
-
 // After @p registered fires, block until the test fiber has called cv.wait()
 // and released the mutex. Locking + unlocking the mutex here proves the fiber
 // is past the unlock inside wait().
-void waitUntilSuspended(FiberMutex & mutex, FiberFuture & registered) noexcept
+static void waitUntilSuspended(FiberMutex & mutex, FiberFuture & registered) noexcept
 {
     registered.wait();
     mutex.lock();
     mutex.unlock();
 }
-
-} // namespace
 
 TEST(FiberCondVar, notifyOneWakesWaiter)
 {
