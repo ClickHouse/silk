@@ -280,10 +280,8 @@ BENCHMARK_F(FiberBench, Sleep)(benchmark::State & state)
     SILK_ASSERT(!r);
 }
 
-// Sleep wakeup latency: measures real elapsed time per 100us sleep, exercising
-// the full io_uring timeout path (submission -> eventfd wakeup -> expiry).
-// Reports actual elapsed time via manual timing; overhead above 100us is the
-// wakeup latency.
+// Sleep wakeup latency: measures real elapsed time per 100us sleep. Reports actual
+// elapsed time via manual timing; overhead above 100us is the wakeup latency.
 BENCHMARK_DEFINE_F(FiberBench, SleepWakeup)(benchmark::State & state)
 {
     static constexpr uint64_t SLEEP_NS = 100'000; // 100us

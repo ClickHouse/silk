@@ -49,8 +49,7 @@ FiberScheduler::SchedulerState * FiberScheduler::scheduler;
 //
 
 static constexpr uint64_t CQE_TAG_CANCEL = 0;
-static constexpr uint64_t CQE_TAG_TIMEOUT = 1;
-static constexpr uint64_t CQE_TAG_DOORBELL = 2;
+static constexpr uint64_t CQE_TAG_DOORBELL = 1;
 
 // clang-format off
 #define FIBER_SIMPLE_COUNTERS(x) \
@@ -529,7 +528,6 @@ struct FiberScheduler::ProcessorState
     void parkThread(uint64_t waitNs, CpuTimer * timer) noexcept;
 
     bool hasWork() const noexcept;
-    void enqueueWakeup() noexcept;
 
     template <typename Setup>
     bool enqueueIo(IoFuture * future, Setup && setup) noexcept;
@@ -577,9 +575,6 @@ struct FiberScheduler::ProcessorState
         // suspendedLock so that insert/remove touch only this cache line.
         SuspendedList suspendedList;
 
-        // Deadline of the in-flight io_uring timeout SQE; 0 when none is pending.
-        uint64_t wakeupDeadlineCycles = 0;
-
         // Timestamp (TSC cycles) of the most recent successful CQ drain on
         // this ring. Used to emit CQ_WAIT profile events bounding how long
         // any CQE in the next drain batch could have sat in the ring.
@@ -598,6 +593,12 @@ struct FiberScheduler::ProcessorState
         // profiling is off.  The scheduler thread for this CPU is the sole
         // producer; aggregate is called by the service loop under serviceLoopLock.
         std::unique_ptr<Profiler> profiler;
+
+        // Per-CPU monotonic counter feeding the counter field of FiberId.
+        // Initialized to 1 so the first allocated fiber (cpu=0, counter=0) does
+        // not collide with the all-zero sentinel that getCurrentFiberId returns
+        // for "no fiber".
+        std::atomic<uint64_t> fiberCounter{1};
     };
 
     // Service-loop state: drained / inspected on every iteration of
@@ -607,23 +608,11 @@ struct FiberScheduler::ProcessorState
     SleepStack cancelQueue;
     SleepTree sleepTree;
 
-    // Per-CPU monotonic counter feeding the counter field of FiberId.
-    // Initialized to 1 so the first allocated fiber (cpu=0, counter=0) does
-    // not collide with the all-zero sentinel that getCurrentFiberId returns
-    // for "no fiber".
-    std::atomic<uint64_t> fiberCounter{1};
-
     // Neighboring CPUs sorted by estimated steal cost (topology-aware).
     // Read only in the steal loop.
     std::unique_ptr<StealCandidate[]> stealCandidates;
 
-    // Timespec pointed at by the in-flight io_uring timeout SQE.  Co-located
-    // with the ring because enqueueWakeup writes wakeupTs immediately before
-    // it walks the SQ to install the timeout SQE; the kernel's SQPOLL thread
-    // reads the pointer asynchronously, so the storage must outlive the call.
-    __kernel_timespec wakeupTs{};
-
-    // io_uring ring for async IO and sleep timeouts. Spans 4 cache lines on
+    // io_uring ring for async IO. Spans 4 cache lines on
     // its own (sq + cq + flags); empty-check on the CQ head is hit on every
     // service-loop iteration.
     io_uring ring{};
@@ -775,65 +764,12 @@ bool FiberScheduler::ProcessorState::hasWork() const noexcept
     return count > 0;
 }
 
-void FiberScheduler::ProcessorState::enqueueWakeup() noexcept
-{
-    SleepFuture * sleepFuture = sleepTree.min();
-    if (!sleepFuture)
-    {
-        return;
-    }
-
-    uint64_t now = Tsc::getCycles();
-    if (now >= sleepFuture->deadlineCycles)
-    {
-        return;
-    }
-
-    if (wakeupDeadlineCycles && wakeupDeadlineCycles <= sleepFuture->deadlineCycles)
-    {
-        return;
-    }
-
-    uint64_t remainingNs = Tsc::cyclesToNanoseconds(sleepFuture->deadlineCycles - now);
-    wakeupTs.tv_sec = static_cast<int64_t>(remainingNs / 1'000'000'000);
-    wakeupTs.tv_nsec = static_cast<int64_t>(remainingNs % 1'000'000'000);
-
-    bool enqueued = enqueueIo(
-        nullptr,
-        [this](io_uring_sqe * sqe) noexcept
-        {
-            if (!wakeupDeadlineCycles)
-            {
-                ::io_uring_prep_timeout(sqe, &wakeupTs, 0, 0);
-                ::io_uring_sqe_set_data64(sqe, CQE_TAG_TIMEOUT);
-            }
-            else
-            {
-                // A shorter deadline arrived - update the in-flight timeout.
-                // CQE_TAG_TIMEOUT identifies the original timeout SQE to update.
-                // The update SQE's own CQE will have data=CQE_TAG_CANCEL and is ignored.
-                ::io_uring_prep_timeout_update(sqe, &wakeupTs, CQE_TAG_TIMEOUT, 0);
-                ::io_uring_sqe_set_data64(sqe, CQE_TAG_CANCEL);
-            }
-        });
-
-    // If SQ ring full we can just skip this wakeup.
-    // The service loop retries enqueueWakeup() on every iteration,
-    // so the timeout will be submitted as soon as a slot becomes available.
-    if (enqueued)
-    {
-        wakeupDeadlineCycles = sleepFuture->deadlineCycles;
-        submitIo(true);
-    }
-}
-
 void FiberScheduler::ProcessorState::enqueueDoorbell() noexcept
 {
     // (Re-)arm the wakeup doorbell: a persistent multishot poll on eventFd posts a
     // CQE each time wakeThread writes to it. The kernel ends the poll on CQ overflow
     // (a CQE without IORING_CQE_F_MORE), so the completion drain re-arms it here. A
-    // missed re-arm leaves the doorbell deaf forever, so retry through a full SQ ring
-    // rather than skip it the way enqueueWakeup does.
+    // missed re-arm leaves the doorbell deaf forever, so retry through a full SQ ring.
     for (;;)
     {
         bool enqueued = enqueueIo(
@@ -896,8 +832,8 @@ bool FiberScheduler::ProcessorState::submitIo(bool flush) noexcept
 {
     // Fast path: read SQ tail outside the lock. Returns false without taking
     // the submission lock when there's nothing to submit or the count/staleness
-    // thresholds haven't been met. Kept small so it inlines into runFiber and
-    // enqueueWakeup; the rest lives in submitIoSlow.
+    // thresholds haven't been met. Kept small so it inlines into runFiber;
+    // the rest lives in submitIoSlow.
     TSAN_IGNORE_BEGIN();
     uint32_t count = ::io_uring_sq_ready(&ring);
     TSAN_IGNORE_END();
@@ -1503,7 +1439,7 @@ void FiberScheduler::writeFixed(
 void FiberScheduler::registerBuffers(const iovec * iovecs, unsigned count) noexcept
 {
     SILK_ASSERT(scheduler, "registerBuffers called before initialize()");
-    for (uint32_t cpu = 0; cpu < scheduler->processorCount; ++cpu)
+    for (uint16_t cpu = 0; cpu < scheduler->processorCount; ++cpu)
     {
         ProcessorState * processor = &scheduler->processorState[cpu];
         if (processor->number == kInvalidProcessorNumber)
@@ -1511,7 +1447,7 @@ void FiberScheduler::registerBuffers(const iovec * iovecs, unsigned count) noexc
             continue;
         }
         int r = ::io_uring_register_buffers(&processor->ring, iovecs, count);
-        SILK_ASSERT(r == 0, "io_uring_register_buffers failed: cpu=%u, ret=%d", cpu, r);
+        SILK_ASSERT(r == 0, "io_uring_register_buffers failed: r=%d, cpu=%u", r, cpu);
     }
 }
 
@@ -1546,7 +1482,7 @@ void FiberScheduler::cancelIo(IoFuture * future) noexcept
         processorNumber = getCurrentProcessor();
     }
 
-    auto * target = &scheduler->processorState[processorNumber];
+    ProcessorState * processor = &scheduler->processorState[processorNumber];
 
     auto setup = [=](io_uring_sqe * sqe) noexcept
     {
@@ -1555,16 +1491,16 @@ void FiberScheduler::cancelIo(IoFuture * future) noexcept
     };
 
     // Retry if the SQ ring is temporarily full.
-    while (!target->enqueueIo(nullptr, setup))
+    while (!processor->enqueueIo(nullptr, setup))
     {
-        Perf::getSimpleCounter(simpleCounters[SQ_RING_OVERFLOW], target->number).increment();
+        Perf::getSimpleCounter(simpleCounters[SQ_RING_OVERFLOW], processor->number).increment();
         yield();
     }
 
     // If we enqueued to a remote processor's ring, force-submit.
     if (processorNumber != getCurrentProcessor() || getCurrentFiber()->isProxyFiber)
     {
-        target->submitIo(true);
+        processor->submitIo(true);
     }
 }
 
@@ -1686,17 +1622,37 @@ bool FiberScheduler::runServiceLoop(ProcessorState * processor, uint64_t waitNs,
 
     if (waitNs)
     {
+        // Cap the park at the earliest sleep deadline; cross-proc wakeups still ring the doorbell.
+        uint64_t effectiveWaitNs = waitNs;
+        SleepFuture * nextSleep = processor->sleepTree.min();
+        if (nextSleep)
+        {
+            uint64_t now = Tsc::getCycles();
+            if (now >= nextSleep->deadlineCycles)
+            {
+                effectiveWaitNs = 0;
+            }
+            else
+            {
+                uint64_t untilNs = Tsc::cyclesToNanoseconds(nextSleep->deadlineCycles - now);
+                effectiveWaitNs = std::min(effectiveWaitNs, untilNs);
+            }
+        }
+
         // Wait step starts at initialWaitNs and doubles each idle iteration up to maxWaitNs.
         // A timed wait ensures sleeping CPUs periodically wake to steal work even when not
         // explicitly signalled (e.g. work arrived on a neighbor via an external thread).
         // Before going to sleep - spin a little to avoid eventfd syscalls.
-        if (waitNs < options.spinThresholdNs)
+        if (effectiveWaitNs)
         {
-            spinWait([=] { return processor->hasWork() || scheduler->stopping.load(std::memory_order_relaxed); });
-        }
-        else
-        {
-            processor->parkThread(waitNs, timer);
+            if (effectiveWaitNs < options.spinThresholdNs)
+            {
+                spinWait([=] { return processor->hasWork() || scheduler->stopping.load(std::memory_order_relaxed); });
+            }
+            else
+            {
+                processor->parkThread(effectiveWaitNs, timer);
+            }
         }
     }
 
@@ -1712,10 +1668,6 @@ bool FiberScheduler::runServiceLoop(ProcessorState * processor, uint64_t waitNs,
     {
         processor->profiler->aggregate();
     }
-
-    // Arm the next io_uring timeout for the earliest pending sleep deadline
-    // so parkThread wakes exactly when the next fiber needs to be woken.
-    processor->enqueueWakeup();
 
     processor->serviceLoopLock.unlock();
     return didWork;
@@ -1852,14 +1804,7 @@ __attribute__((noinline)) bool FiberScheduler::handleCompletionQueueSlow(Process
             uint64_t tag = ::io_uring_cqe_get_data64(cqe);
             if (tag == CQE_TAG_CANCEL)
             {
-                // IO cancellation or timeout_update confirmation
-                continue;
-            }
-
-            if (tag == CQE_TAG_TIMEOUT)
-            {
-                // Sleep deadline timeout
-                processor->wakeupDeadlineCycles = 0;
+                // IO cancellation confirmation
                 continue;
             }
 
