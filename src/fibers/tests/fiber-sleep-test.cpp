@@ -151,8 +151,7 @@ TEST(FiberSleep, sleepReuse)
     ASSERT_EQ(r, 0);
 }
 
-// If a new sleep has a deadline LONGER than the already-armed wakeup timeout,
-// enqueueWakeup must skip re-arming (the existing shorter timeout will fire first).
+// A sleep with a deadline LONGER than a pending one must not delay the shorter sleep's wakeup.
 TEST(FiberSleep, sleepLongerDeadlineSkipped)
 {
     static constexpr uint64_t SHORT_NS = 20'000'000; //  20ms
@@ -175,8 +174,7 @@ TEST(FiberSleep, sleepLongerDeadlineSkipped)
     ASSERT_FALSE(r);
     ::usleep(5'000); // let scheduler process and arm the short timeout
 
-    // Register a LONGER sleep: enqueueWakeup must skip re-arming since the
-    // armed timeout already fires before this deadline.
+    // Register a LONGER sleep; it must not disturb the pending shorter wakeup.
     FiberFuture futureB;
     r = FiberScheduler::run(Params::fiberMain, {LONG_NS}, &futureB);
     ASSERT_FALSE(r);
@@ -185,10 +183,8 @@ TEST(FiberSleep, sleepLongerDeadlineSkipped)
     futureB.wait();
 }
 
-// Deadline update: a fiber with a shorter deadline registered after the
-// scheduler has already armed a wakeup timeout for a longer one must still wake
-// on time.  Without the fix the scheduler would sleep until the original long
-// timeout fires instead of updating it to the shorter deadline.
+// A fiber with a shorter deadline registered after a longer one must still wake on
+// time, not sleep until the longer deadline.
 TEST(FiberSleep, sleepDeadlineUpdate)
 {
     static constexpr uint64_t LONG_NS = 200'000'000; // 200ms
@@ -210,12 +206,10 @@ TEST(FiberSleep, sleepDeadlineUpdate)
     int r = FiberScheduler::run(Params::fiberMain, {LONG_NS}, &futureA);
     ASSERT_FALSE(r);
 
-    // Wait until the scheduler has processed the sleep entry and is
-    // sleeping on the 200ms io_uring timeout.
+    // Wait until the scheduler has processed the sleep entry and parked for 200ms.
     ::usleep(5'000);
 
-    // Register a shorter sleep.  The scheduler must update the in-flight
-    // timeout so futureB wakes after SHORT_NS, not LONG_NS.
+    // Register a shorter sleep.  futureB must wake after SHORT_NS, not LONG_NS.
     uint64_t t0 = Tsc::getCycles();
     FiberFuture futureB;
     r = FiberScheduler::run(Params::fiberMain, {SHORT_NS}, &futureB);
