@@ -1,11 +1,19 @@
 from ci.settings.settings import PROJECT_NAME, PRAKTIKA_BASE_VENV
-from praktika.infrastructure import Components, Storage, VPC
+from praktika.infrastructure import Components, ImageBuilder, Storage, VPC
 from praktika.infrastructure.cloud import CloudInfrastructure
 
 
 # until published in pip
-_PRAKTIKA_CONTROLLER_WHL = "https://praktika-artifacts-eu-north-1.s3.amazonaws.com/packages/praktika_controller-0.1.1-py3-none-any.whl"
-
+_PRAKTIKA_PACKAGE_BASE_URL = "https://praktika-artifacts-eu-north-1.s3.amazonaws.com/packages"
+_PRAKTIKA_COMPAT_VERSION = "0.1"
+_PRAKTIKA_WHL = (
+    f"{_PRAKTIKA_PACKAGE_BASE_URL}/{_PRAKTIKA_COMPAT_VERSION}/"
+    "praktika-0.0.0-py3-none-any.whl"
+)
+_PRAKTIKA_CONTROLLER_WHL = (
+    f"{_PRAKTIKA_PACKAGE_BASE_URL}/{_PRAKTIKA_COMPAT_VERSION}/"
+    "praktika_controller-0.0.0-py3-none-any.whl"
+)
 
 
 def _silk_ci_dependencies_component():
@@ -120,12 +128,44 @@ def _silk_ci_image_components():
     ]
 
 
+def _praktika_launch_user_data():
+    return "\n".join(
+        [
+            "#!/usr/bin/env bash",
+            "set -xeuo pipefail",
+            "",
+            "# Refresh Praktika controller and runtime from the compat channel on launch.",
+            f"python3.12 -m pip install --ignore-installed {_PRAKTIKA_CONTROLLER_WHL} --break-system-packages",
+            "/usr/local/bin/praktika-configure-cloudwatch-agent",
+            "/opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl -a fetch-config -m ec2 -c file:/etc/praktika/amazon-cloudwatch-agent.json -s",
+            (
+                f"/opt/praktika/base-venvs/{PRAKTIKA_BASE_VENV}/bin/python "
+                f"-m pip install --force-reinstall {_PRAKTIKA_WHL}"
+            ),
+            "systemctl enable --now praktika-controller",
+            "",
+        ]
+    )
+
+
 def _image_builders():
-    image_recipe_version = "1.0.8"
+    image_recipe_version = "1.0.9"
     prebuilt_venvs = [
-        Components.create_praktika_venv_config(
-            PRAKTIKA_BASE_VENV,
-            "0.1.4",
+        ImageBuilder.PrebuiltVenv(
+            name=PRAKTIKA_BASE_VENV,
+            packages=[
+                "boto3",
+                "PyJWT",
+                "cryptography",
+                "requests",
+                "pytest>=7.0.0",
+                "pytest-reportlog>=0.4.0",
+                _PRAKTIKA_WHL,
+            ],
+            description=(
+                "Shared Python base venv with pytest, Praktika runtime deps, "
+                "and Praktika"
+            ),
         ),
     ]
     return [
@@ -192,7 +232,8 @@ PROJECTS = [
             volume_size_gb=100,
             capacity_reserve=1,
             image_builder=_IMAGE_BUILDERS_BY_NAME["ci-arm64-image"],
-            ext={"allowed_push_branches": ["main"]}
+            ext={"allowed_push_branches": ["main"]},
+            user_data=_praktika_launch_user_data(),
         ),
         runner_pools=[
             Components.RunnerPool(
@@ -204,6 +245,7 @@ PROJECTS = [
                 volume_size_gb=100,
                 image_builder=_IMAGE_BUILDERS_BY_NAME["ci-arm64-image"],
                 allowed_ssm_parameters=[],
+                user_data=_praktika_launch_user_data(),
                 allowed_secrets=[],
                 allowed_s3_prefixes=["artifacts-eu-north-1"],
                 allow_all_ssm_parameters=False,
@@ -220,6 +262,7 @@ PROJECTS = [
                 volume_size_gb=100,
                 image_builder=_IMAGE_BUILDERS_BY_NAME["ci-x86_64-image"],
                 allowed_ssm_parameters=[],
+                user_data=_praktika_launch_user_data(),
                 allowed_secrets=[],
                 allowed_s3_prefixes=["artifacts-eu-north-1"],
                 allow_all_ssm_parameters=False,
@@ -236,6 +279,7 @@ PROJECTS = [
                 volume_size_gb=100,
                 image_builder=_IMAGE_BUILDERS_BY_NAME["ci-arm64-image"],
                 allowed_ssm_parameters=[],
+                user_data=_praktika_launch_user_data(),
                 allowed_secrets=[],
                 allowed_s3_prefixes=["artifacts-eu-north-1"],
                 allow_all_ssm_parameters=False,
@@ -252,6 +296,7 @@ PROJECTS = [
                 volume_size_gb=100,
                 image_builder=_IMAGE_BUILDERS_BY_NAME["ci-x86_64-image"],
                 allowed_ssm_parameters=[],
+                user_data=_praktika_launch_user_data(),
                 allowed_secrets=[],
                 allowed_s3_prefixes=["artifacts-eu-north-1"],
                 allow_all_ssm_parameters=False,
