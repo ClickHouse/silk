@@ -162,7 +162,7 @@ add_compile_options(
     # existing code; enable once the tree is clean.
     # -Wsign-conversion
 
-    # This catches all types of implicit conversations. But currently too noisy
+    # This catches all types of implicit conversions. But currently too noisy
     # -Wconversion
 )
 
