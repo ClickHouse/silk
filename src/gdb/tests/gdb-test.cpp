@@ -8,6 +8,7 @@
  *   spinner       RUNNING    cpu{N}/current  (busy-loops on g_stop)
  *   holder        SUSPENDED  waiterTable     (waiting on g_release silk::FiberFuture)
  *   waiter[0..2]  SUSPENDED  waiterTable     (blocked on g_mutex held by holder)
+ *   sleeper[0..2] SUSPENDED  sleepTree       (parked in FiberScheduler::sleep)
  *
  * Interactive use:
  *   gdb ./build/debug/bin/gdb-test
@@ -95,7 +96,24 @@ struct SpinnerParams
     }
 };
 
+// Parks in FiberScheduler::sleep for an hour; main cancels it at cleanup.
+// SUSPENDED with its SleepFuture IN_TABLE in a per-CPU sleepTree.
+struct SleeperParams
+{
+    silk::FiberScheduler::SleepFuture * sleepFuture;
+    sem_t * ready;
+
+    static int fiberMain(SleeperParams * p) noexcept
+    {
+        silk::FiberScheduler::sleep(3'600ULL * 1'000'000'000ULL, p->sleepFuture);
+        sem_post(p->ready); // main may now expect this sleeper in a sleepTree
+        p->sleepFuture->wait();
+        return 0;
+    }
+};
+
 static constexpr int N_WAITERS = 3;
+static constexpr int N_SLEEPERS = 3;
 
 // Named breakpoint target: set "b gdb_ready" in GDB.
 // noinline + asm barrier prevent the compiler from optimizing the call away.
@@ -130,7 +148,25 @@ int main()
         SILK_ASSERT(!r);
     }
 
-    // Give waiters time to enter the silk::FiberMutex slow path and suspend.
+    // Sleepers park in FiberScheduler::sleep -> SUSPENDED, SleepFuture IN_TABLE
+    // in a per-CPU sleepTree.  main cancels them at cleanup.
+    silk::FiberScheduler::SleepFuture sleepFutures[N_SLEEPERS];
+    silk::FiberFuture sleepers[N_SLEEPERS];
+    sem_t sleepReady;
+    sem_init(&sleepReady, 0, 0);
+    for (int i = 0; i < N_SLEEPERS; ++i)
+    {
+        r = silk::FiberScheduler::run(SleeperParams::fiberMain, SleeperParams{&sleepFutures[i], &sleepReady}, &sleepers[i]);
+        SILK_ASSERT(!r);
+    }
+
+    for (int i = 0; i < N_SLEEPERS; ++i)
+    {
+        sem_wait(&sleepReady); // wait until each sleeper has armed its sleep
+    }
+
+    // Give waiters time to enter the silk::FiberMutex slow path and suspend, and the
+    // service loop time to move the armed sleeps from their sleepQueue into the sleepTree.
     usleep(100'000);
 
     std::puts("gdb-test: ready -- set breakpoint on gdb_ready() and inspect fibers");
@@ -144,6 +180,10 @@ int main()
     // Cleanup.
     g_stop.store(true, std::memory_order_relaxed);
     g_release.set(0); // wake holder so it releases the mutex
+    for (int i = 0; i < N_SLEEPERS; ++i)
+    {
+        sleepFutures[i].cancel(); // wake sleepers parked in their sleepTrees
+    }
 
     for (int i = 0; i < N_WAITERS; ++i)
     {
@@ -151,8 +191,13 @@ int main()
     }
     holder.wait();
     spinner.wait();
+    for (int i = 0; i < N_SLEEPERS; ++i)
+    {
+        sleepers[i].wait();
+    }
 
     sem_destroy(&ready);
+    sem_destroy(&sleepReady);
 
     silk::FiberScheduler::destroy();
     silk::destroy();
