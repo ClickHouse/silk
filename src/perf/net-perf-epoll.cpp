@@ -1,6 +1,7 @@
 #include "common.h"
 
 #include <silk/util/assert.h>
+#include <silk/util/crash-dumper.h>
 #include <silk/util/init.h>
 #include <silk/util/logger.h>
 #include <silk/util/platform.h>
@@ -1341,6 +1342,8 @@ static void runClient(int argc, char ** argv)
  */
 int main(int argc, char ** argv)
 {
+    silk::installCrashDumper();
+
     if (argc < 2)
     {
         std::cerr << "usage: net-perf-epoll <server|client> [options]\n"

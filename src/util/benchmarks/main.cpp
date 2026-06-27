@@ -1,9 +1,12 @@
+#include <silk/util/crash-dumper.h>
 #include <silk/util/init.h>
 
 #include <benchmark/benchmark.h>
 
 int main(int argc, char ** argv)
 {
+    silk::installCrashDumper();
+
     silk::initialize();
 
     benchmark::Initialize(&argc, argv);
