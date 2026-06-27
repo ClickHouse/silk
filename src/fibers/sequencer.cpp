@@ -106,47 +106,93 @@ void FiberSequencer::drain() noexcept
     {
         uint64_t current = counter.load(std::memory_order_acquire);
 
-        // Drain cancelled futures: they are in the tree (IN_TABLE was set when
-        // cancelWait pushed them here), so remove them directly.
+        // Drain cancelled futures. The wake loop may have already removed (and cleared IN_TABLE on) one whose
+        // token was reached first; Tree::remove is UB on a node already out of the tree, so only remove if we
+        // still hold IN_TABLE. The cancelQueue is the sole completer of a cancelled tree future either way.
         Future * cancelled = cancelQueue.popAll();
         while (cancelled)
         {
             Future * next = RequestQueue::next(cancelled);
-            waiters.remove(cancelled);
-            cancelled->state.fetch_and(~Future::IN_TABLE, std::memory_order_relaxed);
+
+            uint32_t prev = cancelled->state.fetch_and(~Future::IN_TABLE, std::memory_order_relaxed);
+            SILK_ASSERT(prev & Future::CANCELLED);
+            if (prev & Future::IN_TABLE)
+            {
+                waiters.remove(cancelled);
+            }
+
             cancelList.push(cancelled);
             cancelled = next;
         }
 
-        // Classify incoming futures: set IN_TABLE and check whether CANCELLED
-        // raced ahead of us. If so, skip the tree insert and cancel instead.
+        // Classify incoming futures. A future whose token is already reached skips the tree entirely - it
+        // would only be inserted here and immediately popped by the wake loop below. It must NOT set
+        // IN_TABLE: leaving it clear keeps it out of the tree, so a racing cancelWait sees "not in table"
+        // and routes its cancellation through the CANCELLED flag here, rather than enqueuing a tree-removal
+        // for a future that was never inserted (which would also double-set the future).
         Future * future = requestQueue.popAll();
         while (future)
         {
             Future * next = RequestQueue::next(future);
-            uint32_t prev = future->state.fetch_or(Future::IN_TABLE, std::memory_order_acq_rel);
-            if (prev & Future::CANCELLED)
+
+            if (future->token <= current)
             {
-                future->state.fetch_and(~Future::IN_TABLE, std::memory_order_relaxed);
-                cancelList.push(future);
+                uint32_t prev = future->state.load(std::memory_order_acquire);
+                SILK_ASSERT((prev & Future::IN_TABLE) == 0);
+                if (prev & Future::CANCELLED)
+                {
+                    cancelList.push(future);
+                }
+                else
+                {
+                    wakeList.push(future);
+                }
             }
             else
             {
-                waiters.insert(future);
+                // Must wait: claim a tree slot by setting IN_TABLE, unless a cancel raced ahead - then route
+                // to cancel without entering the tree. One CAS, so IN_TABLE is set only on a real insert (no
+                // fetch_or-then-undo); a cancel landing between the load and the CAS just fails it and re-checks.
+                uint32_t prev = future->state.load(std::memory_order_relaxed);
+                for (;;)
+                {
+                    SILK_ASSERT((prev & Future::IN_TABLE) == 0);
+                    if (prev & Future::CANCELLED)
+                    {
+                        cancelList.push(future);
+                        break;
+                    }
+                    if (future->state.compare_exchange_weak(
+                            prev, prev | Future::IN_TABLE, std::memory_order_acq_rel, std::memory_order_relaxed))
+                    {
+                        waiters.insert(future);
+                        break;
+                    }
+                }
             }
+
             future = next;
         }
 
-        // Wake all tree entries whose token has been reached.
+        // Wake reached tree entries. A reached future that was cancelled while tree-resident is already in
+        // the cancelQueue (cancelWait saw IN_TABLE set), so the cancelQueue drain completes it as ECANCELED;
+        // drop it here and route only non-cancelled futures to the wake list, so each lands in exactly one list.
         while (Future * future = waiters.min())
         {
             if (future->token > current)
             {
                 break;
             }
+
+            uint32_t prev = future->state.fetch_and(~Future::IN_TABLE, std::memory_order_relaxed);
+            SILK_ASSERT(prev & Future::IN_TABLE);
+
             waiters.remove(future);
-            future->state.fetch_and(~Future::IN_TABLE, std::memory_order_relaxed);
-            wakeList.push(future);
+
+            if ((prev & Future::CANCELLED) == 0)
+            {
+                wakeList.push(future);
+            }
         }
 
         // Repeat if another thread signalled PENDING while we were draining,
