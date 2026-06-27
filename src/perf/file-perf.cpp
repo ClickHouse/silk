@@ -2,6 +2,7 @@
 
 #include <silk/fibers/fiber.h>
 #include <silk/util/assert.h>
+#include <silk/util/crash-dumper.h>
 #include <silk/util/init.h>
 #include <silk/util/logger.h>
 #include <silk/util/perf.h>
@@ -379,6 +380,8 @@ static void printJson(std::vector<uint64_t> & latNs, const ClientConfig & cfg)
  */
 int main(int argc, char ** argv)
 {
+    silk::installCrashDumper();
+
     ClientConfig cfg;
     std::string bsStr = "4k";
     std::string rwStr = "randread";

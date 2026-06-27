@@ -1,3 +1,4 @@
+#include <silk/util/crash-dumper.h>
 #include <silk/util/init.h>
 
 #include <gtest/gtest.h>
@@ -9,6 +10,8 @@ int main(int argc, char ** argv)
     {
         return RUN_ALL_TESTS();
     }
+
+    silk::installCrashDumper();
 
     silk::initialize();
 

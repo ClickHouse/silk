@@ -5,6 +5,7 @@
 #include <silk/fibers/future.h>
 #include <silk/fibers/mutex.h>
 #include <silk/util/assert.h>
+#include <silk/util/crash-dumper.h>
 #include <silk/util/init.h>
 #include <silk/util/list.h>
 #include <silk/util/logger.h>
@@ -717,6 +718,8 @@ static void runServer(int argc, char ** argv)
  */
 int main(int argc, char ** argv)
 {
+    silk::installCrashDumper();
+
     if (argc < 2)
     {
         std::cerr << "usage: http-perf <client|server> [options]\n"

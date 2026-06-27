@@ -39,13 +39,25 @@ logging.basicConfig(
 log = logging.getLogger("bb")
 
 
+def _with_timeout(args: tuple[str, ...], kwargs: dict[str, Any]) -> tuple[str, ...]:
+    """Turn a timeout= kwarg into a 'timeout' command prefix that sends SIGQUIT, so a hung silk binary
+    is caught by its in-process crash-dumper (thread/fiber/sleep/uring dump) before being SIGKILLed
+    after the grace period. Returns args unchanged when no timeout is requested."""
+    seconds = kwargs.pop("timeout", None)
+    if not seconds:
+        return args
+    return ("timeout", "--signal=QUIT", "--kill-after=60", str(seconds)) + args
+
+
 def run(*args: str, **kwargs: Any) -> None:
+    args = _with_timeout(args, kwargs)
     log.debug("run command: %s", " ".join(args))
     subprocess.run(args, cwd=ROOT, check=True, **kwargs)
 
 
 def run_capture(*args: str, **kwargs: Any) -> subprocess.CompletedProcess[str]:
     """Run a command, capture its stdout/stderr, and return the result."""
+    args = _with_timeout(args, kwargs)
     log.debug("run command: %s", " ".join(args))
     result = subprocess.run(
         args, cwd=ROOT, capture_output=True, text=True, check=False, **kwargs

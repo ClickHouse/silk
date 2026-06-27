@@ -4,6 +4,7 @@
 #include <silk/fibers/fiber.h>
 #include <silk/fibers/future.h>
 #include <silk/util/assert.h>
+#include <silk/util/crash-dumper.h>
 #include <silk/util/init.h>
 #include <silk/util/logger.h>
 #include <silk/util/perf.h>
@@ -734,6 +735,8 @@ void S3Bench::runSession(Session * session)
  */
 int main(int argc, char ** argv)
 {
+    silk::installCrashDumper();
+
     ClientConfig cfg;
     std::string rwStr = "read";
     std::string durationStr = "10s";
