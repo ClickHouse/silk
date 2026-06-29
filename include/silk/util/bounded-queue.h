@@ -32,7 +32,10 @@ public:
      */
     BoundedQueue() noexcept = default;
 
-    // TBD
+    /**
+     * Construct and initialize in one step when the capacity is known at construction. Capacity must be a
+     * power of two and >= 2 (see initialize).
+     */
     explicit BoundedQueue(uint64_t capacity) noexcept { initialize(capacity); }
 
     /**
