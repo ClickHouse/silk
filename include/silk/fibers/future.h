@@ -118,7 +118,20 @@ public:
      */
     [[nodiscard]] static int waitWithTimeout(FiberFuture * future, uint64_t nanoseconds) noexcept;
 
+    /**
+     * Set the same result on a batch of futures and wake their waiters together. Equivalent to calling
+     * set(err) on each, but the plain-fiber waiter wakeups are coalesced into a single batched schedule.
+     * Each future must be set at most once.
+     */
+    static void setAll(int err, FiberFuture ** futures, uint64_t count) noexcept;
+
 private:
+    //
+    // Constants.
+    //
+
+    static constexpr uint32_t WAKE_BATCH = 32;
+
     /**
      * Packed future state.
      */
@@ -152,6 +165,7 @@ private:
     //
 
     void signal() noexcept;
+    Fiber * extractWaitingFiber() noexcept;
     int suspend() noexcept;
     static void suspendCallback(Fiber * fiber, FiberFuture * future) noexcept;
     bool attachWaiter(MultipleWaitState * waitState) noexcept;

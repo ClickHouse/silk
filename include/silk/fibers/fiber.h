@@ -261,6 +261,13 @@ public:
     static bool schedule(Fiber * fiber) noexcept;
 
     /**
+     * Resume a batch of suspended fibers, coalescing their cross-CPU wakeups: each is enqueued to its
+     * home processor, then at most one doorbell per distinct target processor is posted and all are
+     * delivered with a single io_uring_submit. Used by FiberFuture::setAll for mass wakeups.
+     */
+    static void scheduleAll(Fiber ** fibers, uint64_t count) noexcept;
+
+    /**
      * Suspend the current fiber and immediately reschedule it, giving other
      * fibers a chance to run. No-op when called from a non-fiber thread.
      */
@@ -439,7 +446,8 @@ public:
      * @param bytesRead If not null, receives the number of bytes read on success.
      * @param future    Completion handle.
      */
-    static void readFixed(int fd, void * buf, uint32_t len, uint64_t offset, int bufIndex, uint64_t * bytesRead, IoFuture * future) noexcept;
+    static void
+    readFixed(int fd, void * buf, uint32_t len, uint64_t offset, int bufIndex, uint64_t * bytesRead, IoFuture * future) noexcept;
 
     /**
      * Async fixed-buffer write: IORING_OP_WRITE_FIXED. See readFixed.
@@ -653,7 +661,7 @@ private:
     static Fiber *
     allocateFiber(FiberMain * fiberMain, FiberParametersDtor * parametersDtor, uint8_t category, FiberFuture * future) noexcept;
     static void freeFiber(Fiber * fiber) noexcept;
-    static void enqueueReady(Fiber * fiber) noexcept;
+    static ProcessorState * enqueueReady(ProcessorState * processor, Fiber * fiber) noexcept;
     static void yieldSuspendCallback(Fiber * fiber, void * context) noexcept;
     static void enterThreadModeSuspendCallback(Fiber * fiber, void * context) noexcept;
     static void exitThreadModeSuspendCallback(Fiber * fiber, void * context) noexcept;

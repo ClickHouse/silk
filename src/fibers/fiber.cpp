@@ -5,6 +5,7 @@
 
 #include <silk/fibers/future.h>
 #include <silk/util/assert.h>
+#include <silk/util/bitmap.h>
 #include <silk/util/bounded-queue.h>
 #include <silk/util/list.h>
 #include <silk/util/memory-pool.h>
@@ -50,6 +51,7 @@ FiberScheduler::SchedulerState * FiberScheduler::scheduler;
 
 static constexpr uint64_t CQE_TAG_CANCEL = 0;
 static constexpr uint64_t CQE_TAG_DOORBELL = 1;
+static constexpr uint64_t CQE_TAG_WAKEUP = 2;
 
 // clang-format off
 #define FIBER_SIMPLE_COUNTERS(x) \
@@ -523,11 +525,13 @@ struct FiberScheduler::ProcessorState
     FiberId allocateFiberId(uint8_t category) noexcept;
     void profileEvent(ProfileEventKind kind, uint8_t category, uint64_t durationCycles) noexcept;
 
-    void enqueueDoorbell() noexcept;
     void wakeThread() noexcept;
     void parkThread(uint64_t waitNs, CpuTimer * timer) noexcept;
-
     bool hasWork() const noexcept;
+
+    void enqueueDoorbell() noexcept;
+    void postWakeup(ProcessorState * target) noexcept;
+    bool enqueueWakeup(ProcessorState * target) noexcept;
 
     template <typename Setup>
     bool enqueueIo(IoFuture * future, Setup && setup) noexcept;
@@ -638,7 +642,12 @@ void FiberScheduler::ProcessorState::initialize(uint16_t cpu) noexcept
     int r = ::io_uring_queue_init_params(options.ioUringQueueSize, &ring, &params);
     SILK_ASSERT(!r);
 
+    // The kernel queues overflowing CQEs (failing submit with EBUSY) rather than dropping completions,
+    // so a transiently full CQ never silently loses one - submitIo relies on it.
     SILK_ASSERT(params.features & IORING_FEAT_NODROP);
+
+    // postWakeup posts cross-ring doorbells with IOSQE_CQE_SKIP_SUCCESS to drop the send-side completion.
+    SILK_ASSERT(params.features & IORING_FEAT_CQE_SKIP);
 
     // Arm the wakeup doorbell. The kernel can end the multishot poll on CQ overflow,
     // so handleCompletionQueueSlow re-arms it through the same path on F_MORE loss.
@@ -787,6 +796,48 @@ void FiberScheduler::ProcessorState::enqueueDoorbell() noexcept
             break;
         }
     }
+}
+
+void FiberScheduler::ProcessorState::postWakeup(ProcessorState * target) noexcept
+{
+    // Same lost-wakeup handshake as wakeThread: this seq_cst fence pairs with parkThread, so a target
+    // observed awake here cannot have missed the ready-queue store its parkThread hasWork() re-check sees.
+    std::atomic_thread_fence(std::memory_order_seq_cst);
+
+    if (!target->sleeping.load(std::memory_order_acquire))
+    {
+        return;
+    }
+
+    Perf::getSimpleCounter(simpleCounters[SCHEDULER_THREAD_WAKED], number).increment();
+
+    // Fill the doorbell SQE and submit it; retry until the SQE is accepted (the SQ ring may be full).
+    for (;;)
+    {
+        bool enqueued = enqueueWakeup(target);
+        submitIo(true);
+        if (enqueued)
+        {
+            break;
+        }
+    }
+}
+
+bool FiberScheduler::ProcessorState::enqueueWakeup(ProcessorState * target) noexcept
+{
+    // Fill (do not submit) a doorbell SQE on this (the caller's) ring posting straight into the target's
+    // CQ via IORING_OP_MSG_RING, waking its io_uring_enter2 - cheaper than the eventfd doorbell.
+    // IOSQE_CQE_SKIP_SUCCESS drops our send-side completion, so only the target's CQE lands, tagged
+    // CQE_TAG_WAKEUP for the drain to skip. Returns false if the SQ ring is momentarily full.
+    int targetRingFd = target->ring.ring_fd;
+    return enqueueIo(
+        nullptr,
+        [targetRingFd](io_uring_sqe * sqe) noexcept
+        {
+            ::io_uring_prep_msg_ring(sqe, targetRingFd, 0, CQE_TAG_WAKEUP, 0);
+            ::io_uring_sqe_set_data64(sqe, CQE_TAG_WAKEUP);
+            ::io_uring_sqe_set_flags(sqe, IOSQE_CQE_SKIP_SUCCESS);
+        });
 }
 
 template <typename Setup>
@@ -1226,14 +1277,24 @@ bool FiberScheduler::schedule(Fiber * fiber) noexcept
 {
     if (fiber->tryChangeStateToReady())
     {
-        enqueueReady(fiber);
+        ProcessorState * processor = &scheduler->processorState[getCurrentProcessor()];
+        ProcessorState * target = enqueueReady(processor, fiber);
+        if (target)
+        {
+            processor->postWakeup(target);
+        }
         return true;
     }
 
     return false;
 }
 
-void FiberScheduler::enqueueReady(Fiber * fiber) noexcept
+// Shared by schedule, scheduleAll, and runFiber: place a ready fiber on its home ready queue and return
+// the processor whose doorbell the caller must ring (immediately, or batched). processor is the caller's
+// own processor - used as the home default and, by the caller, as the doorbell source - so it must be the
+// current processor. A proxy or thread-mode fiber, or a full ready queue, rings its own wakeup here and
+// returns null.
+FiberScheduler::ProcessorState * FiberScheduler::enqueueReady(ProcessorState * processor, Fiber * fiber) noexcept
 {
     if (!fiber->isProxyFiber)
     {
@@ -1246,29 +1307,83 @@ void FiberScheduler::enqueueReady(Fiber * fiber) noexcept
         {
             if (fiber->processorNumber == kInvalidProcessorNumber)
             {
-                fiber->processorNumber = getCurrentProcessor();
+                fiber->processorNumber = processor->number;
             }
 
-            ProcessorState * processor = &scheduler->processorState[fiber->processorNumber];
-            if (processor->readyQueue.enqueue(fiber))
+            ProcessorState * target = &scheduler->processorState[fiber->processorNumber];
+            if (target->readyQueue.enqueue(fiber))
             {
                 Perf::getSimpleCounter(simpleCounters[FIBER_ENQUEUED], processor->number).increment();
-                processor->wakeThread();
-                return;
+                return target;
             }
 
-            // Ready queue full: fall back to worker thread pool.
+            // Ready queue full: fall back to the worker thread pool.
             Perf::getSimpleCounter(simpleCounters[READY_QUEUE_FULL], processor->number).increment();
         }
 
         scheduler->readyQueue.enqueue(fiber);
-
-        Perf::getSimpleCounter(simpleCounters[FIBER_ENQUEUED_SHARED]).increment();
+        Perf::getSimpleCounter(simpleCounters[FIBER_ENQUEUED_SHARED], processor->number).increment();
         scheduler->wakeThread();
     }
     else
     {
         fiber->wakeThread();
+    }
+
+    return nullptr;
+}
+
+void FiberScheduler::scheduleAll(Fiber ** fibers, uint64_t count) noexcept
+{
+    ProcessorState * processor = &scheduler->processorState[getCurrentProcessor()];
+
+    // Dedup the wake targets in a bitmap over all processors so each parked target is rung exactly once.
+    uint64_t words[Bitmap::wordCount(kInvalidProcessorNumber)];
+    Bitmap wakeTargets(words, scheduler->processorCount);
+    wakeTargets.clear();
+
+    for (uint64_t i = 0; i < count; i++)
+    {
+        Fiber * fiber = fibers[i];
+        if (!fiber->tryChangeStateToReady())
+        {
+            continue;
+        }
+
+        ProcessorState * target = enqueueReady(processor, fiber);
+        if (target)
+        {
+            wakeTargets.set(target->number);
+        }
+    }
+
+    // One StoreLoad barrier for the whole batch (same handshake as postWakeup): the ready-queue stores
+    // above are ordered before the sleeping loads below, so a target parking concurrently is not missed.
+    std::atomic_thread_fence(std::memory_order_seq_cst);
+
+    // Ring each distinct parked target once, filling one doorbell SQE per target; a single submit delivers
+    // them all (and drains the SQ for the retry if it momentarily fills).
+    bool enqueued = false;
+    for (uint32_t bit = 0; wakeTargets.findBit(bit, true, &bit); bit++)
+    {
+        ProcessorState * target = &scheduler->processorState[bit];
+        if (!target->sleeping.load(std::memory_order_acquire))
+        {
+            continue;
+        }
+
+        Perf::getSimpleCounter(simpleCounters[SCHEDULER_THREAD_WAKED], processor->number).increment();
+
+        while (!processor->enqueueWakeup(target))
+        {
+            processor->submitIo(true);
+        }
+        enqueued = true;
+    }
+
+    if (enqueued)
+    {
+        processor->submitIo(true);
     }
 }
 
@@ -1823,6 +1938,14 @@ __attribute__((noinline)) bool FiberScheduler::handleCompletionQueueSlow(Process
                 continue;
             }
 
+            if (tag == CQE_TAG_WAKEUP)
+            {
+                // Cross-ring wakeup doorbell (IORING_OP_MSG_RING): a pure wakeup carrier - the work is
+                // already in the ready queue. Covers both an incoming doorbell and the sender-side
+                // completion of an outgoing one. Nothing to drain or re-arm.
+                continue;
+            }
+
             // IO completion. Every IO op is one-shot - only the doorbell is multishot -
             // so each IoFuture completes exactly once. A multishot IO op added later
             // (recv/accept multishot) would deliver IORING_CQE_F_MORE here and set the
@@ -2138,7 +2261,12 @@ void FiberScheduler::runFiber(Fiber * fiber, CpuTimer * timer) noexcept
             {
                 fiber->suspendTimestamp = 0;
             }
-            enqueueReady(fiber);
+
+            ProcessorState * target = enqueueReady(processor, fiber);
+            if (target)
+            {
+                processor->postWakeup(target);
+            }
         }
         return;
     }

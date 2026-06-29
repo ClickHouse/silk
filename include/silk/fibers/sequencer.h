@@ -54,8 +54,14 @@ public:
     /** Wait until the counter reaches @p token, blocking the calling fiber. */
     void wait(uint64_t token) noexcept
     {
+        // Fast path: counter already satisfied.
+        if (counter.load(std::memory_order_acquire) >= token)
+        {
+            return;
+        }
+
         Future future;
-        wait(token, &future);
+        registerWaiter(token, &future);
         future.wait();
     }
 
@@ -63,22 +69,68 @@ public:
      * Register @p future to be set when the counter reaches @p token.
      * Sets the future immediately if the counter is already >= @p token.
      */
-    void wait(uint64_t token, Future * future) noexcept;
+    void wait(uint64_t token, Future * future) noexcept
+    {
+        // Fast path: counter already satisfied.
+        if (counter.load(std::memory_order_acquire) >= token)
+        {
+            future->set(0);
+            return;
+        }
+
+        registerWaiter(token, future);
+    }
 
     /**
      * Increment the counter and wake all futures whose token has been reached.
      * Returns the new counter value.
      */
-    uint64_t increment() noexcept;
+    uint64_t increment() noexcept
+    {
+        uint64_t current = counter.fetch_add(1, std::memory_order_release) + 1;
+        drain();
+        return current;
+    }
 
     /**
      * Advance the counter to @p value if @p value exceeds the current counter.
      * Wakes all futures whose token is now reached.
      * Returns true if the counter was advanced, false if it was already >= @p value.
      */
-    [[nodiscard]] bool advance(uint64_t value) noexcept;
+    [[nodiscard]] bool advance(uint64_t value) noexcept
+    {
+        uint64_t current = counter.load(std::memory_order_relaxed);
+        for (;;)
+        {
+            if (current >= value)
+            {
+                return false;
+            }
+            if (counter.compare_exchange_weak(current, value, std::memory_order_release, std::memory_order_relaxed))
+            {
+                break;
+            }
+        }
+
+        drain();
+        return true;
+    }
 
 private:
+    //
+    // Constants.
+    //
+
+    static constexpr uint32_t FREE = 0;
+    static constexpr uint32_t BUSY = 1;
+    static constexpr uint32_t PENDING = 2;
+
+    static constexpr uint32_t WAKE_BATCH = 32;
+
+    //
+    // Data structures.
+    //
+
     struct FutureCompare
     {
         bool operator()(const Future & l, const Future & r) const noexcept { return l.token < r.token; }
@@ -89,21 +141,15 @@ private:
     using WaitList = Stack<Future, &Future::stackEntry>;
 
     //
-    // Constants.
-    //
-
-    static constexpr uint32_t FREE = 0;
-    static constexpr uint32_t BUSY = 1;
-    static constexpr uint32_t PENDING = 2;
-
-    //
     // Helpers.
     //
 
+    void registerWaiter(uint64_t token, Future * future) noexcept;
     void cancelWait(Future * future) noexcept;
     void drain() noexcept;
     bool acquireCombiner() noexcept;
     bool releaseCombiner() noexcept;
+    static void setAll(WaitList * wakeList, int err) noexcept;
 
     //
     // State.

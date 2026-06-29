@@ -5,6 +5,7 @@
 #include <gtest/gtest.h>
 
 #include <cerrno>
+#include <vector>
 
 namespace silk
 {
@@ -375,6 +376,82 @@ TEST(FiberFuture, resetAndReuse)
 
     future.set(2);
     ASSERT_EQ(future.wait(), 2);
+}
+
+// setAll sets a batch of futures and wakes their fiber waiters together; each woken fiber sees the value.
+// N exceeds WAKE_BATCH (32) so the chunking inside setAll is exercised.
+TEST(FiberFuture, setAllWakesWaiters)
+{
+    constexpr uint64_t N = 100;
+
+    struct Params
+    {
+        FiberFuture * started;
+        FiberFuture * wait;
+
+        static int fiberMain(Params * p) noexcept
+        {
+            p->started->set(0);
+            return p->wait->wait();
+        }
+    };
+
+    std::vector<FiberFuture> started(N);
+    std::vector<FiberFuture> wait(N);
+    std::vector<FiberFuture> done(N);
+
+    for (uint64_t i = 0; i < N; ++i)
+    {
+        int r = FiberScheduler::run(Params::fiberMain, {&started[i], &wait[i]}, &done[i]);
+        ASSERT_FALSE(r);
+    }
+
+    // Let every fiber run up to its wait() before the batched wake.
+    for (uint64_t i = 0; i < N; ++i)
+    {
+        started[i].wait();
+    }
+
+    std::vector<FiberFuture *> futures(N);
+    for (uint64_t i = 0; i < N; ++i)
+    {
+        futures[i] = &wait[i];
+    }
+
+    FiberFuture::setAll(42, futures.data(), N);
+
+    for (uint64_t i = 0; i < N; ++i)
+    {
+        EXPECT_EQ(done[i].wait(), 42);
+    }
+}
+
+// setAll on futures with no fiber waiter simply sets each; the result is observable afterwards.
+TEST(FiberFuture, setAllNoWaiter)
+{
+    constexpr uint64_t N = 40;
+
+    std::vector<FiberFuture> futures(N);
+    std::vector<FiberFuture *> pointers(N);
+    for (uint64_t i = 0; i < N; ++i)
+    {
+        pointers[i] = &futures[i];
+    }
+
+    FiberFuture::setAll(7, pointers.data(), N);
+
+    for (uint64_t i = 0; i < N; ++i)
+    {
+        int r;
+        EXPECT_TRUE(futures[i].isSet(&r));
+        EXPECT_EQ(r, 7);
+    }
+}
+
+// setAll with count 0 is a no-op.
+TEST(FiberFuture, setAllEmpty)
+{
+    FiberFuture::setAll(0, nullptr, 0);
 }
 
 } // namespace silk
