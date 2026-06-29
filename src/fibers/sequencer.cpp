@@ -7,20 +7,13 @@
 namespace silk
 {
 
-void FiberSequencer::wait(uint64_t token, Future * future) noexcept
+void FiberSequencer::registerWaiter(uint64_t token, Future * future) noexcept
 {
+    // Slow path: register future in the request queue for the next combiner to process.
     future->sequencer = this;
     future->token = token;
     future->state.store(0, std::memory_order_relaxed);
 
-    // Fast path: counter already satisfied.
-    if (counter.load(std::memory_order_acquire) >= token)
-    {
-        future->set(0);
-        return;
-    }
-
-    // Slow path: register future in the request queue for the next combiner to process.
     requestQueue.push(future);
 
     // Waiter half of a StoreLoad (Dekker) handshake on requestQueue vs counter (acquire / release cannot do
@@ -35,32 +28,6 @@ void FiberSequencer::wait(uint64_t token, Future * future) noexcept
     {
         drain();
     }
-}
-
-uint64_t FiberSequencer::increment() noexcept
-{
-    uint64_t current = counter.fetch_add(1, std::memory_order_release) + 1;
-    drain();
-    return current;
-}
-
-bool FiberSequencer::advance(uint64_t value) noexcept
-{
-    uint64_t current = counter.load(std::memory_order_relaxed);
-    for (;;)
-    {
-        if (current >= value)
-        {
-            return false;
-        }
-        if (counter.compare_exchange_weak(current, value, std::memory_order_release, std::memory_order_relaxed))
-        {
-            break;
-        }
-    }
-
-    drain();
-    return true;
 }
 
 void FiberSequencer::cancelWait(Future * future) noexcept
@@ -207,15 +174,9 @@ void FiberSequencer::drain() noexcept
         std::atomic_thread_fence(std::memory_order_seq_cst);
     }
 
-    // Wake outside the combiner so set can itself call drain without deadlocking.
-    while (Future * future = wakeList.pop())
-    {
-        future->set(0);
-    }
-    while (Future * future = cancelList.pop())
-    {
-        future->set(ECANCELED);
-    }
+    // Wake outside the combiner so a woken fiber re-entering drain cannot deadlock on the combiner.
+    setAll(&wakeList, 0);
+    setAll(&cancelList, ECANCELED);
 }
 
 bool FiberSequencer::acquireCombiner() noexcept
@@ -263,6 +224,27 @@ bool FiberSequencer::releaseCombiner() noexcept
             combinerState.store(BUSY, std::memory_order_relaxed);
             return false;
         }
+    }
+}
+
+void FiberSequencer::setAll(WaitList * wakeList, int err) noexcept
+{
+    FiberFuture * wakeBatch[WAKE_BATCH];
+    uint64_t batchSize = 0;
+
+    while (Future * future = wakeList->pop())
+    {
+        wakeBatch[batchSize++] = future;
+        if (batchSize == WAKE_BATCH)
+        {
+            FiberFuture::setAll(err, wakeBatch, batchSize);
+            batchSize = 0;
+        }
+    }
+
+    if (batchSize)
+    {
+        FiberFuture::setAll(err, wakeBatch, batchSize);
     }
 }
 
