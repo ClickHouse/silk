@@ -1,6 +1,7 @@
 #include <silk/util/tsc.h>
 
 #include <silk/util/assert.h>
+#include <silk/util/logger.h>
 #include <silk/util/platform.h>
 
 #include <cerrno>
@@ -131,13 +132,25 @@ void Tsc::initialize() noexcept
     }
 
 #if defined(__x86_64__)
-    SILK_ASSERT(hasInvariantTsc(), "CPU does not advertise Invariant TSC; silk requires a stable cross-core counter");
+    // Invariant TSC guarantees the counter ticks at a constant rate and stays
+    // synchronized across cores -- silk reads TSC on one core and compares on
+    // another, so this is what we want. Some virtualized environments (notably
+    // KVM guests without nonstop_tsc) fail to advertise the bit via CPUID even
+    // though rdtsc is usable, so warn and continue rather than aborting;
+    // frequency then comes from CLOCK_MONOTONIC calibration below.
+    if (!hasInvariantTsc())
+    {
+        SILK_WARN(
+            "CPU does not advertise Invariant TSC; proceeding anyway "
+            "-- cross-core timing may be unreliable (common on KVM guests)");
+    }
     frequency = getTscFrequencyCpuid();
     // AMD CPUs do not populate CPUID leaves 0x15 or 0x16, and some older Intel
     // parts leave them empty too. Fall back to measuring TSC against
     // CLOCK_MONOTONIC over a fixed window -- the same approach the Linux kernel
-    // takes when CPUID does not advertise a frequency. Invariant TSC is already
-    // asserted by the caller, so a single calibration sample is representative.
+    // takes when CPUID does not advertise a frequency. This is also the path
+    // taken on hosts without an invariant TSC, where the CPUID frequency leaves
+    // are typically absent as well.
     if (frequency == 0)
     {
         frequency = getTscFrequencyCalibrated();
