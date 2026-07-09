@@ -15,6 +15,11 @@ namespace silk
  *
  * Waiters register a Future at a specific token; increment advances the
  * counter and wakes all futures whose token has been reached, in token order.
+ *
+ * stop transitions the sequencer into a stopped state: every unreached waiter
+ * is woken with ECANCELED and every subsequent unreached wait completes with
+ * ECANCELED without suspending, while the counter (and increment / advance)
+ * keeps working - a wait at a reached token still returns 0.
  */
 class FiberSequencer
 {
@@ -51,22 +56,27 @@ public:
     /** Return the current counter value for use as a wait token. */
     uint64_t get() const noexcept { return counter.load(std::memory_order_acquire); }
 
-    /** Wait until the counter reaches @p token, blocking the calling fiber. */
-    void wait(uint64_t token) noexcept
+    /**
+     * Wait until the counter reaches @p token, blocking the calling fiber.
+     * Returns 0 on normal wakeup, ECANCELED if the sequencer has been stopped.
+     * Returns 0 immediately if the counter is already >= @p token, even after stop.
+     */
+    int wait(uint64_t token) noexcept
     {
         // Fast path: counter already satisfied.
         if (counter.load(std::memory_order_acquire) >= token)
         {
-            return;
+            return 0;
         }
 
         Future future;
         registerWaiter(token, &future);
-        future.wait();
+        return future.wait();
     }
 
     /**
-     * Register @p future to be set when the counter reaches @p token.
+     * Register @p future to be set when the counter reaches @p token: with 0 on
+     * normal wakeup, with ECANCELED if the sequencer is stopped first.
      * Sets the future immediately if the counter is already >= @p token.
      */
     void wait(uint64_t token, Future * future) noexcept
@@ -116,6 +126,23 @@ public:
         return true;
     }
 
+    /**
+     * Transition into the stopped state and wake every unreached waiter with
+     * ECANCELED. After this, every unreached wait completes with ECANCELED
+     * without suspending; a reached wait still returns 0, and increment /
+     * advance keep working. Idempotent.
+     */
+    void stop() noexcept
+    {
+        // The release store orders the flag before drain's seq_cst fence and queue reads; a racing registerWaiter
+        // either observes the flag in its post-push re-check or its push is observed by this drain - never neither.
+        stopFlag.store(true, std::memory_order_release);
+        drain();
+    }
+
+    /** Returns true if stop has been called. */
+    bool stopped() const noexcept { return stopFlag.load(std::memory_order_acquire); }
+
 private:
     //
     // Constants.
@@ -157,6 +184,7 @@ private:
 
     std::atomic<uint64_t> counter{};
     std::atomic<uint32_t> combinerState{FREE};
+    std::atomic<bool> stopFlag{};
     RequestQueue requestQueue;
     RequestQueue cancelQueue;
     WaiterTree waiters;

@@ -43,7 +43,46 @@ TEST(FiberSequencer, waitAlreadySatisfied)
     EXPECT_EQ(err, 0);
 
     // blocking form; must return immediately
-    sequencer.wait(1);
+    EXPECT_EQ(sequencer.wait(1), 0);
+}
+
+TEST(FiberSequencer, stopCancelsUnreachedWaiters)
+{
+    FiberSequencer sequencer;
+    sequencer.increment();
+
+    // Registered before stop: an unreached waiter completes with ECANCELED, a reached one with 0.
+    FiberSequencer::Future unreached;
+    sequencer.wait(2, &unreached);
+    FiberSequencer::Future reached;
+    sequencer.wait(1, &reached);
+
+    EXPECT_FALSE(sequencer.stopped());
+    sequencer.stop();
+    EXPECT_TRUE(sequencer.stopped());
+
+    int err;
+    ASSERT_TRUE(unreached.isSet(&err));
+    EXPECT_EQ(err, ECANCELED);
+    ASSERT_TRUE(reached.isSet(&err));
+    EXPECT_EQ(err, 0);
+
+    // Registered after stop: an unreached wait completes with ECANCELED without suspending, a reached one with 0.
+    FiberSequencer::Future late;
+    sequencer.wait(2, &late);
+    ASSERT_TRUE(late.isSet(&err));
+    EXPECT_EQ(err, ECANCELED);
+    EXPECT_EQ(sequencer.wait(2), ECANCELED);
+    EXPECT_EQ(sequencer.wait(1), 0);
+
+    // The counter keeps working after stop; a wait at the newly reached token returns 0.
+    EXPECT_EQ(sequencer.increment(), 2u);
+    EXPECT_EQ(sequencer.get(), 2u);
+    EXPECT_EQ(sequencer.wait(2), 0);
+
+    // Idempotent.
+    sequencer.stop();
+    EXPECT_TRUE(sequencer.stopped());
 }
 
 TEST(FiberSequencer, waitSuspends)
