@@ -21,10 +21,11 @@ void FiberSequencer::registerWaiter(uint64_t token, Future * future) noexcept
     // below, so a registration racing an advance is never missed by both the re-read and the combiner's scan.
     std::atomic_thread_fence(std::memory_order_seq_cst);
 
-    // Re-check after push: handles the race where increment fired between
-    // the check above and the push. If the counter is now satisfied, become
-    // the combiner and drain the queue (which will set our future immediately).
-    if (counter.load(std::memory_order_acquire) >= token)
+    // Re-check after push: handles the race where increment (or stop) fired
+    // between the check above and the push. If the counter is now satisfied or
+    // the sequencer is stopped, become the combiner and drain the queue (which
+    // will set our future immediately).
+    if (counter.load(std::memory_order_acquire) >= token || stopFlag.load(std::memory_order_acquire))
     {
         drain();
     }
@@ -72,6 +73,7 @@ void FiberSequencer::drain() noexcept
     for (;;)
     {
         uint64_t current = counter.load(std::memory_order_acquire);
+        bool stopping = stopFlag.load(std::memory_order_acquire);
 
         // Drain cancelled futures. The wake loop may have already removed (and cleared IN_TABLE on) one whose
         // token was reached first; Tree::remove is UB on a node already out of the tree, so only remove if we
@@ -114,6 +116,13 @@ void FiberSequencer::drain() noexcept
                 {
                     wakeList.push(future);
                 }
+            }
+            else if (stopping)
+            {
+                // Stopped: an unreached waiter never enters the tree - complete it with ECANCELED. IN_TABLE
+                // stays clear, so a racing cancelWait routes through the CANCELLED flag and enqueues nothing;
+                // this list is the future's sole completer either way.
+                cancelList.push(future);
             }
             else
             {
@@ -159,6 +168,25 @@ void FiberSequencer::drain() noexcept
             if ((prev & Future::CANCELLED) == 0)
             {
                 wakeList.push(future);
+            }
+        }
+
+        // Stopped: flush the remaining (unreached) tree entries with ECANCELED. A tree future cancelled while
+        // tree-resident sits in the cancelQueue (cancelWait saw IN_TABLE), which stays its sole completer -
+        // clearing IN_TABLE here routes the next cancelQueue drain past the tree removal, as in the wake loop.
+        if (stopping)
+        {
+            while (Future * future = waiters.min())
+            {
+                uint32_t prev = future->state.fetch_and(~Future::IN_TABLE, std::memory_order_relaxed);
+                SILK_ASSERT(prev & Future::IN_TABLE);
+
+                waiters.remove(future);
+
+                if ((prev & Future::CANCELLED) == 0)
+                {
+                    cancelList.push(future);
+                }
             }
         }
 
