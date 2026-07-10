@@ -428,4 +428,67 @@ TEST(Fiber, yieldStormDoesNotStarveSleep)
     }
 }
 
+// A fiber's C++ exception-propagation state must survive context switches. silk saves and restores
+// it per fiber on every switch; without that, fibers sharing an OS thread corrupt each other's
+// in-flight exception when handling spans a switch - the wrong exception object is freed (observed
+// as a use-after-free or a wrong value) and the original leaks. Many fibers throw and, while
+// handling the exception, yield so their handlers interleave on shared scheduler threads; each must
+// still observe its own exception. Under LeakSanitizer this also catches the orphaned objects.
+TEST(Fiber, exceptionStateIsolatedAcrossSwitch)
+{
+    static constexpr int FIBER_COUNT = 64;
+    static constexpr int ITERATIONS = 200;
+
+    struct Marker
+    {
+        int value;
+    };
+
+    struct Params
+    {
+        int id;
+        std::atomic<int> * mismatches;
+
+        static int fiberMain(Params * p) noexcept
+        {
+            for (int i = 0; i < ITERATIONS; ++i)
+            {
+                int expected = p->id * ITERATIONS + i;
+                try
+                {
+                    FiberScheduler::yield();
+                    throw Marker{expected};
+                }
+                catch (const Marker & marker)
+                {
+                    // Suspend while the exception is live so another fiber's throw / catch can
+                    // interleave on this OS thread; marker must still refer to our own object.
+                    FiberScheduler::yield();
+                    if (marker.value != expected)
+                    {
+                        p->mismatches->fetch_add(1, std::memory_order_relaxed);
+                    }
+                }
+            }
+            return 0;
+        }
+    };
+
+    std::atomic<int> mismatches{0};
+    FiberFuture futures[FIBER_COUNT];
+
+    for (int i = 0; i < FIBER_COUNT; ++i)
+    {
+        int r = FiberScheduler::run(Params::fiberMain, {i, &mismatches}, &futures[i]);
+        ASSERT_EQ(r, 0);
+    }
+
+    for (int i = 0; i < FIBER_COUNT; ++i)
+    {
+        ASSERT_EQ(futures[i].wait(), 0);
+    }
+
+    ASSERT_EQ(mismatches.load(), 0);
+}
+
 } // namespace silk
