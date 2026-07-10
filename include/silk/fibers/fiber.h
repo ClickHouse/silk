@@ -316,7 +316,7 @@ public:
      * The callback must handle the race where the wakeup arrives before the fiber
      * is fully suspended.
      */
-    static void suspend(SuspendCallback * callback, void * context) noexcept;
+    static void suspend(SuspendCallback * callback, void * context, uint64_t * waitCycles = nullptr) noexcept;
 
     /**
      * Park a suspended fiber under key until a matching releaseWaiters() call.

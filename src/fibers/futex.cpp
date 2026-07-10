@@ -9,7 +9,7 @@
 namespace silk
 {
 
-int FiberFutex::wait(uint64_t token) noexcept
+int FiberFutex::wait(uint64_t token, uint64_t * waitCycles) noexcept
 {
     // Spin for ~500 ns (16 x ~35 ns PAUSE on Skylake) before suspending.
     static constexpr uint32_t SPIN_COUNT = 16;
@@ -35,7 +35,7 @@ int FiberFutex::wait(uint64_t token) noexcept
     while (!waitHelper(token))
     {
         SuspendCtx ctx{this, token};
-        FiberScheduler::suspend(reinterpret_cast<FiberScheduler::SuspendCallback *>(suspendCallback), &ctx);
+        FiberScheduler::suspend(reinterpret_cast<FiberScheduler::SuspendCallback *>(suspendCallback), &ctx, waitCycles);
     }
 
     // Re-read state for the cancellation decision. The token-satisfied case

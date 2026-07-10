@@ -61,7 +61,7 @@ public:
      * Returns 0 on normal wakeup, ECANCELED if the sequencer has been stopped.
      * Returns 0 immediately if the counter is already >= @p token, even after stop.
      */
-    int wait(uint64_t token) noexcept
+    int wait(uint64_t token, uint64_t * waitCycles = nullptr) noexcept
     {
         // Fast path: counter already satisfied.
         if (counter.load(std::memory_order_acquire) >= token)
@@ -71,7 +71,7 @@ public:
 
         Future future;
         registerWaiter(token, &future);
-        return future.wait();
+        return future.wait(waitCycles);
     }
 
     /**

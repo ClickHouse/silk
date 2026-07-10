@@ -64,7 +64,7 @@ public:
     [[nodiscard]] bool try_lock(uint64_t key, ScopedLock * scopedLock) noexcept;
 
     /** Acquire key, suspending the calling fiber until it is free, and populate scopedLock. */
-    void lock(uint64_t key, ScopedLock * scopedLock) noexcept;
+    void lock(uint64_t key, ScopedLock * scopedLock, uint64_t * waitCycles = nullptr) noexcept;
 
 private:
     struct Compare

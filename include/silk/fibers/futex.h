@@ -33,7 +33,7 @@ public:
     }
 
     /** Wait until at least one post fires after this call, or stop() is called. */
-    int wait() noexcept { return wait(get() + 1); }
+    int wait(uint64_t * waitCycles = nullptr) noexcept { return wait(get() + 1, waitCycles); }
 
     /**
      * Wait until the counter reaches @p token, or stop() is called.
@@ -42,7 +42,7 @@ public:
      * the satisfied-token case takes precedence so callers do not lose state changes).
      * @p token is typically obtained as get() + 1 to wait for the next post.
      */
-    [[nodiscard]] int wait(uint64_t token) noexcept;
+    [[nodiscard]] int wait(uint64_t token, uint64_t * waitCycles = nullptr) noexcept;
 
     /** Increment the counter and wake all waiting fibers. No-op once stopped. */
     void post() noexcept;

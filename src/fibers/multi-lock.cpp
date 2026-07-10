@@ -26,7 +26,7 @@ bool FiberMultiLock::try_lock(uint64_t key, ScopedLock * scopedLock) noexcept
     return true;
 }
 
-void FiberMultiLock::lock(uint64_t key, ScopedLock * scopedLock) noexcept
+void FiberMultiLock::lock(uint64_t key, ScopedLock * scopedLock, uint64_t * waitCycles) noexcept
 {
     WaitEntry * entry = &scopedLock->entry;
     entry->key = key;
@@ -46,7 +46,7 @@ void FiberMultiLock::lock(uint64_t key, ScopedLock * scopedLock) noexcept
         prev->waiters.push_back(entry);
     }
 
-    entry->wait();
+    entry->wait(waitCycles);
 }
 
 void FiberMultiLock::unlock(ScopedLock * scopedLock) noexcept

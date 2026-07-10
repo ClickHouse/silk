@@ -1490,8 +1490,10 @@ void FiberScheduler::exitThreadModeSuspendCallback(Fiber * fiber, void * context
     schedule(fiber);
 }
 
-void FiberScheduler::suspend(SuspendCallback * callback, void * context) noexcept
+void FiberScheduler::suspend(SuspendCallback * callback, void * context, uint64_t * waitCycles) noexcept
 {
+    uint64_t suspendStart = waitCycles ? Tsc::getCycles() : 0;
+
     Fiber * fiber = getCurrentFiber();
     fiber->changeState(FiberState::RUNNING, FiberState::SUSPEND_REQUESTED);
 
@@ -1517,6 +1519,11 @@ void FiberScheduler::suspend(SuspendCallback * callback, void * context) noexcep
 
     FiberState fiberState = fiber->state.load(std::memory_order_acquire);
     SILK_ASSERT(fiberState == FiberState::RUNNING);
+
+    if (waitCycles)
+    {
+        *waitCycles += Tsc::getCycles() - suspendStart;
+    }
 }
 
 void FiberScheduler::enqueueWaiter(uint64_t key, Fiber * fiber) noexcept

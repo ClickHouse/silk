@@ -47,7 +47,7 @@ public:
      * Block until the result is available, then return it.
      * Returns immediately if set() has already been called.
      */
-    int wait() noexcept
+    int wait(uint64_t * waitCycles = nullptr) noexcept
     {
         State currentState;
         currentState.raw = state.load(std::memory_order_acquire);
@@ -55,7 +55,7 @@ public:
         {
             return error;
         }
-        return suspend();
+        return suspend(waitCycles);
     }
 
     /**
@@ -166,7 +166,7 @@ private:
 
     void signal() noexcept;
     Fiber * extractWaitingFiber() noexcept;
-    int suspend() noexcept;
+    int suspend(uint64_t * waitCycles) noexcept;
     static void suspendCallback(Fiber * fiber, FiberFuture * future) noexcept;
     bool attachWaiter(MultipleWaitState * waitState) noexcept;
     bool detachWaiter(MultipleWaitState * waitState) noexcept;
