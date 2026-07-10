@@ -14,22 +14,30 @@ _CONFIGS = {
         "configure": "./bb -b release configure --build-poco --build-jemalloc",
         "test": "./bb -b release test",
         "bench": "./bb -b release bench",
-        "perf": "./bb -v -b release perf file net http",
+        "perf": "./bb -b release perf file net http",
     },
     "tsan": {
         "configure": "./bb -b release -s thread configure --build-poco",
         "test": "./bb -b release -s thread test",
         "bench": "./bb -b release -s thread bench",
-        "perf": "./bb -v -b release -s thread perf file net http",
+        "perf": "./bb -b release -s thread perf file net http",
     },
     "asan": {
+        "configure": "./bb -b release -s address configure --build-poco",
         "test": "./bb -b release -s address test",
+        "bench": "./bb -b release -s address bench",
+        "perf": "./bb -b release -s address perf file net http",
     },
     "ubsan": {
+        "configure": "./bb -b release -s undefined configure --build-poco",
         "test": "./bb -b release -s undefined test",
+        "bench": "./bb -b release -s undefined bench",
+        "perf": "./bb -b release -s undefined perf file net http",
     },
     "msan": {
         "test": "./bb -b release -s memory test",
+        "bench": "./bb -b release -s memory bench",
+        "perf": "./bb -b release -s memory perf file net",
     },
 }
 

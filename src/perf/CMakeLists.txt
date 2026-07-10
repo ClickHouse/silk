@@ -10,8 +10,9 @@ target_link_libraries(net-perf PRIVATE silk-perf cxxopts::cxxopts)
 add_executable(net-perf-epoll net-perf-epoll.cpp)
 target_link_libraries(net-perf-epoll PRIVATE silk-perf cxxopts::cxxopts)
 
-# asio::awaitable requires Boost >= 1.75
-if(Boost_VERSION_STRING VERSION_GREATER_EQUAL "1.75")
+# asio::awaitable requires Boost >= 1.75; Boost.Asio pulls in a libstdc++-ABI system lib, so it is
+# excluded under MSan like http-perf (Poco) and s3-perf (AWS SDK).
+if(Boost_VERSION_STRING VERSION_GREATER_EQUAL "1.75" AND NOT SANITIZER STREQUAL "memory")
     add_executable(net-perf-asio net-perf-asio.cpp)
     target_link_libraries(net-perf-asio PRIVATE silk-perf cxxopts::cxxopts)
 
