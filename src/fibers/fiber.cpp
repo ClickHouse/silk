@@ -388,6 +388,9 @@ void Fiber::switchToFiberContext() noexcept
     storeExceptionState(cxaEhGlobals);
 
     auto transfer = jump_fcontext(fiberContext, this);
+    // transfer is populated by the uninstrumented jump_fcontext assembly; MSan cannot see those
+    // writes, so mark it initialized (as fiberContextMain does on first entry).
+    MSAN_UNPOISON(&transfer, sizeof(transfer));
     fiberContext = transfer.fctx;
 
     // The scheduler resumed; restore its exception state.
@@ -415,6 +418,9 @@ void Fiber::switchToThreadContext(bool final) noexcept
     cxaEhGlobals = loadExceptionState();
 
     auto transfer = jump_fcontext(threadContext, nullptr);
+    // transfer is populated by the uninstrumented jump_fcontext assembly; MSan cannot see those
+    // writes, so mark it initialized (as fiberContextMain does on first entry).
+    MSAN_UNPOISON(&transfer, sizeof(transfer));
     threadContext = transfer.fctx;
 
 #if defined(__SANITIZE_ADDRESS__)
