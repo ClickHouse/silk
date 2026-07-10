@@ -352,6 +352,9 @@ void Fiber::switchToFiberContext() noexcept
 #endif
 
     auto transfer = jump_fcontext(fiberContext, this);
+    // transfer is populated by the uninstrumented jump_fcontext assembly; MSan cannot see those
+    // writes, so mark it initialized (as fiberContextMain does on first entry).
+    MSAN_UNPOISON(&transfer, sizeof(transfer));
     fiberContext = transfer.fctx;
 
 #if defined(__SANITIZE_ADDRESS__)
@@ -372,6 +375,9 @@ void Fiber::switchToThreadContext(bool final) noexcept
 #endif
 
     auto transfer = jump_fcontext(threadContext, nullptr);
+    // transfer is populated by the uninstrumented jump_fcontext assembly; MSan cannot see those
+    // writes, so mark it initialized (as fiberContextMain does on first entry).
+    MSAN_UNPOISON(&transfer, sizeof(transfer));
     threadContext = transfer.fctx;
 
 #if defined(__SANITIZE_ADDRESS__)
