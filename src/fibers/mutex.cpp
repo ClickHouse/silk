@@ -10,7 +10,7 @@
 namespace silk
 {
 
-void FiberMutex::lockSlow(State currentState) noexcept
+void FiberMutex::lockSlow(State currentState, uint64_t * waitCycles) noexcept
 {
     // MSan does not follow manual fiber stack switching (google/sanitizers#1232): its per-thread
     // shadow TLS does not travel with a fiber across suspend/resume, so it can read the by-value
@@ -49,12 +49,12 @@ void FiberMutex::lockSlow(State currentState) noexcept
     while (!lockHelper(&currentState))
     {
         SuspendCtx ctx{this, true};
-        FiberScheduler::suspend(reinterpret_cast<FiberScheduler::SuspendCallback *>(suspendCallback), &ctx);
+        FiberScheduler::suspend(reinterpret_cast<FiberScheduler::SuspendCallback *>(suspendCallback), &ctx, waitCycles);
         currentState.raw = state.load(std::memory_order_relaxed);
     }
 }
 
-void FiberMutex::lockSharedSlow(State currentState) noexcept
+void FiberMutex::lockSharedSlow(State currentState, uint64_t * waitCycles) noexcept
 {
     // Same MSan manual-stack-switching workaround as lockSlow (google/sanitizers#1232).
     MSAN_UNPOISON(&currentState, sizeof(currentState));
@@ -84,7 +84,7 @@ void FiberMutex::lockSharedSlow(State currentState) noexcept
     while (!lockSharedHelper(&currentState))
     {
         SuspendCtx ctx{this, false};
-        FiberScheduler::suspend(reinterpret_cast<FiberScheduler::SuspendCallback *>(suspendCallback), &ctx);
+        FiberScheduler::suspend(reinterpret_cast<FiberScheduler::SuspendCallback *>(suspendCallback), &ctx, waitCycles);
         currentState.raw = state.load(std::memory_order_relaxed);
     }
 }

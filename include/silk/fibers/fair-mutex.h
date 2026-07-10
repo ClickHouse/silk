@@ -19,10 +19,10 @@ public:
     using Future = FiberSequencer::Future;
 
     /** Acquire the lock, suspending the calling fiber until it becomes available. */
-    void lock() noexcept
+    void lock(uint64_t * waitCycles = nullptr) noexcept
     {
         uint64_t ticket = nextTicket.fetch_add(1, std::memory_order_relaxed);
-        sequencer.wait(ticket);
+        sequencer.wait(ticket, waitCycles);
     }
 
     /**

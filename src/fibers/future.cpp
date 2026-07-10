@@ -82,9 +82,9 @@ Fiber * FiberFuture::extractWaitingFiber() noexcept
     }
 }
 
-int FiberFuture::suspend() noexcept
+int FiberFuture::suspend(uint64_t * waitCycles) noexcept
 {
-    FiberScheduler::suspend(reinterpret_cast<FiberScheduler::SuspendCallback *>(suspendCallback), this);
+    FiberScheduler::suspend(reinterpret_cast<FiberScheduler::SuspendCallback *>(suspendCallback), this, waitCycles);
 
     State currentState;
     currentState.raw = state.load(std::memory_order_acquire);
