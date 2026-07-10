@@ -87,6 +87,32 @@ DECLARE_SIMPLE_COUNTERS(FIBER_SIMPLE_COUNTERS);
 
 static Perf::CounterGroup simpleCounters;
 
+// Itanium C++ ABI per-thread exception-propagation state (libstdc++'s __cxxabiv1::__cxa_eh_globals
+// and libc++abi's __cxa_eh_globals share this layout): the stack of exceptions being propagated or
+// handled on the thread, plus the uncaught count. __cxa_throw / __cxa_begin_catch / __cxa_end_catch
+// mutate it and free the exception object through it. It lives in thread-local storage, so every
+// fiber on a scheduler thread shares one copy - silk swaps it per fiber on each context switch so an
+// exception whose unwind spans a switch is not corrupted by another fiber's exception handling.
+struct CxaEhGlobals
+{
+    void * caughtExceptions = nullptr;
+    unsigned int uncaughtExceptions = 0;
+};
+
+extern "C" void * __cxa_get_globals() noexcept;
+
+// Read the current thread's exception state. Re-fetched on every switch so a migrated fiber reads
+// the state of whichever thread it now runs on.
+static CxaEhGlobals loadExceptionState() noexcept
+{
+    return *static_cast<CxaEhGlobals *>(__cxa_get_globals());
+}
+
+static void storeExceptionState(const CxaEhGlobals & state) noexcept
+{
+    *static_cast<CxaEhGlobals *>(__cxa_get_globals()) = state;
+}
+
 /**
  * Fiber lifecycle state.
  */
@@ -216,6 +242,11 @@ public:
 
     // Return value of fiberMain; valid after the fiber reaches STOPPED state.
     int result = 0;
+
+    // This fiber's saved C++ exception-propagation state, swapped with the thread's on each context
+    // switch so an exception crossing the switch is not corrupted by another fiber sharing the thread.
+    // Placed last so it does not shift the offset-pinned fields above.
+    CxaEhGlobals cxaEhGlobals;
 
 #if defined(__SANITIZE_ADDRESS__)
     void * asanFakeStack = nullptr;
@@ -351,8 +382,16 @@ void Fiber::switchToFiberContext() noexcept
     TSAN_FIBER_SWITCH(tsanFiber);
 #endif
 
+    // Save the scheduler's C++ exception state and load this fiber's, so an exception being
+    // propagated on either side is not clobbered by the other (they share the OS thread).
+    CxaEhGlobals schedulerEh = loadExceptionState();
+    storeExceptionState(cxaEhGlobals);
+
     auto transfer = jump_fcontext(fiberContext, this);
     fiberContext = transfer.fctx;
+
+    // The scheduler resumed; restore its exception state.
+    storeExceptionState(schedulerEh);
 
 #if defined(__SANITIZE_ADDRESS__)
     __sanitizer_finish_switch_fiber(schedulerFakeStack, nullptr, nullptr);
@@ -370,6 +409,10 @@ void Fiber::switchToThreadContext(bool final) noexcept
 #if defined(__SANITIZE_THREAD__)
     TSAN_FIBER_SWITCH(tsanSchedulerFiber);
 #endif
+
+    // Save this fiber's C++ exception state; the scheduler restores it (via switchToFiberContext)
+    // before this fiber next resumes.
+    cxaEhGlobals = loadExceptionState();
 
     auto transfer = jump_fcontext(threadContext, nullptr);
     threadContext = transfer.fctx;
