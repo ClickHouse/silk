@@ -169,14 +169,10 @@ add_compile_options(
 add_subdirectory(src/util)
 add_subdirectory(src/fibers)
 add_subdirectory(src/gdb)
+add_subdirectory(src/perf)
 
-# Perf and profiler targets may pull in system libs with libstdc++ ABI
-# (Poco, AWS SDK) that conflict with the instrumented libc++ used in MSan
-# builds.
-if(NOT SANITIZER STREQUAL "memory")
-    add_subdirectory(src/perf)
-    if(BUILD_LIBBACKTRACE)
-        # symbolizer.cpp depends directly on <backtrace.h>.
-        add_subdirectory(src/profiler)
-    endif()
+# The profiler is not built under MSan.
+# symbolizer.cpp depends directly on <backtrace.h>.
+if(BUILD_LIBBACKTRACE AND NOT SANITIZER STREQUAL "memory")
+    add_subdirectory(src/profiler)
 endif()

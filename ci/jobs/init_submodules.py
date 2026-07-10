@@ -17,6 +17,8 @@ COMMON_SUBMODULES = [
 EXTRA_SUBMODULES_BY_BUILD = {
     "release": ["contrib/poco", "contrib/jemalloc"],
     "tsan": ["contrib/poco"],
+    "asan": ["contrib/poco"],
+    "ubsan": ["contrib/poco"],
     "msan": ["contrib/llvm-project"],
 }
 
