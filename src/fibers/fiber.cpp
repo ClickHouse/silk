@@ -27,6 +27,7 @@
 #include <thread>
 #include <utility>
 
+#include <cxxabi.h>
 #include <fcontext.h>
 #include <liburing.h>
 #include <poll.h>
@@ -99,18 +100,16 @@ struct CxaEhGlobals
     unsigned int uncaughtExceptions = 0;
 };
 
-extern "C" void * __cxa_get_globals() noexcept;
-
 // Read the current thread's exception state. Re-fetched on every switch so a migrated fiber reads
 // the state of whichever thread it now runs on.
 static CxaEhGlobals loadExceptionState() noexcept
 {
-    return *static_cast<CxaEhGlobals *>(__cxa_get_globals());
+    return *reinterpret_cast<CxaEhGlobals *>(abi::__cxa_get_globals());
 }
 
 static void storeExceptionState(const CxaEhGlobals & state) noexcept
 {
-    *static_cast<CxaEhGlobals *>(__cxa_get_globals()) = state;
+    *reinterpret_cast<CxaEhGlobals *>(abi::__cxa_get_globals()) = state;
 }
 
 /**
