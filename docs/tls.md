@@ -6,6 +6,8 @@ silk fibers are stackful coroutines that migrate between OS threads: a fiber can
 
 This is not a silk bug you can fully fix from inside the library: it affects any code that runs on a fiber and reads a `thread_local`, including the host application and libc. silk hardens its own context accessors (see below) and documents the rules so callers can stay correct.
 
+Two failure modes follow from the same fiber/thread mismatch. The first, which most of this document is about, is the compiler caching the thread pointer across a suspension so a `thread_local` read lands on the previous thread. The second is per-thread state that the language runtime, the C++ ABI, or a sanitizer keeps on your behalf and that a manual stack switch does not carry: silk saves and restores that state at the switch where it can (C++ exception state), and where the toolchain offers no hook (MemorySanitizer) the resulting reports are false positives to work around. Both are covered below.
+
 ## Why it is dangerous
 
 A `thread_local` access is "thread pointer + offset". The thread pointer lives in a fixed register (`%fs` base on x86-64, `TPIDR_EL0` on aarch64). The C++ abstract machine guarantees a thread-local's address is stable for the lifetime of the thread, so the compiler is free to read the thread pointer once, materialize it into a callee-saved register, and reuse it across function calls and loop iterations.
@@ -84,6 +86,26 @@ These are exactly the shapes that occur in hot fiber code, which is why the haza
 
 If you add a `thread_local` to silk that fiber code reads across a suspension, apply the same treatment: read its address only through a `noinline` accessor, or read the thread pointer through `getCurrentProcessor`'s volatile-asm pattern.
 
+## Per-thread runtime state the switch must carry
+
+The hazard above is about `thread_local`s that your code reads. A distinct hazard is per-thread state that the language runtime or the ABI keeps for you, that no line of your code names, and that a manual stack switch does not carry unless silk explicitly moves it. This state is logically per-execution-context (it belongs to the fiber, not the thread), so silk saves it on suspend and restores it on resume, the opposite strategy from the read-fresh rule above.
+
+**C++ exception state.** The Itanium ABI keeps the per-thread stack of in-flight and being-handled exceptions in `__cxa_eh_globals` (reached through `__cxa_get_globals`); `__cxa_throw`, `__cxa_begin_catch`, and `__cxa_end_catch` mutate it and free the exception object through it. All fibers on a scheduler thread share one copy, so an exception whose unwind or `catch` block spans a suspension would be corrupted by another fiber's throw or catch on the same thread: `__cxa_end_catch` frees the wrong exception object (a use-after-free) and leaks the original. silk gives each fiber its own exception state, saving and restoring `__cxa_eh_globals` in `switchToFiberContext` and `switchToThreadContext`, so a throw whose handling spans a suspend and resume stays correct even across a migration.
+
+When you add new fiber-visible per-thread state, classify it the same way: read-fresh after each suspension (the thread pointer, the CPU index), save and restore it at the switch (exception state), or reset it on entry. Other candidates worth auditing before you rely on them across a suspension are the FP control and rounding word, locale, and any library that keeps a per-thread cache.
+
+## Sanitizers and fibers
+
+Sanitizers keep per-thread bookkeeping (shadow stacks, shadow-passing registers) in TLS and must be told about a manual stack switch. AddressSanitizer and ThreadSanitizer expose hooks for this and silk calls them; MemorySanitizer does not, and cannot be made correct on fiber code from outside.
+
+**AddressSanitizer.** silk brackets each switch with `__sanitizer_start_switch_fiber` and `__sanitizer_finish_switch_fiber` (`src/fibers/fiber.cpp`), handing ASan the incoming fiber's stack bounds and its per-fiber fake-stack, so `detect_stack_use_after_return` and the stack redzones stay correct across suspend, resume, and migration.
+
+**ThreadSanitizer.** each fiber gets a TSan fiber handle (`__tsan_create_fiber`) and the switch calls `__tsan_switch_to_fiber` (through the `TSAN_FIBER_*` macros in `include/silk/util/sanitizers.h`), so TSan attributes accesses and happens-before edges to the right fiber rather than mixing all fibers on a thread together.
+
+**MemorySanitizer.** MSan has no stack-switch hook (google/sanitizers#1232). Its shadow-passing TLS (`__msan_param_tls`, `__msan_retval_tls`) does not travel with a fiber, so after a suspend and resume MSan can read a by-value argument's shadow from the wrong thread and report a spurious use-of-uninitialized-value with `ORIGIN: invalid`. This is normally arm64-only: reaching `__msan_param_tls` there materializes the thread pointer into a callee-saved register `jump_fcontext` preserves across the switch (the same mechanism as the `thread_local` hazard above), while x86-64's `%fs`-relative access always targets the running thread. The access is compiler-emitted, so the volatile-asm fix does not apply; clear the affected value's address-based shadow with `MSAN_UNPOISON` instead. `FiberMutex::lockSlow` and `lockSharedSlow` do this for their by-value `State` parameter.
+
+**Triage.** A sanitizer report on a fiber path can be a real bug or a tool artifact: the exception-state corruption above first surfaced as an arm64 LeakSanitizer leak, while the MSan `param_tls` report is a false positive. Distinguish them by root cause before acting, and document every `MSAN_UNPOISON` or suppression with its mechanism so the next report can be classified rather than blanket-silenced. The sanitizer matrix runs on both x86-64 and aarch64 and over `test`, `bench`, and `perf`, because these bugs need real suspend, resume, and contention, and often arm64 codegen, to appear at all.
+
 ## Diagnosing a suspected TLS-migration bug
 
 - A `SIGSEGV` at a tiny fixed address (a struct field offset) inside a thread-local accessor such as `getCurrentFiber` is the signature.
@@ -95,3 +117,5 @@ If you add a `thread_local` to silk that fiber code reads across a suspension, a
 - GCC PR 26461, "optimisation of TLS access" / request for an option to disable caching of `__thread` addresses.
 - gcc@ mailing list thread, "Disabling TLS address caching to help QEMU on GNU/Linux".
 - MSVC `/GT`, "Supports fiber safety for data allocated by using static thread-local storage", the compiler switch the GNU toolchain lacks.
+- google/sanitizers issue 1232, "MemorySanitizer does not support manual stack switching", the upstream request for pre/post stack-switch hooks that was closed without an API.
+- AddressSanitizer `__sanitizer_start_switch_fiber` / `__sanitizer_finish_switch_fiber` and ThreadSanitizer `__tsan_switch_to_fiber` (LLVM D54889), the fiber-switch hooks MSan lacks.
