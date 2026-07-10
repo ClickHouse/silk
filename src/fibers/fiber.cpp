@@ -100,16 +100,26 @@ struct CxaEhGlobals
     unsigned int uncaughtExceptions = 0;
 };
 
+// libstdc++ declares __cxxabiv1::__cxa_get_globals in <cxxabi.h>; libc++abi omits it from its public
+// header, so declare the Itanium ABI symbol (matching its internal signature) there.
+#if defined(_LIBCPP_VERSION)
+namespace __cxxabiv1
+{
+struct __cxa_eh_globals;
+extern "C" __cxa_eh_globals * __cxa_get_globals() noexcept;
+}
+#endif
+
 // Read the current thread's exception state. Re-fetched on every switch so a migrated fiber reads
 // the state of whichever thread it now runs on.
 static CxaEhGlobals loadExceptionState() noexcept
 {
-    return *reinterpret_cast<CxaEhGlobals *>(abi::__cxa_get_globals());
+    return *reinterpret_cast<CxaEhGlobals *>(__cxxabiv1::__cxa_get_globals());
 }
 
 static void storeExceptionState(const CxaEhGlobals & state) noexcept
 {
-    *reinterpret_cast<CxaEhGlobals *>(abi::__cxa_get_globals()) = state;
+    *reinterpret_cast<CxaEhGlobals *>(__cxxabiv1::__cxa_get_globals()) = state;
 }
 
 /**
