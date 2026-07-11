@@ -1453,6 +1453,14 @@ void FiberScheduler::accept(int fd, sockaddr * addr, socklen_t * addrlen, int fl
     enqueueIo(future, [=](io_uring_sqe * sqe) noexcept { ::io_uring_prep_accept(sqe, fd, addr, addrlen, flags); });
 }
 
+void FiberScheduler::splice(
+    int fdIn, int64_t offIn, int fdOut, int64_t offOut, uint64_t len, uint32_t flags, uint64_t * bytesSpliced, IoFuture * future) noexcept
+{
+    future->result = bytesSpliced;
+    enqueueIo(future, [=](io_uring_sqe * sqe) noexcept
+        { ::io_uring_prep_splice(sqe, fdIn, offIn, fdOut, offOut, static_cast<unsigned int>(len), flags); });
+}
+
 void FiberScheduler::cancelIo(IoFuture * future) noexcept
 {
     // The cancel SQE must go to the SAME io_uring ring that holds the original

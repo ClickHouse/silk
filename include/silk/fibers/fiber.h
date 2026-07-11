@@ -499,6 +499,37 @@ public:
     static void accept(int fd, sockaddr * addr, socklen_t * addrlen, int flags, uint64_t * acceptedFd, IoFuture * future) noexcept;
 
     /**
+     * Blocking splice: move up to @p len bytes between @p fdIn and @p fdOut without copying through
+     * user space. As with splice(2), at least one descriptor must refer to a pipe. Offsets are for
+     * seekable files; pass -1 for pipes and sockets.
+     *
+     * @param fdIn          Source descriptor.
+     * @param offIn         Byte offset within @p fdIn, or -1 for a pipe/socket.
+     * @param fdOut         Destination descriptor.
+     * @param offOut        Byte offset within @p fdOut, or -1 for a pipe/socket.
+     * @param len           Maximum number of bytes to move.
+     * @param flags         splice(2) flags (e.g. SPLICE_F_MOVE, SPLICE_F_MORE).
+     * @param bytesSpliced  If not null, receives the number of bytes moved (0 means end of input).
+     * @return              0 on success, or a errno on failure.
+     */
+    static int splice(
+        int fdIn, int64_t offIn, int fdOut, int64_t offOut, uint64_t len, uint32_t flags, uint64_t * bytesSpliced = nullptr) noexcept
+    {
+        IoFuture future;
+        splice(fdIn, offIn, fdOut, offOut, len, flags, bytesSpliced, &future);
+        return future.wait();
+    }
+
+    /**
+     * Async splice. Returns immediately; the caller must wait on @p future for the result.
+     * See the blocking overload for the parameter meanings.
+     *
+     * @param future  Completion handle; wait() returns 0 on success or a errno on failure.
+     */
+    static void splice(
+        int fdIn, int64_t offIn, int fdOut, int64_t offOut, uint64_t len, uint32_t flags, uint64_t * bytesSpliced, IoFuture * future) noexcept;
+
+    /**
      * Completion handle for an async sleep submitted via sleep().
      */
     class SleepFuture : public FiberFuture
