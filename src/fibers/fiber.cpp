@@ -1041,7 +1041,6 @@ struct FiberScheduler::SchedulerState
     uint16_t schedulerThreadCount = 0;
     uint16_t workerThreadCount = 0;
 
-    std::unique_ptr<ProcessorState[]> processorState;
     std::unique_ptr<std::thread[]> schedulerThreads;
     std::unique_ptr<std::thread[]> workerThreads;
 
@@ -1052,6 +1051,11 @@ struct FiberScheduler::SchedulerState
 
     std::unique_ptr<WaitStack[]> waiterTable;
     uint64_t waiterTableMask{};
+
+    // Declared last so it is destroyed first: each ProcessorState's suspended
+    // list links nodes embedded in pool-owned fibers, so the lists must be
+    // destroyed before fiberPool frees the fiber memory.
+    std::unique_ptr<ProcessorState[]> processorState;
 };
 
 FiberScheduler::SchedulerState::SchedulerState() noexcept
@@ -1261,6 +1265,24 @@ void FiberScheduler::destroy() noexcept
     for (uint16_t i = 0; i < scheduler->workerThreadCount; ++i)
     {
         scheduler->workerThreads[i].join();
+    }
+
+    // A fiber still linked here suspended (or stayed scheduled) and never ran
+    // to completion: the caller leaked it, violating the contract that no
+    // fibers exist at destroy time. Fail here, where the leak is attributable,
+    // instead of corrupting teardown.
+    SILK_ASSERT(scheduler->readyQueue.empty(), "fiber leaked: still in the global ready queue");
+    for (uint16_t cpu = 0; cpu < scheduler->processorCount; ++cpu)
+    {
+        ProcessorState * processor = &scheduler->processorState[cpu];
+        SILK_ASSERT(processor->suspendedList.empty(), "fiber leaked: still suspended on cpu %u", cpu);
+
+        // readyQueue.empty() touches the slot array, which exists only for
+        // processors that were actually initialized.
+        if (processor->number != kInvalidProcessorNumber)
+        {
+            SILK_ASSERT(processor->readyQueue.empty(), "fiber leaked: still ready on cpu %u", cpu);
+        }
     }
 
     delete scheduler;
