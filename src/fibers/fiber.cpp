@@ -772,6 +772,13 @@ void FiberScheduler::ProcessorState::wakeThread() noexcept
 
 void FiberScheduler::ProcessorState::parkThread(uint64_t waitNs, CpuTimer * timer) noexcept
 {
+    // Flush deferred SQEs: the idle path has no other submit, and parking
+    // passes to_submit=0, so a deferred doorbell rearm, MSG_RING wakeup, or
+    // remote cancel would sit queued until unrelated activity lands on this
+    // ring. If the submit defers again: on EBUSY hasWork() sees the full CQ
+    // and skips the park; on EAGAIN the timed park is the retry backoff.
+    submitIo(true);
+
     // Announce that we are about to park, then a seq_cst fence pairing with the one in wakeThread:
     // release alone is not a StoreLoad barrier, so without this the store could reorder past the
     // hasWork() re-check below while a concurrent wakeThread reads sleeping=false - both miss, and
