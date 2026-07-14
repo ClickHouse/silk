@@ -965,9 +965,21 @@ class FiberSaveContext(gdb.Command):
         if _saved_ctx is not None:
             print("fiber-savecontext: warning: overwriting previous saved context")
 
-        arch = _arch()
-        thread_num = gdb.selected_thread().num
-        regs = {r: _get_reg(r) for r in _ALL_REGS[arch]}
+        # Register reads are selected-frame-relative; with an older frame
+        # selected (e.g. by crash-dumper.py's silk-frame search) they return
+        # that frame's unwound PC/SP, and restoring those would resume the
+        # thread mid-stack, abandoning the frames below. Snapshot the newest
+        # frame's registers - the thread's true state - then put the caller's
+        # frame selection back.
+        selected_frame = gdb.selected_frame()
+        gdb.newest_frame().select()
+        try:
+            arch = _arch()
+            thread_num = gdb.selected_thread().num
+            regs = {r: _get_reg(r) for r in _ALL_REGS[arch]}
+        finally:
+            selected_frame.select()
+
         _saved_ctx = {"arch": arch, "thread_num": thread_num, "regs": regs}
 
         pc_reg = _PC_REG[arch]
