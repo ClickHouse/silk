@@ -171,8 +171,7 @@ add_subdirectory(src/fibers)
 add_subdirectory(src/gdb)
 add_subdirectory(src/perf)
 
-# The profiler is not built under MSan.
 # symbolizer.cpp depends directly on <backtrace.h>.
-if(BUILD_LIBBACKTRACE AND NOT SANITIZER STREQUAL "memory")
+if(BUILD_LIBBACKTRACE)
     add_subdirectory(src/profiler)
 endif()
