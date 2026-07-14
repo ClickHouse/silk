@@ -586,6 +586,8 @@ struct FiberScheduler::ProcessorState
     void wakeThread() noexcept;
     void parkThread(uint64_t waitNs, CpuTimer * timer) noexcept;
     bool hasWork() const noexcept;
+    uint32_t sqReady() const noexcept;
+    uint32_t cqReady() const noexcept;
 
     void enqueueDoorbell() noexcept;
     void postWakeup(ProcessorState * target) noexcept;
@@ -822,13 +824,30 @@ bool FiberScheduler::ProcessorState::hasWork() const noexcept
     {
         return true;
     }
+    if (cqReady())
+    {
+        return true;
+    }
+    return false;
+}
 
-    // Ignore ring->cq.khead atomic/non-atomic mismatch.
+// The kernel and other submitters update the SQ/CQ ring counters with plain
+// stores; a racy read is benign - a stale count only defers or repeats work -
+// so hide it from TSan here rather than annotating every call site.
+uint32_t FiberScheduler::ProcessorState::sqReady() const noexcept
+{
+    TSAN_IGNORE_BEGIN();
+    uint32_t count = ::io_uring_sq_ready(&ring);
+    TSAN_IGNORE_END();
+    return count;
+}
+
+uint32_t FiberScheduler::ProcessorState::cqReady() const noexcept
+{
     TSAN_IGNORE_BEGIN();
     uint32_t count = ::io_uring_cq_ready(&ring);
     TSAN_IGNORE_END();
-
-    return count > 0;
+    return count;
 }
 
 void FiberScheduler::ProcessorState::enqueueDoorbell() noexcept
@@ -943,9 +962,7 @@ bool FiberScheduler::ProcessorState::submitIo(bool flush) noexcept
     // the submission lock when there's nothing to submit or the count/staleness
     // thresholds haven't been met. Kept small so it inlines into runFiber;
     // the rest lives in submitIoSlow.
-    TSAN_IGNORE_BEGIN();
-    uint32_t count = ::io_uring_sq_ready(&ring);
-    TSAN_IGNORE_END();
+    uint32_t count = sqReady();
     if (count == 0)
     {
         return false;
@@ -970,7 +987,7 @@ __attribute__((noinline)) bool FiberScheduler::ProcessorState::submitIoSlow(uint
 {
     std::lock_guard lock(submissionLock);
 
-    uint32_t count = ::io_uring_sq_ready(&ring);
+    uint32_t count = sqReady();
     if (count == 0)
     {
         return false;
@@ -1970,7 +1987,8 @@ bool FiberScheduler::handleReadyQueue(ProcessorState * processor, CpuTimer * tim
 bool FiberScheduler::handleCompletionQueue(ProcessorState * processor) noexcept
 {
     // Fast path: CQ ring is empty, nothing to drain.
-    if (::io_uring_cq_ready(&processor->ring) == 0)
+    uint32_t count = processor->cqReady();
+    if (count == 0)
     {
         return false;
     }
