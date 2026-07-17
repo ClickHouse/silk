@@ -6,6 +6,8 @@
 #include <benchmark/benchmark.h>
 
 #include <atomic>
+#include <cstdint>
+#include <vector>
 
 namespace silk
 {
@@ -96,5 +98,43 @@ BENCHMARK_F(FiberSequencerBench, RoundTrip)(benchmark::State & state)
     request.increment();
     responder.wait();
 }
+
+// Fan-in: register N futures at tokens base+1..base+N while the counter sits at base (all push to the request
+// queue and stay pending - no parking), then one advance(base+N) reaches them all in a single drain. Every
+// future's token is <= current at classify time, so this is the case the skip-insert path targets: route
+// straight to the wake list instead of insert-then-immediately-remove from the tree.
+BENCHMARK_DEFINE_F(FiberSequencerBench, FanIn)(benchmark::State & state)
+{
+    struct Params
+    {
+        benchmark::State * state;
+        uint64_t count;
+
+        static int fiberMain(Params * params) noexcept
+        {
+            FiberSequencer sequencer;
+            std::vector<FiberSequencer::Future> futures(params->count);
+            uint64_t base = 0;
+            for (auto _ : *params->state)
+            {
+                for (uint64_t i = 0; i < params->count; ++i)
+                {
+                    futures[i].reset();
+                    sequencer.wait(base + 1 + i, &futures[i]);
+                }
+
+                base += params->count;
+                bool advanced = sequencer.advance(base);
+                SILK_ASSERT(advanced);
+            }
+            return 0;
+        }
+    };
+
+    uint64_t count = static_cast<uint64_t>(state.range(0));
+    int r = FiberScheduler::run(Params::fiberMain, {&state, count});
+    SILK_ASSERT(!r);
+}
+BENCHMARK_REGISTER_F(FiberSequencerBench, FanIn)->Arg(8)->Arg(64)->Arg(512);
 
 } // namespace silk

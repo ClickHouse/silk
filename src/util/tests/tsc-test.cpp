@@ -10,14 +10,32 @@ namespace silk
 TEST(Tsc, FrequencyIsReasonable)
 {
     uint64_t freq = Tsc::getFrequency();
+#if defined(__aarch64__)
+    // On ARM getFrequency() returns cntfrq_el0, the architectural system counter
+    // frequency, which is unrelated to the CPU clock -- e.g. ~122 MHz on AWS
+    // Graviton, but other parts run it faster (1.05 GHz observed). Bound it
+    // loosely to catch a garbage reading.
+    EXPECT_GE(freq, 1'000'000ULL); // >= 1 MHz
+    EXPECT_LE(freq, 4'000'000'000ULL); // <= 4 GHz
+#else
+    // On x86 the TSC is anchored to the CPU clock.
     EXPECT_GE(freq, 1'000'000'000ULL); // >= 1 GHz
     EXPECT_LE(freq, 10'000'000'000ULL); // <= 10 GHz
+#endif
 }
 
 TEST(Tsc, CyclesAdvance)
 {
     uint64_t a = Tsc::getCycles();
-    uint64_t b = Tsc::getCycles();
+    // A low-frequency counter (e.g. ARM cntvct_el0 at ~122 MHz, ~8 ns/tick) can
+    // return the same value for two back-to-back reads that fall in one tick, so
+    // spin until it advances. It must advance and never run backwards.
+    uint64_t b = a;
+    for (int i = 0; i < 100'000'000 && b == a; ++i)
+    {
+        b = Tsc::getCycles();
+        ASSERT_GE(b, a); // never moves backwards
+    }
     EXPECT_GT(b, a);
 }
 

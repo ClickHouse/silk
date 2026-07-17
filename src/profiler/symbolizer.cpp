@@ -5,9 +5,11 @@
 
 #include <algorithm>
 #include <cerrno>
+#include <cstddef>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <string_view>
 #include <utility>
 
 #include <backtrace.h>
@@ -211,19 +213,8 @@ const std::string & Symbolizer::resolve(uint64_t addr)
 
         if (sym.found)
         {
-            int status = 0;
-            char * demangled = abi::__cxa_demangle(sym.name.c_str(), nullptr, nullptr, &status);
-            if (demangled && status == 0)
-            {
-                // strip parameter list so overloads collapse to one node in the flamegraph
-                const char * paren = ::strchr(demangled, '(');
-                result = paren ? std::string(demangled, paren - demangled) : std::string(demangled);
-                std::free(demangled);
-            }
-            else
-            {
-                result = std::move(sym.name);
-            }
+            // Demangle and strip parameter list so overloads collapse to one node in the flamegraph
+            result = Symbolizer::demangle(sym.name, DemangleOptions::StripAll);
         }
 
         break;
@@ -259,6 +250,75 @@ const std::string & Symbolizer::resolve(uint64_t addr)
 
     auto [it, _] = cache.emplace(addr, std::move(result));
     return it->second;
+}
+
+std::string Symbolizer::demangle(const std::string & mangled, DemangleOptions options)
+{
+    std::string result;
+    int status = 0;
+    char * demangled = abi::__cxa_demangle(mangled.c_str(), nullptr, nullptr, &status);
+    if (demangled && status == 0)
+    {
+        result = demangled;
+
+        // We need to strip "(anonymous namespace)::", which might appear
+        // as the first token or in the middle of the function name and arguments.
+        if ((static_cast<int>(options) & static_cast<int>(DemangleOptions::StripAnonymousNamespace))
+            == static_cast<int>(DemangleOptions::StripAnonymousNamespace))
+        {
+            constexpr std::string_view anonymousNamespace = "(anonymous namespace)::";
+            if (size_t pos = result.find(anonymousNamespace); pos != std::string::npos)
+            {
+                std::string stripped;
+                stripped.reserve(result.size());
+
+                size_t last = 0;
+                do
+                {
+                    stripped.append(result, last, pos - last);
+                    last = pos + anonymousNamespace.size();
+                } while ((pos = result.find(anonymousNamespace, last)) != std::string::npos);
+
+                stripped.append(result, last, std::string::npos);
+                result = std::move(stripped);
+            }
+        }
+
+        // Strip arguments from the last pair of parentheses
+        // so overloads collapse to one node in the flamegraph.
+        if ((static_cast<int>(options) & static_cast<int>(DemangleOptions::StripArguments))
+            == static_cast<int>(DemangleOptions::StripArguments))
+        {
+            if (size_t paren = result.rfind(')'); paren != std::string::npos)
+            {
+                int counter = 0;
+                for (std::ptrdiff_t pos = static_cast<std::ptrdiff_t>(paren); pos >= 0; pos--)
+                {
+                    const size_t index = static_cast<size_t>(pos);
+                    if (result[index] == ')')
+                    {
+                        counter++;
+                    }
+                    else if (result[index] == '(')
+                    {
+                        counter--;
+                        if (counter == 0)
+                        {
+                            result.erase(index);
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    else
+    {
+        result = mangled;
+    }
+
+    std::free(demangled);
+    return result;
 }
 
 void Symbolizer::backtraceErrorCb(void * data, const char * msg, int errnum)

@@ -8,6 +8,8 @@ Commands:
   fiber-savecontext               Save current thread and registers
   fiber-restorecontext            Restore the previously saved context
   fiber-switchcontext <Fiber*>    Switch to a SUSPENDED/READY fiber's context
+  fiber-dump-sleep [cpu]          Dump per-processor sleep state (sleepTree + queues)
+  fiber-dump-uring [cpu]          Dump per-processor io_uring ring state
 """
 
 import gdb
@@ -110,6 +112,13 @@ def _ptr(addr):
 def _u64(addr):
     """Read a 64-bit unsigned integer from addr."""
     return struct.unpack_from("<Q", _read(addr, 8))[0]
+
+
+def _deref_u32(value_ptr):
+    """Read a 32-bit unsigned integer through a gdb pointer Value.  The pointee may
+    live in mmap'd kernel memory (e.g. io_uring ring head/tail/flags counters),
+    which is readable on a live attach."""
+    return int(value_ptr.dereference()) & 0xFFFFFFFF
 
 
 def _field_offset(type_val, name):
@@ -340,7 +349,7 @@ def _walk_bounded_queue(val):
 
     for i in range(num_items):
         pos = dequeue_pos + i
-        slot_addr = slots_base + (pos & mask) * 64  # stride = CACHELINE_SIZE
+        slot_addr = slots_base + (pos & mask) * 64  # stride = kCacheLineSize
         seq = _u64(slot_addr)
         if seq == pos + 1:  # slot has a valid value
             value = _ptr(slot_addr + 8)
@@ -384,6 +393,14 @@ def _get_scheduler():
             "FiberScheduler::scheduler is null (scheduler not initialized)"
         )
     return ptr.dereference()
+
+
+def _processor_states(sched):
+    """Return (processorState as a ProcessorState* gdb.Value, processorCount)."""
+    count = int(sched["processorCount"])
+    ps_type = gdb.lookup_type("silk::FiberScheduler::ProcessorState").pointer()
+    proc_states = gdb.Value(_unique_ptr(sched["processorState"])).cast(ps_type)
+    return proc_states, count
 
 
 def _enumerate_fibers(sched, seen, show_proxy=False):
@@ -437,11 +454,460 @@ _saved_ctx = None  # {"arch": str, "thread_num": int, "regs": {name: int}}
 
 
 def _get_reg(name):
-    return int(gdb.parse_and_eval(f"${name}"))
+    value = gdb.parse_and_eval(f"${name}")
+    try:
+        return int(value)
+    except gdb.error:
+        pass
+
+    # Flag registers (x86 eflags, arm64 pstate) are TYPE_CODE_FLAGS, which int() rejects and a C-cast coerces
+    # only on some targets (it raises "Invalid cast" for arm64 pstate). value.bytes reads the raw bytes on
+    # gdb >= 14; older gdb has no such accessor, so format the value as hex. The flag register is not needed to
+    # unwind a fiber, so fall back to 0 rather than abort the whole dump if neither path works.
+    raw = getattr(value, "bytes", None)
+    if raw is not None:
+        return int.from_bytes(raw, "little")
+    try:
+        return int(value.format_string(format="x"), 16)
+    except (gdb.error, ValueError):
+        return 0
 
 
 def _set_reg(name, value):
     gdb.execute(f"set ${name} = {value}", to_string=True)
+
+
+# ── Per-processor dump helpers ──────────────────────────────────────────────────
+#
+# Argument parsing and formatting shared by fiber-dump-sleep and fiber-dump-uring.
+
+
+def _parse_cpu_arg(arg):
+    """Parse the optional <cpu> argument shared by fiber-dump-{sleep,uring}.
+    Returns the processor index as int, or None when no argument was given.
+    Raises ValueError on a non-integer argument."""
+    arg = arg.strip()
+    if not arg:
+        return None
+    return int(arg, 0)
+
+
+def _number_str(number):
+    """Format a ProcessorState::number, showing kInvalidProcessorNumber (0xFFFF,
+    an unserviced slot) as '-'."""
+    return "-" if number == 0xFFFF else str(number)
+
+
+# ── Sleep introspection ─────────────────────────────────────────────────────────
+#
+# Decoders and structure walkers for the per-CPU sleep state.  A lost sleep wakeup
+# shows up as a still-parked SleepFuture whose deadline is past yet which is un-set
+# (overdueCycles > 0, isSet == 0).
+
+
+# FiberFuture::state packed bitfield: waiter:61, multipleWait:1, hasCallback:1, isSet:1.
+def _decode_future_state(raw):
+    return {
+        "isSet": (raw >> 63) & 1,
+        "hasCallback": (raw >> 62) & 1,
+        "multipleWait": (raw >> 61) & 1,
+        "waiter": raw & ((1 << 61) - 1),
+    }
+
+
+def _waiter_str(fs):
+    """Describe the waiter encoded in a decoded FiberFuture::state.  The 61-bit waiter
+    holds a raw pointer (stored unshifted -- user-space addresses fit in 61 bits)
+    whose type depends on the flags: a MultipleWaitState* when multipleWait is set, a
+    SubscribeCallback* when hasCallback is set, otherwise the waiting Fiber*.  A fiber
+    waiter is resolved to its state and fiberMain symbol, as in fiber-list."""
+    ptr = fs["waiter"]
+    if not ptr:
+        return "none"
+    if fs["multipleWait"]:
+        return f"multiwait 0x{ptr:x}"
+    if fs["hasCallback"]:
+        return f"callback 0x{ptr:x}"
+    try:
+        fiber = _fiber_val(ptr)
+        state = _fiber_state_str(fiber)
+        sym = _resolve_fn(int(fiber["fiberMain"]))
+        return f"fiber 0x{ptr:x} [{state}] {sym}"
+    except gdb.error:
+        return f"fiber 0x{ptr:x}"
+
+
+# SleepFuture::state flags (silk src/fibers/fiber.h).
+_SLEEP_IN_TABLE = 1 << 0
+_SLEEP_CANCELLED = 1 << 1
+
+
+def _read_sleep_future(sf_addr):
+    """Decode a SleepFuture at sf_addr.  FiberFuture::state is the first word; the
+    SleepFuture's own fields are read at their resolved offsets (its 'state' field
+    name collides with the base's, so go by offset)."""
+    sf_type = gdb.lookup_type("silk::FiberScheduler::SleepFuture")
+    off_state = _field_offset(sf_type, "state")
+    off_proc = _field_offset(sf_type, "processorNumber")
+    off_deadline = _field_offset(sf_type, "deadlineCycles")
+
+    future_state = _u64(sf_addr)  # FiberFuture::state (base, offset 0)
+    sleep_state = struct.unpack_from("<I", _read(sf_addr + off_state, 4))[0]
+    proc_num = struct.unpack_from("<H", _read(sf_addr + off_proc, 2))[0]
+    deadline = _u64(sf_addr + off_deadline)
+
+    fs = _decode_future_state(future_state)
+    flags = []
+    if sleep_state & _SLEEP_IN_TABLE:
+        flags.append("IN_TABLE")
+    if sleep_state & _SLEEP_CANCELLED:
+        flags.append("CANCELLED")
+    if not flags:
+        flags.append("-")
+    return {
+        "addr": sf_addr,
+        "sleepFlags": "|".join(flags),
+        "processorNumber": proc_num,
+        "deadlineCycles": deadline,
+        "isSet": fs["isSet"],
+        "waiter": fs["waiter"],
+        "multipleWait": fs["multipleWait"],
+        "hasCallback": fs["hasCallback"],
+    }
+
+
+# ProcessorState::sleepTree is a boost::intrusive::multiset; its header rbtree_node
+# sits 8 bytes into the container, past the constant-time size counter.  header.parent_
+# is the root (null when empty).  A node's parent_/left_/right_ are the first three
+# words of its TreeEntry hook (left_ at +8, right_ at +16); absent children are null.
+_TREE_HEADER_OFFSET = 8
+
+
+def _walk_lockfree_stack(stack_val, entry_offset):
+    """Walk a LockFreeStack<T, &T::stackEntry>, yielding T* integer addresses.  The
+    128-bit head TaggedPtr begins with the top StackEntry* at offset 0, and each
+    StackEntry's next pointer is at offset 0 of the entry."""
+    node = _ptr(int(stack_val.address))
+    seen = set()
+    while node and node not in seen:
+        seen.add(node)
+        yield node - entry_offset
+        node = _ptr(node)
+
+
+def _walk_tree(tree_val, entry_offset):
+    """Walk a Tree<T, &T::treeEntry, ...> (boost intrusive rbtree) by DFS from the
+    root, yielding T* integer addresses unordered (the caller sorts by deadline)."""
+    base = int(tree_val.address)
+    header = base + _TREE_HEADER_OFFSET
+    root = _ptr(header)  # header.parent_ == root
+    if not root or root == header:
+        return
+
+    stack = [root]
+    seen = set()
+    while stack:
+        node = stack.pop()
+        if not node or node in seen:
+            continue
+        seen.add(node)
+        yield node - entry_offset
+        left = _ptr(node + 8)  # TreeEntry::left_
+        right = _ptr(node + 16)  # TreeEntry::right_
+        if left:
+            stack.append(left)
+        if right:
+            stack.append(right)
+
+
+def _dump_sleep_table(proc_states, count, cpu):
+    """Print the per-processor sleep table and return a coarse 'now' estimate (the
+    max lastCqDrainCycles across all processors -- the park backstop refreshes it
+    at least every maxWaitNs).  The estimate is computed over every processor even
+    when @p cpu restricts the printed rows, so overdueCycles stays meaningful."""
+    now_estimate = 0
+    print("\n  per-processor sleep state:")
+    print(
+        "  %-4s %-7s %-8s %-22s %-7s %-7s"
+        % ("cpu", "number", "sleeping", "wakeupDeadlineCycles", "sleepQ", "cancelQ")
+    )
+    for i in range(count):
+        proc = proc_states[i]
+        try:
+            number = int(proc["number"])
+        except gdb.error:
+            continue
+
+        try:
+            drain = int(_atomic_load(proc["lastCqDrainCycles"]))
+            now_estimate = max(now_estimate, drain)
+        except gdb.error:
+            pass
+
+        if cpu is not None and i != cpu:
+            continue
+
+        # sleeping is atomic<bool> (1 byte); read a single byte rather than over-reading.
+        try:
+            sleeping = _read(int(proc["sleeping"].address), 1)[0] & 1
+        except gdb.error:
+            sleeping = -1
+        try:
+            wakeup = int(proc["wakeupDeadlineCycles"])
+        except gdb.error:
+            wakeup = -1
+        sleep_q = _ptr(int(proc["sleepQueue"].address))
+        cancel_q = _ptr(int(proc["cancelQueue"].address))
+        print(
+            "  %-4d %-7s %-8d %-22d %-7s %-7s"
+            % (
+                i,
+                _number_str(number),
+                sleeping,
+                wakeup,
+                "set" if sleep_q else "empty",
+                "set" if cancel_q else "empty",
+            )
+        )
+    print("  now estimate (max lastCqDrainCycles): %d" % now_estimate)
+    return now_estimate
+
+
+def _sleep_futures_from(addrs):
+    """Decode the SleepFuture at each address, dropping any that cannot be read,
+    and return them sorted by ascending deadline."""
+    out = []
+    for addr in addrs:
+        try:
+            info = _read_sleep_future(addr)
+        except gdb.error:
+            continue
+        out.append(info)
+    out.sort(key=lambda info: info["deadlineCycles"])
+    return out
+
+
+def _print_sleep_futures(label, futures, now_estimate):
+    if not futures:
+        print("    %s: empty" % label)
+        return
+
+    print("    %s (%d):" % (label, len(futures)))
+    for info in futures:
+        overdue = now_estimate - info["deadlineCycles"] if now_estimate else 0
+        print(
+            "      SleepFuture 0x%x deadline=%d overdueCycles=%d flags=%-18s proc=%d isSet=%d waiter=%s"
+            % (
+                info["addr"],
+                info["deadlineCycles"],
+                overdue,
+                info["sleepFlags"],
+                info["processorNumber"],
+                info["isSet"],
+                _waiter_str(info),
+            )
+        )
+
+
+def _dump_processor_sleepers(proc_states, count, cpu, now_estimate):
+    """For each processor (restricted to @p cpu when not None), dump the SleepFutures
+    held in its sleepTree, sleepQueue and cancelQueue, read straight from those
+    structures -- no fiber context switching.  A lost wakeup shows up as a sleepTree
+    entry with positive overdueCycles whose SleepFuture is still un-set."""
+    sf_type = gdb.lookup_type("silk::FiberScheduler::SleepFuture")
+    tree_entry = _field_offset(sf_type, "treeEntry")
+    stack_entry = _field_offset(sf_type, "stackEntry")
+
+    for i in range(count):
+        if cpu is not None and i != cpu:
+            continue
+
+        proc = proc_states[i]
+        try:
+            number = int(proc["number"])
+        except gdb.error:
+            continue
+
+        tree = _sleep_futures_from(_walk_tree(proc["sleepTree"], tree_entry))
+        sleep_q = _sleep_futures_from(
+            _walk_lockfree_stack(proc["sleepQueue"], stack_entry)
+        )
+        cancel_q = _sleep_futures_from(
+            _walk_lockfree_stack(proc["cancelQueue"], stack_entry)
+        )
+
+        print("\n  cpu %d (number %s):" % (i, _number_str(number)))
+        _print_sleep_futures("sleepTree", tree, now_estimate)
+        _print_sleep_futures("sleepQueue", sleep_q, now_estimate)
+        _print_sleep_futures("cancelQueue", cancel_q, now_estimate)
+
+
+# ── io_uring introspection ──────────────────────────────────────────────────────
+#
+# Readers for the per-CPU io_uring SQ/CQ ring counters.  The lost-wakeup signature
+# is a parked processor whose CQ holds ready, unconsumed CQEs (cqReady > 0) or whose
+# CQ_OVERFLOW flag is set -- io_uring_enter2 blocked past its EXT_ARG timeout.
+
+
+# IORING_SQ_* flags published by the kernel in *sq.kflags.
+_IORING_SQ_NEED_WAKEUP = 1 << 0
+_IORING_SQ_CQ_OVERFLOW = 1 << 1
+_IORING_SQ_TASKRUN = 1 << 2
+
+
+def _read_ring_state(proc):
+    """Read one ProcessorState's io_uring SQ/CQ ring counters.  Returns a dict or
+    None if the ring (or its mmap) cannot be read."""
+    try:
+        ring = proc["ring"]
+        sq = ring["sq"]
+        cq = ring["cq"]
+        cq_ready = (_deref_u32(cq["ktail"]) - _deref_u32(cq["khead"])) & 0xFFFFFFFF
+        cq_overflow = _deref_u32(cq["koverflow"])
+        sq_flags = _deref_u32(sq["kflags"])
+        sqe_pending = (int(sq["sqe_tail"]) - int(sq["sqe_head"])) & 0xFFFFFFFF
+        sq_inflight = (_deref_u32(sq["ktail"]) - _deref_u32(sq["khead"])) & 0xFFFFFFFF
+    except gdb.error:
+        return None
+
+    flags = []
+    if sq_flags & _IORING_SQ_CQ_OVERFLOW:
+        flags.append("OVERFLOW")
+    if sq_flags & _IORING_SQ_NEED_WAKEUP:
+        flags.append("NEED_WAKEUP")
+    if sq_flags & _IORING_SQ_TASKRUN:
+        flags.append("TASKRUN")
+    return {
+        "cqReady": cq_ready,
+        "cqOverflow": cq_overflow,
+        "sqePending": sqe_pending,
+        "sqInflight": sq_inflight,
+        "ringFlags": "|".join(flags) if flags else "-",
+    }
+
+
+# CQE user_data tags (silk fiber.cpp); anything else is an IoFuture pointer.
+_CQE_TAGS = {0: "CANCEL", 1: "TIMEOUT", 2: "DOORBELL"}
+_IORING_CQE_F_MORE = 1 << 1  # multishot "more completions coming" flag
+
+
+def _cq_ring_mask(cq):
+    """CQ index mask: ring_mask (current liburing) or *kring_mask / kring_entries-1 (older)."""
+    try:
+        return int(cq["ring_mask"]) & 0xFFFFFFFF
+    except gdb.error:
+        pass
+    try:
+        return _deref_u32(cq["kring_mask"])
+    except gdb.error:
+        pass
+    try:
+        return (_deref_u32(cq["kring_entries"]) - 1) & 0xFFFFFFFF
+    except gdb.error:
+        return None
+
+
+def _read_unconsumed_cqes(proc, limit=8):
+    """Decode the CQEs the kernel has posted but a parked proc has not consumed
+    (khead..ktail).  io_uring_cqe is {u64 user_data; s32 res; u32 flags} = 16 bytes
+    (silk uses default, non-CQE32 rings).  Names which completion is stuck on a
+    wedged proc (CANCEL/TIMEOUT/DOORBELL or an IoFuture), and thus which wake path
+    failed."""
+    try:
+        cq = proc["ring"]["cq"]
+        head = _deref_u32(cq["khead"])
+        tail = _deref_u32(cq["ktail"])
+        mask = _cq_ring_mask(cq)
+        cqes = int(cq["cqes"])
+    except gdb.error:
+        return None
+    if mask is None or not cqes:
+        return None
+
+    out = []
+    ready = (tail - head) & 0xFFFFFFFF
+    for n in range(min(ready, limit)):
+        index = (head + n) & mask
+        try:
+            raw = _read(cqes + index * 16, 16)
+        except gdb.error:
+            break
+        user_data, res, flags = struct.unpack_from("<QiI", raw)
+        tag = _CQE_TAGS.get(user_data)
+        if tag is None:
+            tag = "IoFuture 0x%x" % user_data
+        out.append(
+            {"tag": tag, "res": res, "more": 1 if (flags & _IORING_CQE_F_MORE) else 0}
+        )
+    return out
+
+
+def _dump_uring_table(proc_states, count, cpu):
+    """Print the per-processor io_uring SQ/CQ ring state.  The lost-wakeup
+    signature is a parked processor (sleeping=1) whose CQ has ready, unconsumed
+    CQEs (cqReady>0) or the OVERFLOW flag set -- io_uring_enter2 blocked instead of
+    honouring its EXT_ARG timeout.  Any processor with cqReady>0 also gets its
+    unconsumed CQEs decoded, naming the stuck completion."""
+    print("\n  per-processor io_uring ring state:")
+    print(
+        "  %-4s %-7s %-8s %-9s %-9s %-9s %-9s %s"
+        % (
+            "cpu",
+            "number",
+            "sleeping",
+            "cqReady",
+            "cqOverfl",
+            "sqInflt",
+            "sqePend",
+            "ringFlags",
+        )
+    )
+    for i in range(count):
+        if cpu is not None and i != cpu:
+            continue
+
+        proc = proc_states[i]
+        try:
+            number = int(proc["number"])
+        except gdb.error:
+            continue
+
+        try:
+            sleeping = _read(int(proc["sleeping"].address), 1)[0] & 1
+        except gdb.error:
+            sleeping = -1
+        ring = _read_ring_state(proc)
+        if ring is None:
+            ring = {
+                "cqReady": -1,
+                "cqOverflow": -1,
+                "sqInflight": -1,
+                "sqePending": -1,
+                "ringFlags": "?",
+            }
+        print(
+            "  %-4d %-7s %-8d %-9d %-9d %-9d %-9d %s"
+            % (
+                i,
+                _number_str(number),
+                sleeping,
+                ring["cqReady"],
+                ring["cqOverflow"],
+                ring["sqInflight"],
+                ring["sqePending"],
+                ring["ringFlags"],
+            )
+        )
+        # Decode the unconsumed CQEs on any proc that has them: this names the stuck
+        # completion (CANCEL/TIMEOUT/DOORBELL or an IoFuture) and thus which wake path failed.
+        if ring["cqReady"] > 0:
+            cqes = _read_unconsumed_cqes(proc)
+            if cqes:
+                for cqe in cqes:
+                    print(
+                        "         unconsumed cqe: tag=%-20s res=%d more=%d"
+                        % (cqe["tag"], cqe["res"], cqe["more"])
+                    )
 
 
 # ── Commands ──────────────────────────────────────────────────────────────────
@@ -499,9 +965,21 @@ class FiberSaveContext(gdb.Command):
         if _saved_ctx is not None:
             print("fiber-savecontext: warning: overwriting previous saved context")
 
-        arch = _arch()
-        thread_num = gdb.selected_thread().num
-        regs = {r: _get_reg(r) for r in _ALL_REGS[arch]}
+        # Register reads are selected-frame-relative; with an older frame
+        # selected (e.g. by crash-dumper.py's silk-frame search) they return
+        # that frame's unwound PC/SP, and restoring those would resume the
+        # thread mid-stack, abandoning the frames below. Snapshot the newest
+        # frame's registers - the thread's true state - then put the caller's
+        # frame selection back.
+        selected_frame = gdb.selected_frame()
+        gdb.newest_frame().select()
+        try:
+            arch = _arch()
+            thread_num = gdb.selected_thread().num
+            regs = {r: _get_reg(r) for r in _ALL_REGS[arch]}
+        finally:
+            selected_frame.select()
+
         _saved_ctx = {"arch": arch, "thread_num": thread_num, "regs": regs}
 
         pc_reg = _PC_REG[arch]
@@ -637,15 +1115,102 @@ class FiberSwitchContext(gdb.Command):
         gdb.execute("frame 0")
 
 
+class FiberDumpSleep(gdb.Command):
+    """fiber-dump-sleep [cpu]
+
+    Dump the scheduler's sleep state: a per-processor table (sleeping flag,
+    wakeup deadline, sleep/cancel queue occupancy) followed, per processor, by
+    the SleepFutures held in its sleepTree, sleepQueue and cancelQueue -- read
+    straight from those structures, each with its deadline, overdueCycles,
+    flags, isSet and waiter.
+
+    A lost sleep wakeup shows up as a sleepTree entry with positive
+    overdueCycles (its deadline is already past) that is still un-set.
+
+    With no argument, all processors are shown.  Pass a 0-based processor index
+    to restrict the output to one CPU.
+    """
+
+    def __init__(self):
+        super().__init__("fiber-dump-sleep", gdb.COMMAND_USER)
+
+    def invoke(self, arg, from_tty):
+        try:
+            cpu = _parse_cpu_arg(arg)
+        except ValueError:
+            print("fiber-dump-sleep: cpu argument must be an integer")
+            return
+
+        try:
+            sched = _get_scheduler()
+        except (RuntimeError, gdb.error) as error:
+            print(f"fiber-dump-sleep: {error}")
+            return
+
+        proc_states, count = _processor_states(sched)
+        if cpu is not None and not (0 <= cpu < count):
+            print(f"fiber-dump-sleep: cpu {cpu} out of range (0..{count - 1})")
+            return
+
+        print("===== silk sleep state =====")
+        now_estimate = _dump_sleep_table(proc_states, count, cpu)
+        _dump_processor_sleepers(proc_states, count, cpu, now_estimate)
+
+
+class FiberDumpUring(gdb.Command):
+    """fiber-dump-uring [cpu]
+
+    Dump the per-processor io_uring SQ/CQ ring state: ready/unconsumed CQEs,
+    CQ overflow count, in-flight and pending SQEs, and the kernel SQ flags.
+    Any processor with unconsumed CQEs also gets those CQEs decoded
+    (CANCEL/TIMEOUT/DOORBELL or an IoFuture), naming the stuck completion.
+
+    The lost-wakeup signature is a parked processor (sleeping=1) with cqReady>0
+    or the OVERFLOW flag set: io_uring_enter2 blocked instead of honouring its
+    EXT_ARG timeout.
+
+    With no argument, all processors are shown.  Pass a 0-based processor index
+    to restrict the output to one CPU.
+    """
+
+    def __init__(self):
+        super().__init__("fiber-dump-uring", gdb.COMMAND_USER)
+
+    def invoke(self, arg, from_tty):
+        try:
+            cpu = _parse_cpu_arg(arg)
+        except ValueError:
+            print("fiber-dump-uring: cpu argument must be an integer")
+            return
+
+        try:
+            sched = _get_scheduler()
+        except (RuntimeError, gdb.error) as error:
+            print(f"fiber-dump-uring: {error}")
+            return
+
+        proc_states, count = _processor_states(sched)
+        if cpu is not None and not (0 <= cpu < count):
+            print(f"fiber-dump-uring: cpu {cpu} out of range (0..{count - 1})")
+            return
+
+        print("===== silk io_uring state =====")
+        _dump_uring_table(proc_states, count, cpu)
+
+
 # ── Register commands ─────────────────────────────────────────────────────────
 
 FiberList()
 FiberSaveContext()
 FiberSwitchContext()
 FiberRestoreContext()
+FiberDumpSleep()
+FiberDumpUring()
 
 print("fiber.py loaded -- commands:")
 print("  fiber-list [--proxy]")
 print("  fiber-savecontext")
 print("  fiber-restorecontext")
 print("  fiber-switchcontext <Fiber*>")
+print("  fiber-dump-sleep [cpu]")
+print("  fiber-dump-uring [cpu]")

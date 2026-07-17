@@ -42,7 +42,7 @@ public:
     }
 
     /** Acquire the exclusive lock, suspending the calling fiber until it becomes available. */
-    void lock() noexcept
+    void lock(uint64_t * waitCycles = nullptr) noexcept
     {
         State currentState;
         currentState.raw = state.load(std::memory_order_acquire);
@@ -57,7 +57,7 @@ public:
             }
         }
 
-        lockSlow(currentState);
+        lockSlow(currentState, waitCycles);
     }
 
     /** Release the exclusive lock and wake any waiting fibers. */
@@ -106,7 +106,7 @@ public:
      * Acquire a shared lock, suspending the calling fiber until no exclusive holder remains and
      * no exclusive waiter is queued ahead.
      */
-    void lock_shared() noexcept
+    void lock_shared(uint64_t * waitCycles = nullptr) noexcept
     {
         State currentState;
         currentState.raw = state.load(std::memory_order_acquire);
@@ -120,7 +120,7 @@ public:
             }
         }
 
-        lockSharedSlow(currentState);
+        lockSharedSlow(currentState, waitCycles);
     }
 
     /** Release a shared lock and, if last shared holder, wake any waiting fibers. */
@@ -188,8 +188,8 @@ private:
     // Helpers.
     //
 
-    void lockSlow(State currentState) noexcept;
-    void lockSharedSlow(State currentState) noexcept;
+    void lockSlow(State currentState, uint64_t * waitCycles) noexcept;
+    void lockSharedSlow(State currentState, uint64_t * waitCycles) noexcept;
     bool lockHelper(State * currentState) noexcept;
     bool lockSharedHelper(State * currentState) noexcept;
     static void suspendCallback(Fiber * fiber, SuspendCtx * ctx) noexcept;

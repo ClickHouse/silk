@@ -39,13 +39,25 @@ logging.basicConfig(
 log = logging.getLogger("bb")
 
 
+def _with_timeout(args: tuple[str, ...], kwargs: dict[str, Any]) -> tuple[str, ...]:
+    """Turn a timeout= kwarg into a 'timeout' command prefix that sends SIGQUIT, so a hung silk binary
+    is caught by its in-process crash-dumper (thread/fiber/sleep/uring dump) before being SIGKILLed
+    after the grace period. Returns args unchanged when no timeout is requested."""
+    seconds = kwargs.pop("timeout", None)
+    if not seconds:
+        return args
+    return ("timeout", "--signal=QUIT", "--kill-after=60", str(seconds)) + args
+
+
 def run(*args: str, **kwargs: Any) -> None:
+    args = _with_timeout(args, kwargs)
     log.debug("run command: %s", " ".join(args))
     subprocess.run(args, cwd=ROOT, check=True, **kwargs)
 
 
 def run_capture(*args: str, **kwargs: Any) -> subprocess.CompletedProcess[str]:
     """Run a command, capture its stdout/stderr, and return the result."""
+    args = _with_timeout(args, kwargs)
     log.debug("run command: %s", " ".join(args))
     result = subprocess.run(
         args, cwd=ROOT, capture_output=True, text=True, check=False, **kwargs
@@ -741,6 +753,7 @@ class FilePerfParams:
     rw: list[str] = field(default_factory=lambda: ["randread"])
     flamegraph: bool = False
     print_counters: bool = False
+    fixed_buffers: bool = False
     timeout: int = 180
 
 
@@ -777,6 +790,7 @@ def cmd_file_perf(preset: str, params: FilePerfParams) -> None:
     file_perf = os.path.join(ROOT, f"build/{preset}/bin/file-perf")
     verbose_flag = ["--verbose"] if log.isEnabledFor(logging.DEBUG) else []
     print_counters_flag = ["--print-counters"] if params.print_counters else []
+    fixed_buffers_flag = ["--fixed-buffers"] if params.fixed_buffers else []
 
     try:
         if params.flamegraph:
@@ -802,6 +816,7 @@ def cmd_file_perf(preset: str, params: FilePerfParams) -> None:
                     str(params.warmup),
                     "--filename",
                     params.file,
+                    *fixed_buffers_flag,
                     *verbose_flag,
                 ],
             )
@@ -828,6 +843,7 @@ def cmd_file_perf(preset: str, params: FilePerfParams) -> None:
                     str(params.warmup),
                     "--filename",
                     params.file,
+                    *fixed_buffers_flag,
                     *print_counters_flag,
                     *verbose_flag,
                     timeout=params.timeout or None,
@@ -1547,6 +1563,12 @@ def _build_parser() -> argparse.ArgumentParser:
         help="warmup duration applied to every benchmark (e.g. 10s); per-binary defaults are used when omitted",
     )
     perf_parser.add_argument(
+        "--fixed-buffers",
+        dest="fixed_buffers",
+        action="store_true",
+        help="run file-perf with registered buffers (IORING_OP_READ_FIXED / WRITE_FIXED)",
+    )
+    perf_parser.add_argument(
         "targets",
         nargs="+",
         metavar="TARGET",
@@ -1627,6 +1649,12 @@ def _build_parser() -> argparse.ArgumentParser:
         dest="file_print_counters",
         action="store_true",
         help="print perf counters after each run",
+    )
+    file_perf_parser.add_argument(
+        "--fixed-buffers",
+        dest="file_fixed_buffers",
+        action="store_true",
+        help="use registered buffers (IORING_OP_READ_FIXED / WRITE_FIXED)",
     )
     file_perf_parser.add_argument(
         "--timeout",
@@ -2054,6 +2082,7 @@ def main() -> None:
             iodepth=[1, 16],
             rw=["randwrite", "randread"],
             timeout=args.timeout,
+            fixed_buffers=args.fixed_buffers,
             **timing_overrides,
         )
         if "file" in targets:

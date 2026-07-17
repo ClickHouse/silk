@@ -7,11 +7,10 @@
 
 #include <memory>
 
-// topologyCostCycles: unknown topology returns cross-NUMA cost.
-
 namespace silk
 {
 
+// topologyCostCycles: unknown topology returns cross-NUMA cost.
 TEST(CpuTopology, unknownBothReturnsMaxCost)
 {
     CpuTopology a, b; // packageId = UINT32_MAX by default

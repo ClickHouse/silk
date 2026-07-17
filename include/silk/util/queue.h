@@ -20,7 +20,7 @@ public:
     /**
      * Queue node holding a pointer to the enqueued value.
      */
-    struct alignas(CACHELINE_SIZE) QueueNode
+    struct alignas(kCacheLineSize) QueueNode
     {
         StackEntry stackEntry;
         std::atomic<QueueNode *> next;
@@ -28,7 +28,7 @@ public:
         // TODO(vskipin): we can store small data in-place
     };
 
-    static_assert(sizeof(QueueNode) == CACHELINE_SIZE);
+    static_assert(sizeof(QueueNode) == kCacheLineSize);
 
     // Match offsets used by src/gdb/fiber.py::_walk_queue
     static_assert(offsetof(QueueNode, next) == 8);

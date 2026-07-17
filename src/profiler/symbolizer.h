@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <string>
+#include <type_traits>
 #include <unordered_map>
 #include <vector>
 
@@ -30,6 +31,17 @@ public:
 
     // Returns the function name for addr, or "0x<addr>" if unresolvable.
     const std::string & resolve(uint64_t addr);
+
+    enum class DemangleOptions : int
+    {
+        StripNone = 0,
+        StripAnonymousNamespace = 1 << 0,
+        StripArguments = 1 << 1,
+        StripAll = (1 << 0) | (1 << 1),
+    };
+
+    // Demangle a C++ symbol and optionally strip anonymous namespaces and/or arguments.
+    static std::string demangle(const std::string & mangled, DemangleOptions options);
 
 private:
     struct Mapping

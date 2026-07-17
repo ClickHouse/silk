@@ -1,10 +1,12 @@
 name: CI
 
 on:
-  push:
-    branches: [main]
-  pull_request:
-    branches: [main]
+  ## PR, Main workflow managed by praktika and defined in ./ci/workflows
+  # push:
+  #   branches: [main]
+  # pull_request:
+  #   branches: [main]
+  ## Dispatch workflow preserved enabled until supported natively by praktika
   workflow_dispatch:
 
 jobs:
@@ -43,18 +45,26 @@ jobs:
             configure_cmd: ./bb -b release configure --build-poco --build-jemalloc
             cmd: ./bb -b release test
             bench_cmd: ./bb -b release bench
-            perf_cmd: ./bb -v -b release perf
+            perf_cmd: ./bb -b release perf file net http
           - name: tsan
             configure_cmd: ./bb -b release -s thread configure --build-poco
             cmd: ./bb -b release -s thread test
             bench_cmd: ./bb -b release -s thread bench
-            perf_cmd: ./bb -v -b release -s thread perf
+            perf_cmd: ./bb -b release -s thread perf file net http
           - name: asan
+            configure_cmd: ./bb -b release -s address configure --build-poco
             cmd: ./bb -b release -s address test
+            bench_cmd: ./bb -b release -s address bench
+            perf_cmd: ./bb -b release -s address perf file net http
           - name: ubsan
+            configure_cmd: ./bb -b release -s undefined configure --build-poco
             cmd: ./bb -b release -s undefined test
+            bench_cmd: ./bb -b release -s undefined bench
+            perf_cmd: ./bb -b release -s undefined perf file net http
           - name: msan
             cmd: ./bb -b release -s memory test
+            bench_cmd: ./bb -b release -s memory bench
+            perf_cmd: ./bb -b release -s memory perf file net
 
     name: test (${{ matrix.arch.name }}, ${{ matrix.build.name }})
 
@@ -73,7 +83,7 @@ jobs:
             contrib/liburing
 
       - name: Init Poco submodule
-        if: matrix.build.name == 'release' || matrix.build.name == 'tsan'
+        if: matrix.build.name != 'coverage' && matrix.build.name != 'msan'
         run: git submodule update --init --depth=1 contrib/poco
 
       - name: Init jemalloc submodule
@@ -127,19 +137,19 @@ jobs:
             ${{ runner.os }}-ccache-${{ matrix.arch.name }}-${{ matrix.build.name }}-
 
       - name: Configure with Poco
-        if: matrix.build.name == 'release' || matrix.build.name == 'tsan'
+        if: matrix.build.name != 'coverage' && matrix.build.name != 'msan'
         run: ${{ matrix.build.configure_cmd }}
 
       - name: Build and test
         run: ${{ matrix.build.cmd }}
 
       - name: bench
-        if: matrix.build.name == 'release' || matrix.build.name == 'tsan'
+        if: matrix.build.name != 'coverage'
         run: ${{ matrix.build.bench_cmd }}
 
       - name: perf
-        if: matrix.build.name == 'release' || matrix.build.name == 'tsan'
-        run: ${{ matrix.build.perf_cmd }} file net http
+        if: matrix.build.name != 'coverage'
+        run: ${{ matrix.build.perf_cmd }}
 
       - name: Upload coverage report
         if: matrix.build.name == 'coverage' && matrix.arch.name == 'amd64'

@@ -87,12 +87,39 @@ public:
     }
 
     /**
+     * Return the object with the smallest key not less than @p key's, or nullptr if none.
+     */
+    T * lowerBound(const T * key) noexcept
+    {
+        auto it = impl.lower_bound(*key);
+        return it != impl.end() ? &*it : nullptr;
+    }
+
+    /**
+     * Return the object with the smallest key strictly greater than @p key's, or nullptr if none.
+     */
+    T * upperBound(const T * key) noexcept
+    {
+        auto it = impl.upper_bound(*key);
+        return it != impl.end() ? &*it : nullptr;
+    }
+
+    /**
      * Return the object with the smallest key, or nullptr if the tree is empty.
      */
     T * min() noexcept
     {
         auto it = impl.begin();
         return it != impl.end() ? &*it : nullptr;
+    }
+
+    /**
+     * Return the object with the largest key, or nullptr if the tree is empty.
+     */
+    T * max() noexcept
+    {
+        auto it = impl.rbegin();
+        return it != impl.rend() ? &*it : nullptr;
     }
 
     /**

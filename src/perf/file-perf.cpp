@@ -2,6 +2,7 @@
 
 #include <silk/fibers/fiber.h>
 #include <silk/util/assert.h>
+#include <silk/util/crash-dumper.h>
 #include <silk/util/init.h>
 #include <silk/util/logger.h>
 #include <silk/util/perf.h>
@@ -130,6 +131,8 @@ struct ClientConfig
     uint64_t warmupNs = 2'000'000'000ULL;
     bool direct = false;
     bool printCounters = false;
+    // use registered buffers (IORING_OP_READ_FIXED / IORING_OP_WRITE_FIXED).
+    bool fixedBuffers = false;
 };
 
 class Benchmark
@@ -158,6 +161,7 @@ private:
         std::unique_ptr<char, decltype(&std::free)> bufs{nullptr, std::free};
         std::unique_ptr<Slot[]> slots;
         uint32_t head = 0;
+        uint32_t index = 0;
     };
 
     //
@@ -200,6 +204,7 @@ void Benchmark::start()
     uint32_t i = 0;
     for (Job & job : jobs)
     {
+        job.index = i;
         job.strategy = OffsetStrategy(cfg.mode, cfg.fileSize, cfg.blockSize, i++, static_cast<uint32_t>(jobs.size()));
 
         // O_DIRECT requires 512-byte-aligned buffers.
@@ -215,6 +220,19 @@ void Benchmark::start()
             job.slots[s].iov.iov_base = job.bufs.get() + static_cast<uint64_t>(s) * cfg.blockSize;
             job.slots[s].iov.iov_len = cfg.blockSize;
         }
+    }
+
+    // register one fixed buffer per job (each covering its whole
+    // iodepth*blockSize block) on every per-CPU ring. bufIndex == job.index.
+    if (cfg.fixedBuffers)
+    {
+        std::vector<iovec> regBufs(jobs.size());
+        for (Job & job : jobs)
+        {
+            regBufs[job.index].iov_base = job.bufs.get();
+            regBufs[job.index].iov_len = static_cast<uint64_t>(cfg.iodepth) * cfg.blockSize;
+        }
+        silk::FiberScheduler::registerBuffers(regBufs.data(), static_cast<unsigned>(regBufs.size()));
     }
 
     for (Job & job : jobs)
@@ -250,6 +268,27 @@ void Benchmark::submit(Job * job, Slot * slot)
 {
     slot->startCycles = silk::Tsc::getCycles();
     uint64_t offset = job->strategy.next();
+
+    if (cfg.fixedBuffers)
+    {
+        // READ_FIXED / WRITE_FIXED against the buffer registered for this job.
+        int bufIndex = static_cast<int>(job->index);
+        // io_uring's fixed-buffer ops take a __u32 length; iov_len is size_t but
+        // always holds cfg.blockSize (uint32_t), so the cast cannot truncate.
+        SILK_ASSERT(slot->iov.iov_len <= UINT32_MAX, "block too large for fixed I/O: len=%zu", slot->iov.iov_len);
+        auto len = static_cast<uint32_t>(slot->iov.iov_len);
+        if (cfg.mode == MODE_RANDWRITE)
+        {
+            silk::FiberScheduler::writeFixed(fd, slot->iov.iov_base, len, offset, bufIndex, nullptr, &slot->future);
+        }
+        else
+        {
+            silk::FiberScheduler::readFixed(fd, slot->iov.iov_base, len, offset, bufIndex, nullptr, &slot->future);
+        }
+        return;
+    }
+
+    // Baseline: vectored READV / WRITEV with a 1-element iovec.
     if (cfg.mode == MODE_RANDWRITE)
     {
         silk::FiberScheduler::write(fd, &slot->iov, 1, offset, nullptr, &slot->future);
@@ -320,6 +359,7 @@ static void printJson(std::vector<uint64_t> & latNs, const ClientConfig & cfg)
     printf("  \"iodepth\": %u,\n", cfg.iodepth);
     printf("  \"block_size_bytes\": %u,\n", cfg.blockSize);
     printf("  \"mode\": \"%s\",\n", modeName(cfg.mode));
+    printf("  \"fixed_buffers\": %s,\n", cfg.fixedBuffers ? "true" : "false");
     printf("  \"file_size_bytes\": %lu,\n", cfg.fileSize);
     printf("  \"duration_s\": %.3f,\n", durationS);
     printf("  \"total\": %lu,\n", total);
@@ -341,6 +381,8 @@ static void printJson(std::vector<uint64_t> & latNs, const ClientConfig & cfg)
  */
 int main(int argc, char ** argv)
 {
+    silk::installCrashDumper();
+
     ClientConfig cfg;
     std::string bsStr = "4k";
     std::string rwStr = "randread";
@@ -354,18 +396,19 @@ int main(int argc, char ** argv)
 
     // clang-format off
     desc.add_options()
-        ("help,h", "show this help")
-        ("numjobs",  po::value(&cfg.numJobs),      "number of concurrent worker fibers")
-        ("iodepth",  po::value(&cfg.iodepth),      "per-fiber IO queue depth")
-        ("bs",       po::value(&bsStr),             "block size (e.g. 4k, 1m)")
-        ("rw",       po::value(&rwStr),             "I/O mode: randread | seqread | randwrite")
-        ("size",     po::value(&sizeStr),           "file size (e.g. 1g, 512m)")
-        ("runtime",  po::value(&runtimeStr),         "measurement duration (e.g. 10s, 500ms)")
-        ("warmup",   po::value(&warmupStr),          "warmup duration (e.g. 2s, 500ms)")
-        ("filename", po::value(&cfg.filename)->required(), "file path")
-        ("direct",   po::bool_switch(&cfg.direct),  "use O_DIRECT (bypass page cache)")
-        ("print-counters", po::bool_switch(&cfg.printCounters), "enable per-CPU profiler and include counters in the JSON report")
-        ("verbose,v", po::bool_switch(&verbose),    "enable debug logging")
+        ("help,h",                                                "show this help")
+        ("numjobs",         po::value(&cfg.numJobs),              "number of concurrent worker fibers")
+        ("iodepth",         po::value(&cfg.iodepth),              "per-fiber IO queue depth")
+        ("bs",              po::value(&bsStr),                    "block size (e.g. 4k, 1m)")
+        ("rw",              po::value(&rwStr),                    "I/O mode: randread | seqread | randwrite")
+        ("size",            po::value(&sizeStr),                  "file size (e.g. 1g, 512m)")
+        ("runtime",         po::value(&runtimeStr),               "measurement duration (e.g. 10s, 500ms)")
+        ("warmup",          po::value(&warmupStr),                "warmup duration (e.g. 2s, 500ms)")
+        ("filename",        po::value(&cfg.filename)->required(), "file path")
+        ("direct",          po::bool_switch(&cfg.direct),         "use O_DIRECT (bypass page cache)")
+        ("fixed-buffers",   po::bool_switch(&cfg.fixedBuffers),   "use registered buffers (IORING_OP_READ_FIXED / WRITE_FIXED)")
+        ("print-counters",  po::bool_switch(&cfg.printCounters),  "enable per-CPU profiler and include counters in the JSON report")
+        ("verbose,v",       po::bool_switch(&verbose),            "enable debug logging")
         ;
     // clang-format on
 

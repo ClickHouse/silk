@@ -32,7 +32,10 @@ public:
      */
     BoundedQueue() noexcept = default;
 
-    // TBD
+    /**
+     * Construct and initialize in one step when the capacity is known at construction. Capacity must be a
+     * power of two and >= 2 (see initialize).
+     */
     explicit BoundedQueue(uint64_t capacity) noexcept { initialize(capacity); }
 
     /**
@@ -127,13 +130,13 @@ public:
     }
 
 private:
-    struct alignas(CACHELINE_SIZE) Slot
+    struct alignas(kCacheLineSize) Slot
     {
         std::atomic<uint64_t> sequence;
         T value;
     };
 
-    static_assert(sizeof(Slot) == CACHELINE_SIZE);
+    static_assert(sizeof(Slot) == kCacheLineSize);
 
     // Match offsets and stride used by src/gdb/fiber.py::_walk_bounded_queue
     static_assert(offsetof(Slot, sequence) == 0);
@@ -149,8 +152,8 @@ private:
     // src/gdb/fiber.py::_walk_bounded_queue reads enqueuePos at offset 64 and
     // dequeuePos at offset 128 (mask=8 bytes, slots=8 bytes, then 2 x cacheline).
     // Reordering or inserting fields here requires updating that script.
-    alignas(CACHELINE_SIZE) std::atomic<uint64_t> enqueuePos{};
-    alignas(CACHELINE_SIZE) std::atomic<uint64_t> dequeuePos{};
+    alignas(kCacheLineSize) std::atomic<uint64_t> enqueuePos{};
+    alignas(kCacheLineSize) std::atomic<uint64_t> dequeuePos{};
 };
 
 } // namespace silk

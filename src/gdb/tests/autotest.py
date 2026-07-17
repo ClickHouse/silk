@@ -91,9 +91,48 @@ def _run_tests():
         "bt after restorecontext: original stack visible",
     )
 
+    # ── fiber-dump-sleep ────────────────────────────────────────────────────────
 
-# Number of waiter fibers created by test.cpp.
+    out = gdb.execute("fiber-dump-sleep", to_string=True)
+    _check("silk sleep state" in out, "fiber-dump-sleep: prints the sleep-state header")
+    _check("sleepTree" in out, "fiber-dump-sleep: dumps a sleepTree section")
+
+    sleep_futures = re.findall(r"SleepFuture 0x[0-9a-f]+", out)
+    _check(
+        len(sleep_futures) >= N_SLEEPERS,
+        f"fiber-dump-sleep: at least {N_SLEEPERS} SleepFutures parked, got {len(sleep_futures)}",
+    )
+    _check("IN_TABLE" in out, "fiber-dump-sleep: a parked SleepFuture is IN_TABLE (sleepTree walk works)")
+    _check("waiter=fiber 0x" in out, "fiber-dump-sleep: a parked SleepFuture's waiter decodes to a Fiber*")
+
+    # cpu filter: a single processor index restricts output to that one section.
+    out = gdb.execute("fiber-dump-sleep 0", to_string=True)
+    sections = re.findall(r"cpu \d+ \(number", out)
+    _check(
+        len(sections) == 1,
+        f"fiber-dump-sleep 0: restricts output to one processor, got {len(sections)}",
+    )
+    _check("cpu 0 (number" in out, "fiber-dump-sleep 0: shows the requested cpu")
+
+    out = gdb.execute("fiber-dump-sleep notanumber", to_string=True)
+    _check("must be an integer" in out, "fiber-dump-sleep: rejects a non-integer cpu")
+
+    # ── fiber-dump-uring ────────────────────────────────────────────────────────
+
+    out = gdb.execute("fiber-dump-uring", to_string=True)
+    _check("io_uring" in out, "fiber-dump-uring: prints the io_uring state header")
+    _check("cqReady" in out, "fiber-dump-uring: prints the ring table header")
+
+    ring_rows = [l for l in out.splitlines() if re.match(r"\s+\d+\s+\S+\s+[01]\s+-?\d+\s+-?\d+", l)]
+    _check(len(ring_rows) >= 1, f"fiber-dump-uring: lists at least one ring, got {len(ring_rows)}")
+
+    out = gdb.execute("fiber-dump-uring 99999", to_string=True)
+    _check("out of range" in out, "fiber-dump-uring: rejects an out-of-range cpu")
+
+
+# Fiber counts created by gdb-test.cpp.
 N_WAITERS = 3
+N_SLEEPERS = 3
 
 
 class _SleepBreakpoint(gdb.Breakpoint):

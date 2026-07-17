@@ -2,6 +2,7 @@
 
 #include <silk/fibers/fiber.h>
 #include <silk/util/assert.h>
+#include <silk/util/sanitizers.h>
 #include <silk/util/spinlock.h>
 
 #include <atomic>
@@ -9,8 +10,18 @@
 namespace silk
 {
 
-void FiberMutex::lockSlow(State currentState) noexcept
+void FiberMutex::lockSlow(State currentState, uint64_t * waitCycles) noexcept
 {
+    // MSan does not follow manual fiber stack switching (google/sanitizers#1232): its per-thread
+    // shadow TLS does not travel with a fiber across suspend/resume, so it can read the by-value
+    // State param as uninitialized though it is initialized. This is the thread-pointer hazard
+    // getCurrentProcessor documents: only arm64 trips it, because reaching __msan_param_tls there
+    // materializes the thread pointer into a callee-saved register jump_fcontext preserves across
+    // the switch, so a migrated fiber reads the old thread's shadow; x86-64's %fs-relative access
+    // stays current. getCurrentProcessor cures its own reads with volatile asm, but param_tls access
+    // is compiler-emitted, so we clear the value's address-based shadow instead.
+    MSAN_UNPOISON(&currentState, sizeof(currentState));
+
     if (currentState.exclusive)
     {
         SILK_ASSERT_DEBUG(
@@ -38,13 +49,16 @@ void FiberMutex::lockSlow(State currentState) noexcept
     while (!lockHelper(&currentState))
     {
         SuspendCtx ctx{this, true};
-        FiberScheduler::suspend(reinterpret_cast<FiberScheduler::SuspendCallback *>(suspendCallback), &ctx);
+        FiberScheduler::suspend(reinterpret_cast<FiberScheduler::SuspendCallback *>(suspendCallback), &ctx, waitCycles);
         currentState.raw = state.load(std::memory_order_relaxed);
     }
 }
 
-void FiberMutex::lockSharedSlow(State currentState) noexcept
+void FiberMutex::lockSharedSlow(State currentState, uint64_t * waitCycles) noexcept
 {
+    // Same MSan manual-stack-switching workaround as lockSlow (google/sanitizers#1232).
+    MSAN_UNPOISON(&currentState, sizeof(currentState));
+
     static constexpr uint32_t SPIN_COUNT = 16;
 
     // Same spin policy as lockSlow: only when the blocker is an identifiable exclusive owner
@@ -70,7 +84,7 @@ void FiberMutex::lockSharedSlow(State currentState) noexcept
     while (!lockSharedHelper(&currentState))
     {
         SuspendCtx ctx{this, false};
-        FiberScheduler::suspend(reinterpret_cast<FiberScheduler::SuspendCallback *>(suspendCallback), &ctx);
+        FiberScheduler::suspend(reinterpret_cast<FiberScheduler::SuspendCallback *>(suspendCallback), &ctx, waitCycles);
         currentState.raw = state.load(std::memory_order_relaxed);
     }
 }

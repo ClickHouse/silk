@@ -44,7 +44,7 @@ static int btCallback(void * data, uintptr_t pc, const char * filename, int line
     char * demangled = function ? abi::__cxa_demangle(function, nullptr, nullptr, &status) : nullptr;
     if (demangled && status == 0)
     {
-        const char * paren = std::strchr(demangled, '(');
+        const char * paren = std::strrchr(demangled, '(');
         if (paren)
         {
             std::fwrite(demangled, 1, static_cast<size_t>(paren - demangled), stderr);

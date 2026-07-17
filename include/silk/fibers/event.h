@@ -31,14 +31,14 @@ public:
     }
 
     /** Wait until the event is set, blocking the calling fiber. */
-    void wait() noexcept
+    void wait(uint64_t * waitCycles = nullptr) noexcept
     {
         uint64_t current = sequencer.get();
         if (current & 1)
         {
             return;
         }
-        sequencer.wait(current + 1);
+        sequencer.wait(current + 1, waitCycles);
     }
 
     /**

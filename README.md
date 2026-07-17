@@ -146,12 +146,14 @@ Async file I/O benchmark using io_uring.
 | `--rw MODE [MODE ...]` | `randread` | Access mode(s): `randread`, `randwrite`, `seqread` |
 | `--flamegraph` | | Profile and generate flamegraph SVG |
 | `--print-counters` | | Print perf counters after each run |
+| `--fixed-buffers` | | Use registered buffers (`IORING_OP_READ_FIXED` / `WRITE_FIXED`) |
 
 ```
 ./bb -b release file-perf
 ./bb -b release file-perf --bs 64k --size 4g
 ./bb -b release file-perf --numjobs 1 16 --iodepth 1 16
 ./bb -b release file-perf --rw randread randwrite
+./bb -b release file-perf --fixed-buffers
 ./bb -b release file-perf --flamegraph
 ```
 

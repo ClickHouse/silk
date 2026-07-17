@@ -46,6 +46,8 @@ uint64_t deadline = Tsc::getCycles() + Tsc::nanosecondsToCycles(1'000'000); // 1
 
 On aarch64, frequency comes from `cntfrq_el0`.
 
+**Invariant TSC** is expected on x86-64: silk reads the counter on one core and compares it on another (sleep deadlines, work-stealing budgets), so the TSC should tick at a constant rate and stay synchronized across cores. `initialize()` checks CPUID leaf `0x80000007` EDX[8]. Some virtualized hosts (notably KVM guests without `nonstop_tsc`) do not advertise the bit even though `rdtsc` is usable, so a missing bit logs a warning and continues, falling back to `CLOCK_MONOTONIC` frequency calibration rather than aborting. Cross-core timing may be unreliable in that case.
+
 ---
 
 ## Spin Utilities (`spinlock.h`)

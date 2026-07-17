@@ -77,7 +77,7 @@ add_library(liburing STATIC
 
 # LIBURING_BIN must come before LIBURING_SRC/src/include so the generated
 # liburing/compat.h and liburing/io_uring_version.h shadow the absent originals.
-target_include_directories(liburing PUBLIC ${LIBURING_BIN} ${LIBURING_SRC}/src/include)
+target_include_directories(liburing SYSTEM PUBLIC ${LIBURING_BIN} ${LIBURING_SRC}/src/include)
 
 target_compile_definitions(liburing PRIVATE
     _GNU_SOURCE

@@ -35,13 +35,22 @@ bool FiberFuture::subscribe(SubscribeCallback * callback) noexcept
 
 void FiberFuture::signal() noexcept
 {
+    Fiber * waitingFiber = extractWaitingFiber();
+    if (waitingFiber)
+    {
+        FiberScheduler::schedule(waitingFiber);
+    }
+}
+
+Fiber * FiberFuture::extractWaitingFiber() noexcept
+{
     State currentState;
     currentState.raw = state.load(std::memory_order_relaxed);
     for (;;)
     {
         if (currentState.isSet)
         {
-            return;
+            return nullptr;
         }
 
         State newState(currentState);
@@ -49,37 +58,33 @@ void FiberFuture::signal() noexcept
 
         if (state.compare_exchange_weak(currentState.raw, newState.raw, std::memory_order_acq_rel, std::memory_order_relaxed))
         {
+            // Wake the waiter first, then increment the counter. waitForMultiple
+            // spins on the counter only after completionFuture.wait() returns, so
+            // this order is safe: the drain loop will not start until the wake has
+            // already been delivered.
             if (currentState.multipleWait)
             {
-                // Wake the waiter first, then increment the counter. waitForMultiple
-                // spins on the counter only after completionFuture.wait() returns, so
-                // this order is safe: the drain loop will not start until the wake has
-                // already been delivered.
                 MultipleWaitState * waitState = reinterpret_cast<MultipleWaitState *>(currentState.waiter);
                 waitState->completionFuture->signal();
                 waitState->completionCounter.fetch_add(1, std::memory_order_release);
+                return nullptr;
             }
-            else if (currentState.hasCallback)
+
+            if (currentState.hasCallback)
             {
                 SubscribeCallback * callback = reinterpret_cast<SubscribeCallback *>(currentState.waiter);
                 callback(this);
+                return nullptr;
             }
-            else
-            {
-                Fiber * waitingFiber = reinterpret_cast<Fiber *>(currentState.waiter);
-                if (waitingFiber)
-                {
-                    FiberScheduler::schedule(waitingFiber);
-                }
-            }
-            return;
+
+            return reinterpret_cast<Fiber *>(currentState.waiter);
         }
     }
 }
 
-int FiberFuture::suspend() noexcept
+int FiberFuture::suspend(uint64_t * waitCycles) noexcept
 {
-    FiberScheduler::suspend(reinterpret_cast<FiberScheduler::SuspendCallback *>(suspendCallback), this);
+    FiberScheduler::suspend(reinterpret_cast<FiberScheduler::SuspendCallback *>(suspendCallback), this, waitCycles);
 
     State currentState;
     currentState.raw = state.load(std::memory_order_acquire);
@@ -275,6 +280,37 @@ int FiberFuture::waitWithTimeout(FiberFuture * future, uint64_t nanoseconds) noe
     // resolved would free the stack-allocated future while it is still reachable.
     sleepFuture.wait();
     return r;
+}
+
+void FiberFuture::setAll(int err, FiberFuture ** futures, uint64_t count) noexcept
+{
+    // Collect the plain-fiber waiters of the just-set futures into a fixed stack buffer and hand each
+    // chunk to one batched schedule (one doorbell per target processor, one submit). The two rare waiter
+    // kinds - multiple-wait and callback - are completed inline, exactly as signal() does.
+    Fiber * wakeBatch[WAKE_BATCH];
+    uint64_t batchSize = 0;
+
+    for (uint64_t i = 0; i < count; i++)
+    {
+        FiberFuture * future = futures[i];
+        future->error = err;
+
+        Fiber * waitingFiber = future->extractWaitingFiber();
+        if (waitingFiber)
+        {
+            wakeBatch[batchSize++] = waitingFiber;
+            if (batchSize == WAKE_BATCH)
+            {
+                FiberScheduler::scheduleAll(wakeBatch, batchSize);
+                batchSize = 0;
+            }
+        }
+    }
+
+    if (batchSize)
+    {
+        FiberScheduler::scheduleAll(wakeBatch, batchSize);
+    }
 }
 
 } // namespace silk

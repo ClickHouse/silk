@@ -33,6 +33,10 @@ if(BUILD_POCO)
 endif()
 
 if(BUILD_AWS)
+    if(NOT BUILD_POCO)
+        message(FATAL_ERROR "s3-perf requires BUILD_POCO=ON")
+    endif()
+
     add_executable(s3-perf s3-perf.cpp)
     target_link_libraries(s3-perf PRIVATE silk-perf-http Boost::program_options aws-cpp-sdk-s3 aws-cpp-sdk-core)
 

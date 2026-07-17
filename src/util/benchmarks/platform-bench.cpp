@@ -158,7 +158,7 @@ BENCHMARK_F(PlatformBench, EventFdRoundTrip)(benchmark::State & state)
 // pure MESI protocol traffic.
 BENCHMARK_F(PlatformBench, CacheLineRoundTrip)(benchmark::State & state)
 {
-    alignas(CACHELINE_SIZE) std::atomic<uint64_t> shared{};
+    alignas(kCacheLineSize) std::atomic<uint64_t> shared{};
 
     std::thread helper(
         [&]
