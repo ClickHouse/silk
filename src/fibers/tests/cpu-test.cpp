@@ -1,5 +1,6 @@
 #include <fibers/cpu.h>
 
+#include <silk/fibers/fiber.h>
 #include <silk/util/platform.h>
 #include <silk/util/tsc.h>
 
@@ -159,6 +160,98 @@ TEST(CpuTopology, readDoesNotCrash)
 
     // Only assert the call completed without crashing; sysfs entries may be
     // absent in containers so we make no assertion about the topology values.
+}
+
+// isCpuActive: the default cpuMask (all CPUs set) admits exactly the affinity mask.
+TEST(CpuActive, defaultMaskFollowsAffinityMask)
+{
+    cpu_set_t affinityMask;
+    CPU_ZERO(&affinityMask);
+    CPU_SET(1, &affinityMask);
+    CPU_SET(3, &affinityMask);
+
+    FiberScheduler::Options options;
+
+    bool b = isCpuActive(1, affinityMask, options.cpuMask);
+    ASSERT_TRUE(b);
+    b = isCpuActive(3, affinityMask, options.cpuMask);
+    ASSERT_TRUE(b);
+    b = isCpuActive(0, affinityMask, options.cpuMask);
+    ASSERT_FALSE(b);
+    b = isCpuActive(2, affinityMask, options.cpuMask);
+    ASSERT_FALSE(b);
+}
+
+// isCpuActive: a cpuMask narrows the active set within the affinity mask.
+TEST(CpuActive, cpuMaskNarrows)
+{
+    cpu_set_t affinityMask;
+    CPU_ZERO(&affinityMask);
+    for (uint32_t cpu = 0; cpu < 4; ++cpu)
+    {
+        CPU_SET(cpu, &affinityMask);
+    }
+
+    cpu_set_t mask;
+    CPU_ZERO(&mask);
+    CPU_SET(1, &mask);
+    CPU_SET(2, &mask);
+
+    bool b = isCpuActive(1, affinityMask, mask);
+    ASSERT_TRUE(b);
+    b = isCpuActive(2, affinityMask, mask);
+    ASSERT_TRUE(b);
+    b = isCpuActive(0, affinityMask, mask);
+    ASSERT_FALSE(b);
+    b = isCpuActive(3, affinityMask, mask);
+    ASSERT_FALSE(b);
+}
+
+// isCpuActive: a cpu outside the affinity mask is never active, even if its
+// cpuMask bit is set.
+TEST(CpuActive, outsideAffinityMaskStaysInactive)
+{
+    cpu_set_t affinityMask;
+    CPU_ZERO(&affinityMask);
+    CPU_SET(1, &affinityMask);
+
+    cpu_set_t mask;
+    CPU_ZERO(&mask);
+    CPU_SET(1, &mask);
+    CPU_SET(5, &mask);
+
+    bool b = isCpuActive(1, affinityMask, mask);
+    ASSERT_TRUE(b);
+    b = isCpuActive(5, affinityMask, mask);
+    ASSERT_FALSE(b);
+}
+
+// isCpuActive: a gapped cpuMask admits only its set bits.
+TEST(CpuActive, gappedMask)
+{
+    cpu_set_t affinityMask;
+    CPU_ZERO(&affinityMask);
+    for (uint32_t cpu = 0; cpu < 10; ++cpu)
+    {
+        CPU_SET(cpu, &affinityMask);
+    }
+
+    cpu_set_t mask;
+    CPU_ZERO(&mask);
+    CPU_SET(0, &mask);
+    CPU_SET(4, &mask);
+    CPU_SET(9, &mask);
+
+    bool b = isCpuActive(0, affinityMask, mask);
+    ASSERT_TRUE(b);
+    b = isCpuActive(4, affinityMask, mask);
+    ASSERT_TRUE(b);
+    b = isCpuActive(9, affinityMask, mask);
+    ASSERT_TRUE(b);
+    b = isCpuActive(1, affinityMask, mask);
+    ASSERT_FALSE(b);
+    b = isCpuActive(8, affinityMask, mask);
+    ASSERT_FALSE(b);
 }
 
 } // namespace silk
