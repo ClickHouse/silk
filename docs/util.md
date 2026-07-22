@@ -13,7 +13,7 @@ Cross-platform constants and thin OS wrappers.
 | `UNUSED(x)` | Suppresses unused-variable warnings via `(void)(x)` |
 | `PAGE_SIZE` | System page size (4096 bytes) |
 | `CACHELINE_SIZE` | Cache line size (64 bytes) |
-| `getProcessorCount()` | Number of online CPUs (`sysconf(_SC_NPROCESSORS_ONLN)`) |
+| `getProcessorCount()` | Number of configured CPUs (`sysconf(_SC_NPROCESSORS_CONF)`), covering offline-but-present CPUs so a raw CPU id indexes per-CPU state in bounds |
 | `getCurrentProcessor()` | Index of the CPU the calling thread is on (`sched_getcpu`) |
 | `schedYield()` | Yield the calling thread's timeslice (`sched_yield`) |
 | `cpuPause()` | CPU pause hint for spin loops |
