@@ -214,7 +214,7 @@ TEST(Fiber, runWithCategoryStampsUpperByte)
 // the test asserts that at least two distinct CPUs appear.
 TEST(Fiber, WorkStealing)
 {
-    if (getProcessorCount() < 2)
+    if (getAvailableProcessorCount() < 2)
     {
         GTEST_SKIP() << "requires at least 2 CPUs";
     }

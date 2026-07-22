@@ -1144,6 +1144,11 @@ void FiberScheduler::initialize(const Options * userOptions) noexcept
     scheduler->waiterTableMask = options.waiterTableSize - 1;
 
     scheduler->processorCount = getProcessorCount();
+    SILK_ASSERT(
+        scheduler->processorCount <= kInvalidProcessorNumber,
+        "configured CPU count %d exceeds the supported maximum %d",
+        scheduler->processorCount,
+        kInvalidProcessorNumber);
     scheduler->processorState = std::make_unique<ProcessorState[]>(scheduler->processorCount);
 
     cpu_set_t processCpuSet;
