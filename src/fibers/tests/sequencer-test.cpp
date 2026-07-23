@@ -2,6 +2,7 @@
 
 #include <silk/fibers/fiber.h>
 #include <silk/fibers/future.h>
+#include <silk/util/sanitizers.h>
 
 #include <gtest/gtest.h>
 
@@ -539,6 +540,16 @@ TEST(FiberSequencer, lostWakeupUnderContention)
     const uint32_t threads = std::min(8u, cores); // incrementers, and the waiter's (final) token
 
     uint64_t iters = 200'000;
+#if defined(__SANITIZE_THREAD__)
+    // The high count is what reproduces the StoreLoad reordering this test
+    // asserts on, but TSan cannot observe that reordering: it detects data races
+    // through a happens-before model, and a missing StoreLoad fence between
+    // atomics is a memory-model bug, not a race. So the full count buys no
+    // coverage under TSan while costing about 6 ms per iteration on an 8-CPU box,
+    // pushing the run past the ctest timeout. A small count still drives the same
+    // paths for TSan's race detection, which saturates in far fewer iterations.
+    iters = 2'000;
+#endif
     if (const char * env = std::getenv("SILK_SEQ_LITMUS_ITERS"))
     {
         iters = std::strtoull(env, nullptr, 10);
