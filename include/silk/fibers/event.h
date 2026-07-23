@@ -21,13 +21,13 @@ public:
     bool isSet() const noexcept { return sequencer.get() & 1; }
 
     /** Signal the event and wake all current waiters. No-op if already set. */
-    void set() noexcept { (void)sequencer.advance(sequencer.get() | 1); }
+    void set() noexcept { sequencer.advance(sequencer.get() | 1); }
 
     /** Clear the event. No-op if already unset. */
     void reset() noexcept
     {
         uint64_t current = sequencer.get();
-        (void)sequencer.advance(current + (current & 1));
+        sequencer.advance(current + (current & 1));
     }
 
     /** Wait until the event is set, blocking the calling fiber. */
