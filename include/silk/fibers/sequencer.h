@@ -107,7 +107,7 @@ public:
      * Wakes all futures whose token is now reached.
      * Returns true if the counter was advanced, false if it was already >= @p value.
      */
-    [[nodiscard]] bool advance(uint64_t value) noexcept
+    bool advance(uint64_t value) noexcept
     {
         uint64_t current = counter.load(std::memory_order_relaxed);
         for (;;)
