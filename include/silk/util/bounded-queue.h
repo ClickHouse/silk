@@ -6,6 +6,7 @@
 #include <atomic>
 #include <cstdint>
 #include <memory>
+#include <utility>
 
 namespace silk
 {
@@ -70,7 +71,7 @@ public:
             {
                 if (enqueuePos.compare_exchange_weak(pos, pos + 1, std::memory_order_relaxed))
                 {
-                    slot.value = value;
+                    slot.value = std::move(value);
                     slot.sequence.store(pos + 1, std::memory_order_release);
                     return true;
                 }
@@ -102,7 +103,7 @@ public:
             {
                 if (dequeuePos.compare_exchange_weak(pos, pos + 1, std::memory_order_relaxed))
                 {
-                    *value = slot.value;
+                    *value = std::move(slot.value);
                     slot.sequence.store(pos + mask + 1, std::memory_order_release);
                     return true;
                 }

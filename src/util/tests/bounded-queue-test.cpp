@@ -3,6 +3,7 @@
 #include <gtest/gtest.h>
 
 #include <atomic>
+#include <memory>
 #include <thread>
 #include <vector>
 
@@ -83,6 +84,30 @@ TEST(BoundedQueue, ReusableAfterDrain)
         EXPECT_TRUE(queue.dequeue(&value));
     }
     EXPECT_TRUE(queue.empty());
+}
+
+TEST(BoundedQueue, MovesValuesThroughSlots)
+{
+    BoundedQueue<std::shared_ptr<int>> queue{4};
+
+    std::shared_ptr<int> source = std::make_shared<int>(42);
+    std::weak_ptr<int> observer = source;
+
+    bool b = queue.enqueue(std::move(source));
+    ASSERT_TRUE(b);
+
+    std::shared_ptr<int> result;
+    b = queue.dequeue(&result);
+    ASSERT_TRUE(b);
+    ASSERT_EQ(*result, 42);
+
+    // The slot releases its reference at hand-off - result is the sole owner.
+    long useCount = observer.use_count();
+    ASSERT_EQ(useCount, 1);
+
+    result.reset();
+    b = observer.expired();
+    ASSERT_TRUE(b);
 }
 
 TEST(BoundedQueue, ConcurrentEnqueue)
