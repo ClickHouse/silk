@@ -113,8 +113,12 @@ public:
 
 private:
     BoundedQueue<T> queue;
-    FiberFutex spaceAvailable;
-    FiberFutex itemAvailable;
+
+    /** Posted by dequeue, read by every enqueue; cache-line isolated from dequeuePos and itemAvailable. */
+    alignas(kCacheLineSize) FiberFutex spaceAvailable;
+
+    /** Posted by every enqueue, waited by dequeue; isolated so producer posts never invalidate the consumer's lines. */
+    alignas(kCacheLineSize) FiberFutex itemAvailable;
 };
 
 } // namespace silk
