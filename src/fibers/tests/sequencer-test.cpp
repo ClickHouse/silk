@@ -47,6 +47,31 @@ TEST(FiberSequencer, waitAlreadySatisfied)
     EXPECT_EQ(sequencer.wait(1), 0);
 }
 
+TEST(FiberSequencer, resetRebasesBelowCounter)
+{
+    FiberSequencer sequencer;
+    bool advanced = sequencer.advance(10);
+    ASSERT_TRUE(advanced);
+
+    sequencer.reset(3);
+    ASSERT_EQ(sequencer.get(), 3u);
+
+    // A wait at or below the rebased counter completes immediately.
+    int r = sequencer.wait(3);
+    ASSERT_EQ(r, 0);
+
+    // A wait above it parks until advance reaches the token again.
+    FiberSequencer::Future future;
+    sequencer.wait(4, &future);
+    int err;
+    ASSERT_FALSE(future.isSet(&err));
+
+    advanced = sequencer.advance(4);
+    ASSERT_TRUE(advanced);
+    ASSERT_TRUE(future.isSet(&err));
+    ASSERT_EQ(err, 0);
+}
+
 TEST(FiberSequencer, stopCancelsUnreachedWaiters)
 {
     FiberSequencer sequencer;
