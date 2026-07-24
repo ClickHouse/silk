@@ -127,6 +127,13 @@ public:
     }
 
     /**
+     * Rebase the counter to @p value, up or down. The stopped state is preserved. The caller guarantees
+     * quiescence: no registered waiter - neither tree-resident nor still in the request queue - and no
+     * concurrent increment / advance / wait / stop.
+     */
+    void reset(uint64_t value) noexcept;
+
+    /**
      * Transition into the stopped state and wake every unreached waiter with
      * ECANCELED. After this, every unreached wait completes with ECANCELED
      * without suspending; a reached wait still returns 0, and increment /
