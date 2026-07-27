@@ -49,7 +49,7 @@ def _silk_ci_dependencies_component():
             (
                 "DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=60 "
                 "install -y clang-21 clang-format-21 llvm-21 cmake "
-                "libstdc++-13-dev ninja-build ccache libboost-dev "
+                "libstdc++-13-dev ninja-build ccache gdb libboost-dev "
                 "libdouble-conversion-dev libelf-dev zlib1g-dev"
             ),
         ],
@@ -68,13 +68,15 @@ def _silk_ci_image_test_component():
             "test -x /usr/bin/cmake",
             "test -x /usr/bin/ninja",
             "test -x /usr/bin/ccache",
+            "test -x /usr/bin/gdb",
             "clang-21 --version",
             "clang-format-21 --version",
             "cmake --version",
             "ninja --version",
             "ccache --version",
+            "gdb --version",
             (
-                "for package in llvm-21 libstdc++-13-dev libboost-dev "
+                "for package in llvm-21 libstdc++-13-dev gdb libboost-dev "
                 "libdouble-conversion-dev libelf-dev zlib1g-dev; do "
                 "dpkg-query -W -f='${Status}\\n' \"$package\" "
                 "| grep -qx 'install ok installed'; done"
@@ -149,7 +151,7 @@ def _praktika_launch_user_data():
 
 
 def _image_builders():
-    image_recipe_version = "1.0.9"
+    image_recipe_version = "1.0.10"
     prebuilt_venvs = [
         ImageBuilder.PrebuiltVenv(
             name=PRAKTIKA_BASE_VENV,
