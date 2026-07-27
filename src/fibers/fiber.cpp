@@ -312,6 +312,12 @@ Fiber::~Fiber() noexcept
     {
         int r = ::munmap(stack, FiberScheduler::getOptions().fiberStackSize + 2 * kPageSize);
         SILK_ASSERT(!r);
+
+        if (FiberScheduler::getOptions().accountMemoryUnmapped)
+        {
+            FiberScheduler::getOptions().accountMemoryUnmapped(
+                static_cast<uint8_t *>(stack) + kPageSize, FiberScheduler::getOptions().fiberStackSize);
+        }
     }
 }
 
@@ -347,6 +353,11 @@ bool Fiber::initialize(
 
         r = ::mprotect(static_cast<uint8_t *>(stack) + kPageSize + fiberStackSize, kPageSize, PROT_NONE);
         SILK_ASSERT(!r);
+
+        if (FiberScheduler::getOptions().accountMemoryMapped)
+        {
+            FiberScheduler::getOptions().accountMemoryMapped(static_cast<uint8_t *>(stack) + kPageSize, fiberStackSize);
+        }
     }
 
 #if defined(__SANITIZE_ADDRESS__)
@@ -691,6 +702,23 @@ struct FiberScheduler::ProcessorState
     BoundedQueue<Fiber *> readyQueue;
 };
 
+static void accountRingMemoryMappings(const io_uring & ring, MemoryMapCallback * callback) noexcept
+{
+    if (!callback)
+    {
+        return;
+    }
+
+    callback(ring.sq.sqes, ring.sq.sqes_sz);
+    callback(ring.sq.ring_ptr, ring.sq.ring_sz);
+
+    // The kernel serves both rings from one mapping given IORING_FEAT_SINGLE_MMAP.
+    if (ring.cq.ring_ptr != ring.sq.ring_ptr)
+    {
+        callback(ring.cq.ring_ptr, ring.cq.ring_sz);
+    }
+}
+
 void FiberScheduler::ProcessorState::initialize(uint16_t cpu) noexcept
 {
     SILK_ASSERT(cpu < kInvalidProcessorNumber);
@@ -712,6 +740,8 @@ void FiberScheduler::ProcessorState::initialize(uint16_t cpu) noexcept
     // postWakeup posts cross-ring doorbells with IOSQE_CQE_SKIP_SUCCESS to drop the send-side completion.
     SILK_ASSERT(params.features & IORING_FEAT_CQE_SKIP);
 
+    accountRingMemoryMappings(ring, options.accountMemoryMapped);
+
     // Arm the wakeup doorbell. The kernel can end the multishot poll on CQ overflow,
     // so handleCompletionQueueSlow re-arms it through the same path on F_MORE loss.
     enqueueDoorbell();
@@ -729,6 +759,7 @@ void FiberScheduler::ProcessorState::destroy() noexcept
 {
     if (eventFd >= 0)
     {
+        accountRingMemoryMappings(ring, options.accountMemoryUnmapped);
         ::io_uring_queue_exit(&ring);
         ::close(eventFd);
     }
