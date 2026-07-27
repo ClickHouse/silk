@@ -8,6 +8,7 @@
 
 #include <atomic>
 #include <cerrno>
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <utility>
@@ -42,6 +43,11 @@ using FiberParametersDtor = void(void * parameters) noexcept;
  * Fiber switch callback.  Called when fiber suspended/resumed.
  */
 using FiberSwitchCallback = void(Fiber * fiber) noexcept;
+
+/**
+ * Memory mapping callback.  Called when silk maps or unmaps memory outside the C++ heap.
+ */
+using MemoryMapCallback = void(void * ptr, size_t size) noexcept;
 
 /**
  * Packed fiber identity: [category:8 | cpu:10 | counter:46] stored as uint64_t.
@@ -165,6 +171,11 @@ public:
         // across the OS thread the fiber borrows. Not invoked for proxy fibers.
         FiberSwitchCallback * fiberSuspend = nullptr;
         FiberSwitchCallback * fiberResume = nullptr;
+
+        // Optional hooks for silk memory maps/unmaps outside the heap: fiber stacks (guard pages
+        // excluded) and io_uring rings.
+        MemoryMapCallback * accountMemoryMapped = nullptr;
+        MemoryMapCallback * accountMemoryUnmapped = nullptr;
     };
 
     /**
