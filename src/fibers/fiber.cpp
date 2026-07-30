@@ -279,8 +279,11 @@ static_assert(offsetof(Fiber, parameters) == FIBER_PARAMETERS_OFFSET);
 using WaitStack = LockFreeStack<Fiber, &Fiber::stackEntry>;
 using SuspendedList = List<Fiber, &Fiber::suspendedEntry>;
 
-// Current fiber running on this OS thread; null when idle.
-static thread_local Fiber * threadFiber = nullptr;
+// Current fiber running on this OS thread; null when idle.  External linkage on purpose:
+// clang emits no DWARF location for thread-locals on aarch64, and gdb can resolve the TLS
+// address of an external symbol through the ELF symbol table - fiber.py reads this variable
+// on every thread to list RUNNING fibers.
+thread_local Fiber * threadFiber = nullptr;
 
 // Proxy fiber for the current non-fiber thread; destroyed at thread exit.
 static thread_local std::unique_ptr<Fiber> proxyFiber;
