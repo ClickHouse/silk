@@ -1521,6 +1521,15 @@ FiberScheduler::ProcessorState * FiberScheduler::enqueueReady(ProcessorState * p
             {
                 fiber->processorNumber = processor->number;
             }
+#if !defined(NDEBUG) || defined(__SANITIZE_THREAD__)
+            else if (scheduler->schedulerThreadCount > 1)
+            {
+                do
+                {
+                    fiber->processorNumber = (fiber->processorNumber + 1) % scheduler->processorCount;
+                } while (!CPU_ISSET(fiber->processorNumber, &scheduler->activeMask));
+            }
+#endif
 
             ProcessorState * target = &scheduler->processorState[fiber->processorNumber];
             if (target->readyQueue.enqueue(fiber))
