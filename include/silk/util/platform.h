@@ -39,12 +39,18 @@ extern "C" ptrdiff_t rseq_offset;
 namespace silk
 {
 
-/** System page size in bytes. */
+/** Retrieves system page size in bytes. */
+static inline uint64_t getPageSize() noexcept
+{
 #if defined(PAGE_SIZE)
-static constexpr uint64_t kPageSize = PAGE_SIZE;
+    return PAGE_SIZE;
 #else
-static constexpr uint64_t kPageSize = 4096;
+    // We don't need to cache the value - this call doesn't result in a syscall
+    // and just fetches a value from memory which is supposed to be initialized
+    // by glibc.
+    return ::sysconf(_SC_PAGESIZE);
 #endif
+}
 
 /** Cache line size in bytes. */
 #if defined(CACHE_LINESIZE)
