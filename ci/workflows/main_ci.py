@@ -5,6 +5,7 @@ from ci.workflows.jobs import (
     COVERAGE_HTML_ARTIFACT,
     FMT_JOB,
     PUBLISH_COVERAGE_REPORT_JOB,
+    REBUILD_CLICKHOUSE_PUBLIC_JOB,
     TEST_AMD,
     TEST_ARM,
 )
@@ -24,6 +25,7 @@ WORKFLOWS = [
         jobs=[
             *_TEST_JOBS,
             PUBLISH_COVERAGE_REPORT_JOB.set_run_after(_TEST_JOBS),
+            REBUILD_CLICKHOUSE_PUBLIC_JOB.set_run_after(_TEST_JOBS),
         ],
         artifacts=[COVERAGE_HTML_ARTIFACT],
         enable_cache=True,

@@ -76,3 +76,11 @@ PUBLISH_COVERAGE_REPORT_JOB = Job.Config(
     timeout=30 * 60,
     enable_gh_auth=True,
 )
+
+REBUILD_CLICKHOUSE_PUBLIC_JOB = Job.Config(
+    name="Rebuild clickhouse-public",
+    runs_on=[RunnerLabels.SMALL_ARM],
+    command="python3 ./ci/jobs/rebuild_clickhouse_public.py",
+    timeout=15 * 60,
+    enable_gh_auth=True,
+)
