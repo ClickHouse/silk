@@ -1,12 +1,14 @@
 #pragma once
 
 #include <silk/fibers/future.h>
+#include <silk/util/platform.h>
 #include <silk/util/sanitizers.h>
 #include <silk/util/stack.h>
 #include <silk/util/tree.h>
 
 #include <atomic>
 #include <cerrno>
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <utility>
@@ -41,6 +43,11 @@ using FiberParametersDtor = void(void * parameters) noexcept;
  * Fiber switch callback.  Called when fiber suspended/resumed.
  */
 using FiberSwitchCallback = void(Fiber * fiber) noexcept;
+
+/**
+ * Memory mapping callback.  Called when silk maps or unmaps memory outside the C++ heap.
+ */
+using MemoryMapCallback = void(void * ptr, size_t size) noexcept;
 
 /**
  * Packed fiber identity: [category:8 | cpu:10 | counter:46] stored as uint64_t.
@@ -100,6 +107,9 @@ public:
      */
     struct Options
     {
+        /** Return the cpu_set_t with every CPU set - the cpuMask default. */
+        static cpu_set_t defaultCpuMask() noexcept;
+
         // Per-fiber stack size in bytes. Must be a multiple of the system page size.
         // The pool also reserves two guard pages adjacent to each stack.
         uint32_t fiberStackSize = 64 * 1024;
@@ -146,6 +156,13 @@ public:
         // Production should leave this off.
         bool disableWorkStealing = false;
 
+        // Restrict scheduler and worker threads to the CPUs whose bit is set
+        // here, intersected with the affinity mask of the thread calling
+        // initialize. All CPUs are set by default, admitting the whole affinity
+        // mask; clear the bits of CPUs to reserve (CPU_CLR). The intersection
+        // must be non-empty.
+        cpu_set_t cpuMask = defaultCpuMask();
+
         // Optional per-fiber context-switch hooks. fiberResume fires on the
         // thread about to run the fiber, immediately before control enters it
         // (first run and every resume); fiberSuspend fires on the same thread
@@ -154,6 +171,11 @@ public:
         // across the OS thread the fiber borrows. Not invoked for proxy fibers.
         FiberSwitchCallback * fiberSuspend = nullptr;
         FiberSwitchCallback * fiberResume = nullptr;
+
+        // Optional hooks for silk memory maps/unmaps outside the heap: fiber stacks (guard pages
+        // excluded) and io_uring rings.
+        MemoryMapCallback * accountMemoryMapped = nullptr;
+        MemoryMapCallback * accountMemoryUnmapped = nullptr;
     };
 
     /**
@@ -456,8 +478,8 @@ public:
     writeFixed(int fd, const void * buf, uint32_t len, uint64_t offset, int bufIndex, uint64_t * bytesWritten, IoFuture * future) noexcept;
 
     /**
-     * Register a fixed buffer set on every per-CPU io_uring ring, so a fiber that
-     * is work-stolen to another CPU can still submit READ_FIXED/WRITE_FIXED
+     * Register a fixed buffer set on every active CPU's io_uring ring, so a fiber
+     * that is work-stolen to another CPU can still submit READ_FIXED/WRITE_FIXED
      * referencing the same index. Call once after initialize(), before issuing any
      * fixed-buffer IO. @p count buffers are addressable as bufIndex 0..count-1.
      *
@@ -466,9 +488,9 @@ public:
      * trips an assert.
      *
      * Each ring pins its own copy of the buffers in memory, so the total locked
-     * memory is (number of CPUs) * (size of all buffers). With many CPUs or large
-     * buffers this can go over the RLIMIT_MEMLOCK limit; if it does, registration
-     * fails and trips an assert.
+     * memory is (number of active CPUs) * (size of all buffers). With many CPUs or
+     * large buffers this can go over the RLIMIT_MEMLOCK limit; if it does,
+     * registration fails and trips an assert.
      *
      * Not NUMA-aware. Registration only pins the existing pages (it never copies
      * or migrates them), so the physical pages stay on whatever node first-touched
@@ -688,6 +710,7 @@ private:
         std::destroy_at(static_cast<T *>(p));
     }
 
+    static ProcessorState * currentProcessor() noexcept;
     static void buildStealCandidates() noexcept;
     static Fiber *
     allocateFiber(FiberMain * fiberMain, FiberParametersDtor * parametersDtor, uint8_t category, FiberFuture * future) noexcept;

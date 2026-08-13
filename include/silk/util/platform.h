@@ -39,12 +39,18 @@ extern "C" ptrdiff_t rseq_offset;
 namespace silk
 {
 
-/** System page size in bytes. */
+/** Retrieves system page size in bytes. */
+static inline uint64_t getPageSize() noexcept
+{
 #if defined(PAGE_SIZE)
-static constexpr uint64_t kPageSize = PAGE_SIZE;
+    return PAGE_SIZE;
 #else
-static constexpr uint64_t kPageSize = 4096;
+    // We don't need to cache the value - this call doesn't result in a syscall
+    // and just fetches a value from memory which is supposed to be initialized
+    // by glibc.
+    return ::sysconf(_SC_PAGESIZE);
 #endif
+}
 
 /** Cache line size in bytes. */
 #if defined(CACHE_LINESIZE)
@@ -53,8 +59,9 @@ static constexpr uint64_t kCacheLineSize = CACHE_LINESIZE;
 static constexpr uint64_t kCacheLineSize = 64;
 #endif
 
-/** Hard cap on CPU index (largest known socket: 384 cores). */
+/** Sentinel for an absent processor and exclusive upper bound on valid CPU ids (largest known socket: 384 cores). */
 static constexpr uint16_t kInvalidProcessorNumber = (1 << 10);
+static_assert(kInvalidProcessorNumber <= CPU_SETSIZE, "raw CPU ids up to kInvalidProcessorNumber must be addressable in a cpu_set_t");
 
 /** Round @p value up to the nearest multiple of @p align (must be a power of two). */
 template <typename T>
@@ -106,10 +113,10 @@ static T * containerOf(M * member, M T::* memberPtr) noexcept
     return reinterpret_cast<T *>(reinterpret_cast<uint8_t *>(member) - memberOffset(memberPtr));
 }
 
-/** Return the total number of online processors. */
+/** Return the number of configured processors - covers offline-but-present CPUs, so a raw CPU id indexes per-CPU state in bounds. */
 static inline uint16_t getProcessorCount() noexcept
 {
-    return static_cast<uint16_t>(sysconf(_SC_NPROCESSORS_ONLN));
+    return static_cast<uint16_t>(sysconf(_SC_NPROCESSORS_CONF));
 }
 
 /** Return the number of processors available to the calling process (respects taskset/cgroup affinity). */

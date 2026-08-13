@@ -2,6 +2,7 @@
 
 #include <silk/fibers/fiber.h>
 #include <silk/fibers/future.h>
+#include <silk/util/sanitizers.h>
 
 #include <gtest/gtest.h>
 
@@ -44,6 +45,31 @@ TEST(FiberSequencer, waitAlreadySatisfied)
 
     // blocking form; must return immediately
     EXPECT_EQ(sequencer.wait(1), 0);
+}
+
+TEST(FiberSequencer, resetRebasesBelowCounter)
+{
+    FiberSequencer sequencer;
+    bool advanced = sequencer.advance(10);
+    ASSERT_TRUE(advanced);
+
+    sequencer.reset(3);
+    ASSERT_EQ(sequencer.get(), 3u);
+
+    // A wait at or below the rebased counter completes immediately.
+    int r = sequencer.wait(3);
+    ASSERT_EQ(r, 0);
+
+    // A wait above it parks until advance reaches the token again.
+    FiberSequencer::Future future;
+    sequencer.wait(4, &future);
+    int err;
+    ASSERT_FALSE(future.isSet(&err));
+
+    advanced = sequencer.advance(4);
+    ASSERT_TRUE(advanced);
+    ASSERT_TRUE(future.isSet(&err));
+    ASSERT_EQ(err, 0);
 }
 
 TEST(FiberSequencer, stopCancelsUnreachedWaiters)
@@ -539,6 +565,16 @@ TEST(FiberSequencer, lostWakeupUnderContention)
     const uint32_t threads = std::min(8u, cores); // incrementers, and the waiter's (final) token
 
     uint64_t iters = 200'000;
+#if defined(__SANITIZE_THREAD__)
+    // The high count is what reproduces the StoreLoad reordering this test
+    // asserts on, but TSan cannot observe that reordering: it detects data races
+    // through a happens-before model, and a missing StoreLoad fence between
+    // atomics is a memory-model bug, not a race. So the full count buys no
+    // coverage under TSan while costing about 6 ms per iteration on an 8-CPU box,
+    // pushing the run past the ctest timeout. A small count still drives the same
+    // paths for TSan's race detection, which saturates in far fewer iterations.
+    iters = 2'000;
+#endif
     if (const char * env = std::getenv("SILK_SEQ_LITMUS_ITERS"))
     {
         iters = std::strtoull(env, nullptr, 10);

@@ -122,7 +122,7 @@ void FiberFuture::suspendCallback(Fiber * fiber, FiberFuture * future) noexcept
     }
 }
 
-uint64_t FiberFuture::waitForMultiple(FiberFuture ** futureArray, uint64_t futureArraySize) noexcept
+uint64_t FiberFuture::waitForMultiple(FiberFuture ** futureArray, uint64_t futureArraySize, uint64_t * waitCycles) noexcept
 {
     if (futureArraySize == 0)
     {
@@ -130,7 +130,7 @@ uint64_t FiberFuture::waitForMultiple(FiberFuture ** futureArray, uint64_t futur
     }
     if (futureArraySize == 1)
     {
-        futureArray[0]->wait();
+        futureArray[0]->wait(waitCycles);
         return 0;
     }
 
@@ -164,7 +164,7 @@ uint64_t FiberFuture::waitForMultiple(FiberFuture ** futureArray, uint64_t futur
     if (multipleWaitCount == futureArraySize)
     {
         // all attached; block until first signals
-        completionFuture.wait();
+        completionFuture.wait(waitCycles);
     }
 
     //
@@ -257,13 +257,13 @@ bool FiberFuture::detachWaiter(MultipleWaitState * waitState) noexcept
     }
 }
 
-int FiberFuture::waitWithTimeout(FiberFuture * future, uint64_t nanoseconds) noexcept
+int FiberFuture::waitWithTimeout(FiberFuture * future, uint64_t nanoseconds, uint64_t * waitCycles) noexcept
 {
     FiberScheduler::SleepFuture sleepFuture;
     FiberScheduler::sleep(nanoseconds, &sleepFuture);
 
     FiberFuture * futureArray[] = {future, &sleepFuture};
-    waitForMultiple(futureArray, std::size(futureArray));
+    waitForMultiple(futureArray, std::size(futureArray), waitCycles);
 
     int r;
     if (future->isSet(&r))
@@ -278,7 +278,7 @@ int FiberFuture::waitWithTimeout(FiberFuture * future, uint64_t nanoseconds) noe
     // Must wait before returning: the sleep tree holds a raw pointer to sleepFuture,
     // and cancelQueue may also reference it. Returning before the sleep is fully
     // resolved would free the stack-allocated future while it is still reachable.
-    sleepFuture.wait();
+    sleepFuture.wait(waitCycles);
     return r;
 }
 

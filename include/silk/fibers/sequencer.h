@@ -107,7 +107,7 @@ public:
      * Wakes all futures whose token is now reached.
      * Returns true if the counter was advanced, false if it was already >= @p value.
      */
-    [[nodiscard]] bool advance(uint64_t value) noexcept
+    bool advance(uint64_t value) noexcept
     {
         uint64_t current = counter.load(std::memory_order_relaxed);
         for (;;)
@@ -125,6 +125,13 @@ public:
         drain();
         return true;
     }
+
+    /**
+     * Rebase the counter to @p value, up or down. The stopped state is preserved. The caller guarantees
+     * quiescence: no registered waiter - neither tree-resident nor still in the request queue - and no
+     * concurrent increment / advance / wait / stop.
+     */
+    void reset(uint64_t value) noexcept;
 
     /**
      * Transition into the stopped state and wake every unreached waiter with

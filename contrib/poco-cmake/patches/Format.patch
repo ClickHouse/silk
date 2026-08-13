@@ -1,0 +1,92 @@
+--- contrib/poco/Foundation/src/Format.cpp	2026-05-15 20:35:56.227757039 +0000
++++ contrib/poco-cmake/patches/Format.cpp.new	2026-07-23 18:12:03.457035646 +0000
+@@ -309,7 +309,7 @@
+ {
+ 	std::vector<Any> args;
+ 	args.push_back(value);
+-	format(result, fmt, args);
++	Poco::format(result, fmt, args);
+ }
+ 
+ 
+@@ -318,7 +318,7 @@
+ 	std::vector<Any> args;
+ 	args.push_back(value1);
+ 	args.push_back(value2);
+-	format(result, fmt, args);
++	Poco::format(result, fmt, args);
+ }
+ 
+ 
+@@ -328,7 +328,7 @@
+ 	args.push_back(value1);
+ 	args.push_back(value2);
+ 	args.push_back(value3);
+-	format(result, fmt, args);
++	Poco::format(result, fmt, args);
+ }
+ 
+ 
+@@ -339,7 +339,7 @@
+ 	args.push_back(value2);
+ 	args.push_back(value3);
+ 	args.push_back(value4);
+-	format(result, fmt, args);
++	Poco::format(result, fmt, args);
+ }
+ 
+ 
+@@ -351,7 +351,7 @@
+ 	args.push_back(value3);
+ 	args.push_back(value4);
+ 	args.push_back(value5);
+-	format(result, fmt, args);
++	Poco::format(result, fmt, args);
+ }
+ 
+ 
+@@ -364,7 +364,7 @@
+ 	args.push_back(value4);
+ 	args.push_back(value5);
+ 	args.push_back(value6);
+-	format(result, fmt, args);
++	Poco::format(result, fmt, args);
+ }
+ 
+ 
+@@ -378,7 +378,7 @@
+ 	args.push_back(value5);
+ 	args.push_back(value6);
+ 	args.push_back(value7);
+-	format(result, fmt, args);
++	Poco::format(result, fmt, args);
+ }
+ 
+ 
+@@ -393,7 +393,7 @@
+ 	args.push_back(value6);
+ 	args.push_back(value7);
+ 	args.push_back(value8);
+-	format(result, fmt, args);
++	Poco::format(result, fmt, args);
+ }
+ 
+ 
+@@ -409,7 +409,7 @@
+ 	args.push_back(value7);
+ 	args.push_back(value8);
+ 	args.push_back(value9);
+-	format(result, fmt, args);
++	Poco::format(result, fmt, args);
+ }
+ 
+ 
+@@ -426,7 +426,7 @@
+ 	args.push_back(value8);
+ 	args.push_back(value9);
+ 	args.push_back(value10);
+-	format(result, fmt, args);
++	Poco::format(result, fmt, args);
+ }
+ 
+ 

@@ -3,6 +3,20 @@ set(POCO_SRC ${CMAKE_SOURCE_DIR}/contrib/poco)
 find_package(ZLIB REQUIRED)
 find_package(double-conversion REQUIRED)
 
+# Patches are applied to copies in the build dir so the submodule stays clean.
+function(poco_patch_source module stem)
+    execute_process(
+        COMMAND patch
+        -o ${CMAKE_CURRENT_BINARY_DIR}/${stem}.cpp
+        ${POCO_SRC}/${module}/src/${stem}.cpp
+        INPUT_FILE ${CMAKE_CURRENT_SOURCE_DIR}/patches/${stem}.patch
+        RESULT_VARIABLE _patch_result
+    )
+    if(NOT _patch_result EQUAL 0)
+        message(FATAL_ERROR "Failed to patch ${stem}.cpp (exit code ${_patch_result})")
+    endif()
+endfunction()
+
 # PCRE - bundled regex library in Foundation
 file(GLOB POCO_PCRE_SRCS ${POCO_SRC}/Foundation/src/pcre_*.c)
 add_library(_poco_foundation_pcre ${POCO_PCRE_SRCS})
@@ -13,6 +27,11 @@ target_compile_options(_poco_foundation_pcre PRIVATE -w)
 file(GLOB POCO_FOUNDATION_SRCS ${POCO_SRC}/Foundation/src/*.cpp)
 list(FILTER POCO_FOUNDATION_SRCS EXCLUDE REGEX
     ".*_(UNIX|POSIX|WIN32|WIN32U|WINCE|VX|DEC|HPUX|QNX|SUN|STD|DUMMY|C99|Android)\\.cpp$|.*(EventLogChannel|WindowsConsoleChannel)\\.cpp$")
+
+# Format.cpp - its unqualified format calls are ambiguous with std::format found by ADL
+poco_patch_source(Foundation Format)
+list(FILTER POCO_FOUNDATION_SRCS EXCLUDE REGEX ".*/Foundation/src/Format\\.cpp$")
+list(APPEND POCO_FOUNDATION_SRCS ${CMAKE_CURRENT_BINARY_DIR}/Format.cpp)
 
 add_library(_poco_foundation ${POCO_FOUNDATION_SRCS})
 add_library(Poco::Foundation ALIAS _poco_foundation)
@@ -32,7 +51,6 @@ target_link_libraries(_poco_foundation PRIVATE
 )
 
 # Net - patch stream files that use a shared MemoryPool (mutex contention at high concurrency)
-# Patches are applied to copies in the build dir so the submodule stays clean.
 set(POCO_NET_PATCHED_FILES
     HTTPBufferAllocator
     HTTPFixedLengthStream
@@ -42,16 +60,7 @@ set(POCO_NET_PATCHED_FILES
 )
 
 foreach(stem IN LISTS POCO_NET_PATCHED_FILES)
-    execute_process(
-        COMMAND patch
-        -o ${CMAKE_CURRENT_BINARY_DIR}/${stem}.cpp
-        ${POCO_SRC}/Net/src/${stem}.cpp
-        INPUT_FILE ${CMAKE_CURRENT_SOURCE_DIR}/patches/${stem}.patch
-        RESULT_VARIABLE _patch_result
-    )
-    if(_patch_result GREATER 1)
-        message(FATAL_ERROR "Failed to patch ${stem}.cpp (exit code ${_patch_result})")
-    endif()
+    poco_patch_source(Net ${stem})
 endforeach()
 
 file(GLOB POCO_NET_SRCS ${POCO_SRC}/Net/src/*.cpp)

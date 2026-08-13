@@ -101,9 +101,10 @@ public:
      *
      * @param futureArray     Array of futures to watch.
      * @param futureArraySize Number of futures in the array.
+     * @param waitCycles      Optional accumulator for cycles spent suspended.
      * @return                Index of a future that is set on return.
      */
-    static uint64_t waitForMultiple(FiberFuture ** futureArray, uint64_t futureArraySize) noexcept;
+    static uint64_t waitForMultiple(FiberFuture ** futureArray, uint64_t futureArraySize, uint64_t * waitCycles = nullptr) noexcept;
 
     /**
      * Wait for @p future with a timeout. Blocks until @p future is set or
@@ -115,8 +116,9 @@ public:
      *
      * @param future      Future to wait on.
      * @param nanoseconds Maximum time to wait in nanoseconds.
+     * @param waitCycles  Optional accumulator for cycles spent suspended.
      */
-    [[nodiscard]] static int waitWithTimeout(FiberFuture * future, uint64_t nanoseconds) noexcept;
+    [[nodiscard]] static int waitWithTimeout(FiberFuture * future, uint64_t nanoseconds, uint64_t * waitCycles = nullptr) noexcept;
 
     /**
      * Set the same result on a batch of futures and wake their waiters together. Equivalent to calling

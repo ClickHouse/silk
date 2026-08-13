@@ -30,11 +30,13 @@ def _fail(msg):
     print(f"FAIL: {msg}")
 
 
-def _check(condition, msg):
+def _check(condition, msg, dump=None):
     if condition:
         print(f"PASS: {msg}")
     else:
         _fail(msg)
+        if dump is not None:
+            print(f"---- command output ----\n{dump}---- end command output ----")
 
 
 def _run_tests():
@@ -42,7 +44,7 @@ def _run_tests():
 
     out = gdb.execute("fiber-list", to_string=True)
 
-    _check("RUNNING" in out, "fiber-list: spinner appears as RUNNING")
+    _check("RUNNING" in out, "fiber-list: spinner appears as RUNNING", dump=out)
 
     n_suspended = out.count("SUSPENDED")
     # holder (waiting on g_release) + N_WAITERS (blocked on g_mutex) are all
@@ -50,6 +52,7 @@ def _run_tests():
     _check(
         n_suspended >= N_WAITERS + 1,
         f"fiber-list: at least {N_WAITERS + 1} SUSPENDED fibers, got {n_suspended}",
+        dump=out,
     )
 
     # Extract one SUSPENDED fiber address (format: "  0x<16 hex>  SUSPENDED  ...")
@@ -60,7 +63,11 @@ def _run_tests():
             suspended_ptr = m.group(1)
             break
 
-    _check(suspended_ptr is not None, "fiber-list: parsed a SUSPENDED Fiber* address")
+    _check(
+        suspended_ptr is not None,
+        "fiber-list: parsed a SUSPENDED Fiber* address",
+        dump=out,
+    )
     if suspended_ptr is None:
         return  # cannot continue without an address
 

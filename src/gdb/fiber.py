@@ -375,8 +375,8 @@ def _walk_thread_fibers(show_proxy=False):
                 if ptr:
                     if show_proxy or not bool(_fiber_val(ptr)["isProxyFiber"]):
                         yield (thread, ptr)
-            except gdb.error:
-                pass
+            except gdb.error as error:
+                print(f"warning: thread {thread.num}: cannot read threadFiber: {error}")
     finally:
         if orig and orig.is_valid():
             orig.switch()

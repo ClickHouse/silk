@@ -2,15 +2,23 @@
 
 ## Overview
 
-This is a cooperative fiber scheduler with per-CPU threads and io_uring integration. Each CPU runs one scheduler thread that owns its own io_uring ring, ready queue, sleep tree, and wakeup signaling infrastructure.
+This is a cooperative fiber scheduler with per-CPU threads and io_uring integration. Each CPU in the active set runs one scheduler thread that owns its own io_uring ring, ready queue, sleep tree, and wakeup signaling infrastructure.
 
 Source lives under `src/fibers/`. Data structures and utilities are in `src/util/` (see `docs/util.md`). Synchronization primitives are in `docs/sync.md`.
 
 ---
 
+## Active CPU Set
+
+The active set is the affinity mask of the thread calling `initialize` (`sched_getaffinity`) intersected with `Options::cpuMask`, a `cpu_set_t` of allowed CPUs with every CPU set by default, admitting the whole affinity mask. A scheduler thread is started and pinned only on each active CPU, and the thread-mode worker pool is pinned to the set of active CPUs, so silk schedules no fiber on a CPU outside the active set (a proxy fiber is the caller's own thread and runs wherever that thread runs). This lets a user reserve CPUs for other activity - busy-loop pollers, for example - by clearing their bits in `cpuMask`.
+
+`processorState` is sized to every configured CPU and indexed by raw CPU id, so a CPU left out of the active set keeps `number == kInvalidProcessorNumber` and owns no ring or ready queue. Work injected from a thread running on such a CPU (a reserved-core poller calling `run`, `schedule`, `sleep`, or IO) is redirected to a home active CPU: each configured CPU maps to itself when active, or to an active CPU chosen round-robin when not, so injection lands on a real ring and spreads across the active set instead of piling onto one. The redirect keys off the current CPU read fresh on every call, so a fiber that migrates mid-flight is always routed by the CPU it currently runs on.
+
+---
+
 ## Scheduler Loop
 
-`FiberScheduler` runs one scheduler thread per CPU, each owning:
+`FiberScheduler` runs one scheduler thread per active CPU, each owning:
 
 - An io_uring ring (256 entries by default, `Options::ioUringQueueSize`) for async IO
 - An eventfd for cross-CPU wakeup signaling
@@ -34,7 +42,7 @@ Fiber lifecycle: `SUSPENDED -> READY -> RUNNING -> STOPPED`. `SUSPEND_REQUESTED`
 
 `FiberState` is defined in `fiber.cpp` (not `fiber.h`) as an implementation detail. `SleepFuture`, `SleepStack`, and `SleepTree` are declared/aliased in the private section of `FiberScheduler` (in `fiber.h`) so they are accessible from `fiber.cpp`.
 
-`processorNumber` tracks which CPU's ready queue the fiber targets. It is set by `schedule()` on first dispatch (assigned to the current CPU when still `UINT32_MAX`) and updated by `runStealLoop` when a fiber is stolen (reassigned to the stealing CPU). When a fiber runs on a worker thread via thread mode, `processorNumber` is not updated - the fiber returns to its last assigned CPU's queue on `exitThreadMode()`.
+`processorNumber` tracks which CPU's ready queue the fiber targets. It is set by `schedule()` on first dispatch (assigned to the scheduling caller's home processor when still `kInvalidProcessorNumber`) and updated by `runStealLoop` when a fiber is stolen (reassigned to the stealing CPU). When a fiber runs on a worker thread via thread mode, `processorNumber` is not updated - the fiber returns to its last assigned CPU's queue on `exitThreadMode()`.
 
 ---
 
@@ -73,7 +81,7 @@ A fiber that needs to make blocking syscalls or perform heavy CPU work can escap
 There are two ready queues:
 
 - **Per-CPU ready queue** (`ProcessorState::readyQueue`) - bounded MPMC queue drained by the CPU's scheduler thread. Normal cooperative fibers live here.
-- **Shared ready queue** (`SchedulerState::readyQueue`) - unbounded MPMC queue drained by the worker thread pool (one worker thread per CPU, sized `workerThreadCount == schedulerThreadCount`, running `runThreadWorker`). Thread-mode fibers live here, and normal fibers overflow here when a CPU ready queue is full.
+- **Shared ready queue** (`SchedulerState::readyQueue`) - unbounded MPMC queue drained by the worker thread pool (one worker thread per active CPU, sized `workerThreadCount == schedulerThreadCount`, pinned to the active set, running `runThreadWorker`). Thread-mode fibers live here, and normal fibers overflow here when a CPU ready queue is full.
 
 `enterThreadMode()` sets `fiber->inThreadMode` and calls `schedule()`, which routes the fiber to the shared ready queue. A worker thread dequeues it and runs it via `runFiber(nullptr, fiber)`, where it may block freely. When the fiber suspends inside thread mode (e.g. waiting on a future), `schedule()` re-enqueues it to the shared ready queue when it is woken - any free worker picks it up.
 
@@ -121,10 +129,10 @@ Each of `read`, `write`, and `poll` has two overloads: a blocking form that subm
 
 `readFixed` / `writeFixed` are async-only counterparts to `read`/`write` that submit `IORING_OP_READ_FIXED` / `IORING_OP_WRITE_FIXED` against a buffer that was pre-registered with the kernel via `registerBuffers`. Instead of passing an iovec the kernel must pin per IO, the caller passes a `(buf, len)` plus the `bufIndex` of a previously registered buffer; the kernel reuses the pre-pinned page mapping and skips the per-IO page-pin and iovec import. `buf` must lie inside the registered buffer at `bufIndex`.
 
-`registerBuffers(iovecs, count)` registers one buffer set on **every** per-CPU io_uring ring, so a fiber that is work-stolen to another CPU can still submit fixed IO referencing the same index. Buffers are addressable as `bufIndex` `0..count-1`. Constraints:
+`registerBuffers(iovecs, count)` registers one buffer set on **every active** CPU's io_uring ring, so a fiber that is work-stolen to another CPU can still submit fixed IO referencing the same index. Buffers are addressable as `bufIndex` `0..count-1`. Constraints:
 
 - Call once, after `initialize()` and before issuing any fixed-buffer IO. io_uring allows a single buffer set per ring with no way to undo or change it, so a second call fails (`-EBUSY`) and trips an assert.
-- Each ring pins its own copy, so total locked memory is `(number of CPUs) * (size of all buffers)`. With many CPUs or large buffers this can exceed `RLIMIT_MEMLOCK`; registration then fails and trips an assert.
+- Each ring pins its own copy, so total locked memory is `(number of active CPUs) * (size of all buffers)`. With many CPUs or large buffers this can exceed `RLIMIT_MEMLOCK`; registration then fails and trips an assert.
 
 The underlying liburing helpers are `io_uring_register_buffers`, `io_uring_prep_read_fixed`, and `io_uring_prep_write_fixed`. `file-perf --fixed-buffers` exercises this path (see `docs/perf.md`).
 

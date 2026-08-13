@@ -2,6 +2,8 @@
 
 #include <cstdint>
 
+#include <sched.h>
+
 namespace silk
 {
 
@@ -30,5 +32,29 @@ uint64_t topologyCostCycles(const CpuTopology & first, const CpuTopology & secon
  * (pos - a) % d < c. Defaults are b=a, c=1, d=c. Exposed for unit tests.
  */
 bool cpuInCpulist(uint32_t cpu, const char * list) noexcept;
+
+/**
+ * Whether @p cpu belongs to the scheduler's active set: it must be in both the
+ * affinity mask @p affinityMask (the initializing thread's mask) and @p cpuMask.
+ */
+static inline bool isCpuActive(uint32_t cpu, const cpu_set_t & affinityMask, const cpu_set_t & cpuMask) noexcept
+{
+    return CPU_ISSET(cpu, &affinityMask) && CPU_ISSET(cpu, &cpuMask);
+}
+
+/**
+ * Pin the calling thread to the CPUs in @p cpuSet. The kernel migrates the
+ * thread off any excluded CPU before the call returns. Returns 0 or the errno
+ * from pthread_setaffinity_np.
+ */
+int pinThreadToCpus(const cpu_set_t & cpuSet) noexcept;
+
+/**
+ * Pin the calling thread to @p cpu. The kernel migrates the thread before the
+ * call returns, so on return the thread already runs on @p cpu and
+ * getCurrentProcessor observes it. Returns 0 or the errno from
+ * pthread_setaffinity_np.
+ */
+int pinThreadToCpu(uint16_t cpu) noexcept;
 
 } // namespace silk

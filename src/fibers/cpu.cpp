@@ -8,6 +8,7 @@
 #include <cstdlib>
 
 #include <fcntl.h>
+#include <pthread.h>
 #include <unistd.h>
 
 namespace silk
@@ -182,6 +183,20 @@ uint64_t topologyCostCycles(const CpuTopology & first, const CpuTopology & secon
     }
     // cross-NUMA ~500 us
     return Tsc::nanosecondsToCycles(500'000);
+}
+
+int pinThreadToCpus(const cpu_set_t & cpuSet) noexcept
+{
+    // pthread_setaffinity_np returns an error number directly (0 on success), not -1/errno.
+    return ::pthread_setaffinity_np(::pthread_self(), sizeof(cpuSet), &cpuSet);
+}
+
+int pinThreadToCpu(uint16_t cpu) noexcept
+{
+    cpu_set_t cpuSet;
+    CPU_ZERO(&cpuSet);
+    CPU_SET(cpu, &cpuSet);
+    return pinThreadToCpus(cpuSet);
 }
 
 } // namespace silk

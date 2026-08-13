@@ -7,6 +7,12 @@
 namespace silk
 {
 
+void FiberSequencer::reset(uint64_t value) noexcept
+{
+    SILK_ASSERT(waiters.empty() && requestQueue.empty() && cancelQueue.empty());
+    counter.store(value, std::memory_order_release);
+}
+
 void FiberSequencer::registerWaiter(uint64_t token, Future * future) noexcept
 {
     // Slow path: register future in the request queue for the next combiner to process.
