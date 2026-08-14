@@ -2,7 +2,7 @@ if(NOT TARGET Libbpf::Libbpf)
     return()
 endif()
 
-set(BPFTOOL_SRC ${CMAKE_CURRENT_SOURCE_DIR}/../bpftool)
+set(BPFTOOL_SRC ${CMAKE_SOURCE_DIR}/contrib/bpftool)
 
 file(GLOB BPFTOOL_SOURCES ${BPFTOOL_SRC}/src/*.c)
 list(APPEND BPFTOOL_SOURCES ${BPFTOOL_SRC}/src/kernel/bpf/disasm.c)
