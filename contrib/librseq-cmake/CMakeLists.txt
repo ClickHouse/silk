@@ -1,4 +1,4 @@
-set(LIBRSEQ_SRC ${CMAKE_CURRENT_SOURCE_DIR}/../librseq)
+set(LIBRSEQ_SRC ${CMAKE_SOURCE_DIR}/contrib/librseq)
 
 add_library(librseq STATIC
     ${LIBRSEQ_SRC}/src/rseq.c

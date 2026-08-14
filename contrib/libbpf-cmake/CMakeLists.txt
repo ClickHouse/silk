@@ -6,7 +6,7 @@ if(NOT LIBELF_LIBRARY OR NOT LIBELF_INCLUDE_DIR)
 endif()
 find_package(ZLIB REQUIRED)
 
-set(LIBBPF_SRC ${CMAKE_CURRENT_SOURCE_DIR}/../libbpf)
+set(LIBBPF_SRC ${CMAKE_SOURCE_DIR}/contrib/libbpf)
 set(LIBBPF_BIN ${CMAKE_BINARY_DIR}/libbpf-generated)
 
 # Stage src/*.h under a bpf/ subdir so consumers can use <bpf/X.h>.
