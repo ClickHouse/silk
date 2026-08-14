@@ -136,6 +136,10 @@ Each of `read`, `write`, and `poll` has two overloads: a blocking form that subm
 
 The underlying liburing helpers are `io_uring_register_buffers`, `io_uring_prep_read_fixed`, and `io_uring_prep_write_fixed`. `file-perf --fixed-buffers` exercises this path (see `docs/perf.md`).
 
+### Splice
+
+`splice` submits `IORING_OP_SPLICE` in the same blocking and async forms as `read` and `write`, and moves bytes between two descriptors entirely inside the kernel. As with `splice(2)` at least one of the two descriptors must be a pipe, and the offsets apply only to seekable files, so a caller relaying a stream between two sockets moves the bytes through an intermediate pipe: one splice from the source socket into the pipe, another from the pipe into the destination socket. Nothing is copied into user space, so the throughput of such a relay does not depend on any user-space buffer size; `bytesSpliced` of zero means the source reached end of input.
+
 ---
 
 ## Sleep Cancellation

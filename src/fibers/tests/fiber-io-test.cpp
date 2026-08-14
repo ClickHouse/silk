@@ -9,6 +9,7 @@
 #include <string>
 #include <string_view>
 
+#include <fcntl.h>
 #include <poll.h>
 #include <unistd.h>
 
@@ -670,6 +671,78 @@ TEST(FiberIo, fixedWriteReadRoundTrip)
 
     std::free(buf);
     ::close(fd);
+}
+
+// splice: relay a stream from one socket to another through a pipe, the pattern
+// a proxy uses to forward traffic without copying it through user space. The
+// first leg goes through the blocking overload and the second through the async
+// one; a last splice on a source whose peer is gone reports end of input as
+// zero bytes moved.
+TEST(FiberIo, spliceThroughPipe)
+{
+    static constexpr char MESSAGE[] = "splice";
+
+    int source[2];
+    ASSERT_EQ(::socketpair(AF_UNIX, SOCK_STREAM, 0, source), 0);
+
+    int destination[2];
+    ASSERT_EQ(::socketpair(AF_UNIX, SOCK_STREAM, 0, destination), 0);
+
+    int pipeFds[2];
+    ASSERT_EQ(::pipe(pipeFds), 0);
+
+    ssize_t written = ::write(source[1], MESSAGE, sizeof(MESSAGE));
+    ASSERT_EQ(written, static_cast<ssize_t>(sizeof(MESSAGE)));
+
+    // Shut the write side so the source reports end of input once the payload is consumed.
+    int r = ::shutdown(source[1], SHUT_WR);
+    ASSERT_EQ(r, 0);
+
+    struct Params
+    {
+        int sourceFd;
+        int pipeReadFd;
+        int pipeWriteFd;
+        int destinationFd;
+
+        static int fiberMain(Params * params) noexcept
+        {
+            uint64_t bytesIntoPipe = 0;
+            int r = FiberScheduler::splice(params->sourceFd, -1, params->pipeWriteFd, -1, sizeof(MESSAGE), SPLICE_F_MOVE, &bytesIntoPipe);
+            EXPECT_EQ(r, 0);
+            EXPECT_EQ(bytesIntoPipe, sizeof(MESSAGE));
+
+            uint64_t bytesOutOfPipe = 0;
+            FiberScheduler::IoFuture future;
+            FiberScheduler::splice(
+                params->pipeReadFd, -1, params->destinationFd, -1, bytesIntoPipe, SPLICE_F_MOVE, &bytesOutOfPipe, &future);
+            EXPECT_EQ(future.wait(), 0);
+            EXPECT_EQ(bytesOutOfPipe, sizeof(MESSAGE));
+
+            uint64_t bytesAfterEndOfInput = 0;
+            r = FiberScheduler::splice(
+                params->sourceFd, -1, params->pipeWriteFd, -1, sizeof(MESSAGE), SPLICE_F_MOVE, &bytesAfterEndOfInput);
+            EXPECT_EQ(r, 0);
+            EXPECT_EQ(bytesAfterEndOfInput, 0u);
+
+            return 0;
+        }
+    };
+
+    r = FiberScheduler::run(Params::fiberMain, Params{source[0], pipeFds[0], pipeFds[1], destination[1]});
+    ASSERT_EQ(r, 0);
+
+    char buf[sizeof(MESSAGE)] = {};
+    ssize_t bytesRead = ::read(destination[0], buf, sizeof(buf));
+    ASSERT_EQ(bytesRead, static_cast<ssize_t>(sizeof(MESSAGE)));
+    ASSERT_STREQ(buf, MESSAGE);
+
+    ::close(source[0]);
+    ::close(source[1]);
+    ::close(destination[0]);
+    ::close(destination[1]);
+    ::close(pipeFds[0]);
+    ::close(pipeFds[1]);
 }
 
 } // namespace silk
