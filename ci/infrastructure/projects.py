@@ -151,7 +151,7 @@ def _praktika_launch_user_data():
 
 
 def _image_builders():
-    image_recipe_version = "1.0.10"
+    image_recipe_version = "1.0.11"
     prebuilt_venvs = [
         ImageBuilder.PrebuiltVenv(
             name=PRAKTIKA_BASE_VENV,
@@ -208,7 +208,6 @@ _IMAGE_BUILDERS_BY_NAME = {builder.name: builder for builder in _IMAGE_BUILDERS}
 PROJECTS = [
     CloudInfrastructure.Config(
         name=PROJECT_NAME,
-        min_praktika_version="0.1.4",
         vpcs=[
             VPC.Config(
                 subnets=[
@@ -254,6 +253,10 @@ PROJECTS = [
                 allow_all_secrets=False,
                 allow_all_s3_prefixes=False,
                 allow_ssm_debug=False,
+                # Ship kernel/OOM/systemd-kill evidence for the controller to
+                # the /silk/praktika-system CloudWatch stream; see praktika
+                # docs/logging.md.
+                ext={"system_logs": True},
             ),
             Components.RunnerPool(
                 name="amd-small",
@@ -271,6 +274,10 @@ PROJECTS = [
                 allow_all_secrets=False,
                 allow_all_s3_prefixes=False,
                 allow_ssm_debug=False,
+                # Ship kernel/OOM/systemd-kill evidence for the controller to
+                # the /silk/praktika-system CloudWatch stream; see praktika
+                # docs/logging.md.
+                ext={"system_logs": True},
             ),
             Components.RunnerPool(
                 name="arm-medium",
@@ -288,6 +295,10 @@ PROJECTS = [
                 allow_all_secrets=False,
                 allow_all_s3_prefixes=False,
                 allow_ssm_debug=False,
+                # Ship kernel/OOM/systemd-kill evidence for the controller to
+                # the /silk/praktika-system CloudWatch stream; see praktika
+                # docs/logging.md.
+                ext={"system_logs": True},
             ),
             Components.RunnerPool(
                 name="amd-medium",
@@ -305,6 +316,10 @@ PROJECTS = [
                 allow_all_secrets=False,
                 allow_all_s3_prefixes=False,
                 allow_ssm_debug=False,
+                # Ship kernel/OOM/systemd-kill evidence for the controller to
+                # the /silk/praktika-system CloudWatch stream; see praktika
+                # docs/logging.md.
+                ext={"system_logs": True},
             ),
         ],
     )
