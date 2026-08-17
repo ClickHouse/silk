@@ -695,6 +695,9 @@ struct FiberScheduler::ProcessorState
     // service-loop iteration.
     io_uring ring{};
 
+    // Flags for the idle park's io_uring_enter2.
+    uint32_t parkEnterFlags;
+
     // Per-CPU bounded MPMC queue of ready fibers.  Spans 3 cache lines and
     // is hammered from neighboring CPUs during steal, so left at the end of
     // ProcessorState to keep its cache-line traffic away from the per-CPU
@@ -739,6 +742,13 @@ void FiberScheduler::ProcessorState::initialize(uint16_t cpu) noexcept
 
     // postWakeup posts cross-ring doorbells with IOSQE_CQE_SKIP_SUCCESS to drop the send-side completion.
     SILK_ASSERT(params.features & IORING_FEAT_CQE_SKIP);
+
+    // Without IORING_FEAT_NO_IOWAIT, the kernel may account parked threads as iowait CPU usage.
+    parkEnterFlags = IORING_ENTER_GETEVENTS | IORING_ENTER_EXT_ARG;
+    if (params.features & IORING_FEAT_NO_IOWAIT)
+    {
+        parkEnterFlags |= IORING_ENTER_NO_IOWAIT;
+    }
 
     accountRingMemoryMappings(ring, options.accountMemoryMapped);
 
@@ -836,7 +846,7 @@ void FiberScheduler::ProcessorState::parkThread(uint64_t waitNs, CpuTimer * time
 
         timer->reset(simpleCounters[SCHEDULER_IDLE_TIME], number);
 
-        int r = ::io_uring_enter2(ring.ring_fd, 0, 1, IORING_ENTER_GETEVENTS | IORING_ENTER_EXT_ARG, &arg, sizeof(arg));
+        int r = ::io_uring_enter2(ring.ring_fd, 0, 1, parkEnterFlags, &arg, sizeof(arg));
         if (r < 0)
         {
             // io_uring_enter2 returns -errno directly; it does not set errno.
