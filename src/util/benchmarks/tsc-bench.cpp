@@ -27,6 +27,23 @@ BENCHMARK_F(TscBench, GetNanoseconds)(benchmark::State & state)
     }
 }
 
+BENCHMARK_F(TscBench, CyclesToNanosecondsShort)(benchmark::State & state)
+{
+    const uint64_t cycles = Tsc::nanosecondsToCycles(1'000'000);
+    for (auto _ : state)
+    {
+        benchmark::DoNotOptimize(Tsc::cyclesToNanoseconds(cycles));
+    }
+}
+
+BENCHMARK_F(TscBench, NanosecondsToCyclesShort)(benchmark::State & state)
+{
+    for (auto _ : state)
+    {
+        benchmark::DoNotOptimize(Tsc::nanosecondsToCycles(1'000'000));
+    }
+}
+
 BENCHMARK_F(TscBench, GetTimeNanoseconds)(benchmark::State & state)
 {
     for (auto _ : state)

@@ -166,6 +166,8 @@ void Tsc::initialize() noexcept
     SILK_ASSERT(frequency != 0, "failed to determine TSC frequency");
     nsPerCycleFp = (1ULL << SHIFT) * 1'000'000'000 / frequency;
     cyclesPerNsFp = frequency * (1ULL << SHIFT) / 1'000'000'000;
+    maxCyclesBeforeMultiplyOverflow = UINT64_MAX / nsPerCycleFp;
+    maxNanosecondsBeforeMultiplyOverflow = UINT64_MAX / cyclesPerNsFp;
 }
 
 } // namespace silk
