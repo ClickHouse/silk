@@ -745,4 +745,41 @@ TEST(FiberIo, spliceThroughPipe)
     ::close(pipeFds[1]);
 }
 
+TEST(FiberIo, spliceLargeLength)
+{
+    static constexpr char MESSAGE[] = "splice";
+
+    int source[2];
+    ASSERT_EQ(::socketpair(AF_UNIX, SOCK_STREAM, 0, source), 0);
+
+    int pipeFds[2];
+    ASSERT_EQ(::pipe(pipeFds), 0);
+
+    ssize_t written = ::write(source[1], MESSAGE, sizeof(MESSAGE));
+    ASSERT_EQ(written, static_cast<ssize_t>(sizeof(MESSAGE)));
+    ASSERT_EQ(::shutdown(source[1], SHUT_WR), 0);
+
+    struct Params
+    {
+        int sourceFd;
+        int pipeWriteFd;
+        uint64_t * bytesSpliced;
+
+        static int fiberMain(Params * params) noexcept
+        {
+            return FiberScheduler::splice(
+                params->sourceFd, -1, params->pipeWriteFd, -1, uint64_t{1} << 32, SPLICE_F_MOVE, params->bytesSpliced);
+        }
+    };
+
+    uint64_t bytesSpliced = 0;
+    ASSERT_EQ(FiberScheduler::run(Params::fiberMain, Params{source[0], pipeFds[1], &bytesSpliced}), 0);
+    EXPECT_EQ(bytesSpliced, sizeof(MESSAGE));
+
+    ::close(source[0]);
+    ::close(source[1]);
+    ::close(pipeFds[0]);
+    ::close(pipeFds[1]);
+}
+
 } // namespace silk
