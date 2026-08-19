@@ -48,6 +48,56 @@ TEST(Tsc, CyclesToNanosecondsRoundTrip)
     EXPECT_NEAR(static_cast<double>(result), static_cast<double>(ns), ns * 0.002);
 }
 
+TEST(Tsc, LongConversionsDoNotOverflow)
+{
+    constexpr uint64_t SHIFT = 20;
+    constexpr uint64_t NS_PER_SECOND = 1'000'000'000;
+    constexpr uint64_t ns = 365ULL * 24 * 60 * 60 * NS_PER_SECOND;
+
+    const uint64_t frequency = Tsc::getFrequency();
+    const uint64_t cyclesPerNsFp = frequency * (1ULL << SHIFT) / NS_PER_SECOND;
+    const uint64_t nsPerCycleFp = (1ULL << SHIFT) * NS_PER_SECOND / frequency;
+    ASSERT_GT(cyclesPerNsFp, 0);
+    ASSERT_GT(nsPerCycleFp, 0);
+
+    const uint64_t cycles = static_cast<uint64_t>((static_cast<unsigned __int128>(ns) * frequency) / NS_PER_SECOND);
+    ASSERT_GT(ns, UINT64_MAX / cyclesPerNsFp);
+    ASSERT_GT(cycles, UINT64_MAX / nsPerCycleFp);
+
+    const uint64_t expectedCycles = static_cast<uint64_t>((static_cast<unsigned __int128>(ns) * cyclesPerNsFp) >> SHIFT);
+    EXPECT_EQ(Tsc::nanosecondsToCycles(ns), expectedCycles);
+
+    const uint64_t expectedNanoseconds = static_cast<uint64_t>((static_cast<unsigned __int128>(cycles) * nsPerCycleFp) >> SHIFT);
+    EXPECT_EQ(Tsc::cyclesToNanoseconds(cycles), expectedNanoseconds);
+}
+
+TEST(Tsc, ConversionOverflowThresholds)
+{
+    constexpr uint64_t SHIFT = 20;
+    constexpr uint64_t NS_PER_SECOND = 1'000'000'000;
+
+    const uint64_t frequency = Tsc::getFrequency();
+    const uint64_t cyclesPerNsFp = frequency * (1ULL << SHIFT) / NS_PER_SECOND;
+    const uint64_t nsPerCycleFp = (1ULL << SHIFT) * NS_PER_SECOND / frequency;
+    ASSERT_GT(cyclesPerNsFp, 0);
+    ASSERT_GT(nsPerCycleFp, 0);
+
+    const uint64_t maxCyclesBeforeMultiplyOverflow = UINT64_MAX / nsPerCycleFp;
+    const uint64_t maxNanosecondsBeforeMultiplyOverflow = UINT64_MAX / cyclesPerNsFp;
+    ASSERT_LT(maxCyclesBeforeMultiplyOverflow, UINT64_MAX);
+    ASSERT_LT(maxNanosecondsBeforeMultiplyOverflow, UINT64_MAX);
+
+    const auto expectedNanoseconds = [nsPerCycleFp](uint64_t cycles)
+    { return static_cast<uint64_t>((static_cast<unsigned __int128>(cycles) * nsPerCycleFp) >> SHIFT); };
+    const auto expectedCycles
+        = [cyclesPerNsFp](uint64_t ns) { return static_cast<uint64_t>((static_cast<unsigned __int128>(ns) * cyclesPerNsFp) >> SHIFT); };
+
+    EXPECT_EQ(Tsc::cyclesToNanoseconds(maxCyclesBeforeMultiplyOverflow), expectedNanoseconds(maxCyclesBeforeMultiplyOverflow));
+    EXPECT_EQ(Tsc::cyclesToNanoseconds(maxCyclesBeforeMultiplyOverflow + 1), expectedNanoseconds(maxCyclesBeforeMultiplyOverflow + 1));
+    EXPECT_EQ(Tsc::nanosecondsToCycles(maxNanosecondsBeforeMultiplyOverflow), expectedCycles(maxNanosecondsBeforeMultiplyOverflow));
+    EXPECT_EQ(Tsc::nanosecondsToCycles(maxNanosecondsBeforeMultiplyOverflow + 1), expectedCycles(maxNanosecondsBeforeMultiplyOverflow + 1));
+}
+
 TEST(Tsc, NanosecondsMatchWallClock)
 {
     uint64_t wall0 = getTimeNanoseconds();

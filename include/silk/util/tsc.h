@@ -10,6 +10,9 @@ namespace silk
  *
  * Frequency is queried once via CPUID at initialization and cached.
  * Conversions use fixed-point multiply+shift - no division on the hot path.
+ * Conversion results are represented as uint64_t. Callers must keep inputs
+ * within the range where the converted value, and any subsequent deadline
+ * arithmetic, fit in uint64_t; values beyond that range are not saturated.
  */
 class Tsc
 {
@@ -48,10 +51,24 @@ public:
     static uint64_t getFrequency() noexcept { return frequency; }
 
     /** Convert TSC cycles to nanoseconds. */
-    static uint64_t cyclesToNanoseconds(uint64_t cycles) noexcept { return (cycles * nsPerCycleFp) >> SHIFT; }
+    static uint64_t cyclesToNanoseconds(uint64_t cycles) noexcept
+    {
+        if (cycles > maxCyclesBeforeMultiplyOverflow) [[unlikely]]
+        {
+            return static_cast<uint64_t>((static_cast<unsigned __int128>(cycles) * nsPerCycleFp) >> SHIFT);
+        }
+        return (cycles * nsPerCycleFp) >> SHIFT;
+    }
 
     /** Convert nanoseconds to TSC cycles. */
-    static uint64_t nanosecondsToCycles(uint64_t ns) noexcept { return (ns * cyclesPerNsFp) >> SHIFT; }
+    static uint64_t nanosecondsToCycles(uint64_t ns) noexcept
+    {
+        if (ns > maxNanosecondsBeforeMultiplyOverflow) [[unlikely]]
+        {
+            return static_cast<uint64_t>((static_cast<unsigned __int128>(ns) * cyclesPerNsFp) >> SHIFT);
+        }
+        return (ns * cyclesPerNsFp) >> SHIFT;
+    }
 
 private:
     static constexpr uint32_t SHIFT = 20;
@@ -59,6 +76,8 @@ private:
     inline static uint64_t frequency = 0; ///< Hz
     inline static uint64_t nsPerCycleFp = 0; ///< (1 << SHIFT) * 1'000'000'000 / frequency
     inline static uint64_t cyclesPerNsFp = 0; ///< frequency * (1 << SHIFT) / 1'000'000'000
+    inline static uint64_t maxCyclesBeforeMultiplyOverflow = 0;
+    inline static uint64_t maxNanosecondsBeforeMultiplyOverflow = 0;
 };
 
 } // namespace silk
