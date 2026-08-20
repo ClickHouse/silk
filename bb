@@ -62,6 +62,8 @@ def run_capture(*args: str, **kwargs: Any) -> subprocess.CompletedProcess[str]:
     result = subprocess.run(
         args, cwd=ROOT, capture_output=True, text=True, check=False, **kwargs
     )
+    if result.stderr:
+        sys.stderr.write(result.stderr)
     if result.returncode:
         log.error("command failed: %s\n\n%s", " ".join(args), result.stderr)
     result.check_returncode()
@@ -444,13 +446,31 @@ def _render_flamegraph(folded_file: str, out_svg: str, title: str) -> None:
         )
 
 
-def _run_flamegraph(preset: str, name: str, client_args: list[str]) -> None:
+def _run_flamegraph(
+    preset: str, name: str, client_args: list[str], server_pid: int | None = None
+) -> None:
     cmd_build(preset, ["profiler"])
 
     profiler_bin = os.path.join(ROOT, f"build/{preset}/bin/profiler")
     folded_stacks = os.path.join(ROOT, f"build/{preset}/{name}.flamegraph.folded")
     out_svg = os.path.join(ROOT, f"build/{preset}/{name}.flamegraph.svg")
+    server_folded = os.path.join(
+        ROOT, f"build/{preset}/{name}-server.flamegraph.folded"
+    )
+    server_svg = os.path.join(ROOT, f"build/{preset}/{name}-server.flamegraph.svg")
     verbose_flag = ["--verbose"] if log.isEnabledFor(logging.DEBUG) else []
+
+    def start_profiler(pid: int, out: Any) -> subprocess.Popen[str]:
+        return start_process(
+            profiler_bin,
+            "--pid",
+            str(pid),
+            "--on-cpu",
+            "--off-cpu",
+            "--kernel-stacks",
+            *verbose_flag,
+            stdout=out,
+        )
 
     log.info("profiling %s -> %s", name, out_svg)
 
@@ -458,23 +478,21 @@ def _run_flamegraph(preset: str, name: str, client_args: list[str]) -> None:
 
     try:
         with open(folded_stacks, "w") as f:
-            profiler = start_process(
-                profiler_bin,
-                "--pid",
-                str(client.pid),
-                "--on-cpu",
-                "--off-cpu",
-                "--kernel-stacks",
-                *verbose_flag,
-                stdout=f,
-            )
+            profiler = start_profiler(client.pid, f)
+        server_profiler = None
         try:
+            if server_pid is not None:
+                with open(server_folded, "w") as server_out:
+                    server_profiler = start_profiler(server_pid, server_out)
             client.wait()
             if client.returncode != 0:
                 raise RuntimeError(f"client exited with code {client.returncode}")
         finally:
             profiler.send_signal(signal.SIGTERM)
             profiler.wait()
+            if server_profiler is not None:
+                server_profiler.send_signal(signal.SIGTERM)
+                server_profiler.wait()
             if profiler.returncode != 0:
                 raise RuntimeError(f"profiler exited with code {profiler.returncode}")
     except Exception:
@@ -482,6 +500,9 @@ def _run_flamegraph(preset: str, name: str, client_args: list[str]) -> None:
         raise
 
     _render_flamegraph(folded_stacks, out_svg, f"{name} on-CPU + off-CPU")
+    if server_pid is not None:
+        _render_flamegraph(server_folded, server_svg, f"{name} server on-CPU + off-CPU")
+        log.info("server folded stacks: %s", server_folded)
 
     log.info("folded stacks: %s", folded_stacks)
     log.info("flamegraph: %s", out_svg)
@@ -657,6 +678,7 @@ def cmd_net_perf(preset: str, params: NetPerfParams) -> None:
 
     try:
         if params.flamegraph:
+            _run_flamegraph_server_pid = server.pid if server else None
             _run_flamegraph(
                 preset,
                 binary,
@@ -681,6 +703,7 @@ def cmd_net_perf(preset: str, params: NetPerfParams) -> None:
                     *stall_flags,
                     *verbose_flag,
                 ],
+                server_pid=_run_flamegraph_server_pid,
             )
         else:
             print(_perf_row(_NP_HEADERS, _NP_WIDTH))
