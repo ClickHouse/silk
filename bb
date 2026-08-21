@@ -609,6 +609,7 @@ class NetPerfParams:
     delay: str = "0"
     stall_rate: float = 0.0
     stall_duration: str = "0"
+    server_cpus: str = ""
     flamegraph: bool = False
     print_counters: bool = False
     timeout: int = 180
@@ -639,6 +640,8 @@ def cmd_net_perf(preset: str, params: NetPerfParams) -> None:
 
     net_perf = os.path.join(ROOT, f"build/{preset}/bin/{binary}")
     server_cpus, client_cpus = _cpu_split()
+    if params.server_cpus:
+        server_cpus = params.server_cpus
     local = params.host in ("127.0.0.1", "localhost")
     verbose_flag = ["--verbose"] if log.isEnabledFor(logging.DEBUG) else []
     print_counters_flag = ["--print-counters"] if params.print_counters else []
@@ -1797,6 +1800,13 @@ def _build_parser() -> argparse.ArgumentParser:
             type=float,
             metavar="HZ",
             help="per-connection Poisson rate of stall messages (Hz, 0 disables)",
+        )
+        parser.add_argument(
+            "--server-cpus",
+            dest="net_server_cpus",
+            default=net_params.server_cpus,
+            metavar="CPUS",
+            help="taskset CPU list for the server (default: lower half of the machine)",
         )
         parser.add_argument(
             "--stall-duration",
