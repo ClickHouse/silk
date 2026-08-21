@@ -36,6 +36,16 @@ static constexpr uint64_t CQE_TAG_CANCEL = 0;
 static constexpr uint64_t CQE_TAG_DOORBELL = 1;
 static constexpr uint64_t CQE_TAG_WAKEUP = 2;
 
+// Consecutive low-utilization windows required before the shrink fires. One window
+// is variance on a bursty fleet - a loaded edge must not shed and re-grow, migrating
+// its homes each cycle.
+static constexpr uint32_t SHRINK_WINDOW_COUNT = 3;
+
+// Utilization below which the rightmost prefix processor extinguishes itself, in
+// percent of the trailing window. Utilization, not idleness continuity: a fast
+// periodic timer breaks every idle streak while leaving the core almost entirely idle.
+static constexpr uint64_t SHRINK_UTILIZATION_PERCENT = 25;
+
 // clang-format off
 #define FIBER_SIMPLE_COUNTERS(x) \
     x(FIBER_STARTED,           "FiberStarted") \
@@ -63,7 +73,9 @@ static constexpr uint64_t CQE_TAG_WAKEUP = 2;
     x(SCHEDULER_USER_TIME,     "SchedulerUserTime") \
     x(SCHEDULER_SYSTEM_TIME,   "SchedulerSystemTime") \
     x(SCHEDULER_IDLE_TIME,     "SchedulerIdleTime") \
-    x(PROFILE_RING_OVERFLOW,   "ProfileRingOverflow")
+    x(PROFILE_RING_OVERFLOW,   "ProfileRingOverflow") \
+    x(SCHEDULER_THREAD_GROW,   "SchedulerThreadGrow") \
+    x(SCHEDULER_THREAD_SHRINK, "SchedulerThreadShrink")
 // clang-format on
 
 DECLARE_SIMPLE_COUNTERS(FIBER_SIMPLE_COUNTERS);
@@ -280,7 +292,8 @@ struct FiberScheduler::ProcessorState
     void profileEvent(ProfileEventKind kind, uint8_t category, uint64_t durationCycles) noexcept;
 
     void wakeThread() noexcept;
-    void parkThread(uint64_t waitNs, CpuTimer * timer) noexcept;
+    void parkThread(uint64_t waitNs, bool deadlineBounded, CpuTimer * timer) noexcept;
+
     bool hasWork() const noexcept;
     uint32_t sqReady() const noexcept;
     uint32_t cqReady() const noexcept;
@@ -303,20 +316,10 @@ struct FiberScheduler::ProcessorState
         // CPU index this processor is pinned to.
         uint16_t number = kInvalidProcessorNumber;
 
-        // Set to true by runScheduler after initialization completes.
-        // The steal loop checks this before accessing the ring,
-        // and FiberScheduler spins on it before spawning worker threads.
-        std::atomic<bool> initialized{};
-
         // Set just before entering io_uring_enter2; cleared on exit.
         // wakeThread() checks this before writing to eventFd so that
         // eventfd_write is only called when the thread is actually parked.
         std::atomic<bool> sleeping{};
-
-        // eventfd used as a wakeup doorbell.  wakeThread() writes to it;
-        // a persistent IORING_OP_POLL_ADD_MULTI SQE delivers a CQE to the
-        // ring each time it becomes readable, waking io_uring_enter2.
-        int eventFd = -1;
 
         // Serializes the service loop (CQ draining, sleep insertion/expiry) so
         // that steal loops on neighboring CPUs can assist without races.
@@ -345,7 +348,7 @@ struct FiberScheduler::ProcessorState
         // emit) under serviceLoopLock; written in submitIo under
         // submissionLock.  Relaxed atomic is sufficient: readers tolerate a
         // slightly stale value.
-        std::atomic<uint64_t> lastSubmitCycles{0};
+        std::atomic<uint64_t> lastSubmitCycles{};
 
         // Per-CPU latency profiler. Allocated only when Options::enableProfiler
         // is set; null otherwise.  Co-located with the hot path so the null
@@ -359,32 +362,79 @@ struct FiberScheduler::ProcessorState
         // not collide with the all-zero sentinel that getCurrentFiberId returns
         // for "no fiber".
         std::atomic<uint64_t> fiberCounter{1};
+
+        // Start of the current utilization window; the window early-exit polls it
+        // on every did-work iteration. The window's cold fields stay off this line.
+        uint64_t windowStartCycles = 0;
     };
 
-    // Service-loop state: drained / inspected on every iteration of
-    // runServiceLoop.  Laid out adjacent to cache line 0 so the same fiber
-    // that just acquired serviceLoopLock pulls these lines in next.
-    SleepStack sleepQueue;
-    SleepStack cancelQueue;
-    SleepTree sleepTree;
+    // One-time-initialized region on its own cache line: written during
+    // initialization, read-only afterwards - permanently shared-warm in every
+    // CPU's cache and never invalidated by a neighboring writer.
+    struct alignas(kCacheLineSize)
+    {
+        // Set to true by runScheduler after initialization completes. Read-only
+        // afterwards: the steal loop and the backlog sweep check it before touching
+        // the ring, and FiberScheduler spins on it before spawning worker threads.
+        std::atomic<bool> initialized{};
 
-    // Neighboring CPUs sorted by estimated steal cost (topology-aware).
-    // Read only in the steal loop.
-    std::unique_ptr<StealCandidate[]> stealCandidates;
+        // eventfd used as a wakeup doorbell by external threads and destroy; a
+        // persistent IORING_OP_POLL_ADD_MULTI SQE delivers a CQE to the ring each
+        // time it becomes readable, waking io_uring_enter2. Cold: fiber wakeups
+        // travel via IORING_OP_MSG_RING instead.
+        int eventFd = -1;
 
-    // io_uring ring for async IO. Spans 4 cache lines on
-    // its own (sq + cq + flags); empty-check on the CQ head is hit on every
-    // service-loop iteration.
-    io_uring ring{};
+        // Flags for the idle park's io_uring_enter2.
+        uint32_t parkEnterFlags = 0;
 
-    // Flags for the idle park's io_uring_enter2.
-    uint32_t parkEnterFlags;
+        // Active HT sibling of this CPU; kInvalidProcessorNumber when the sibling is
+        // outside the active set or the topology is unknown. Set by buildStealCandidates.
+        uint16_t siblingProcessor = kInvalidProcessorNumber;
 
-    // Per-CPU bounded MPMC queue of ready fibers.  Spans 3 cache lines and
-    // is hammered from neighboring CPUs during steal, so left at the end of
-    // ProcessorState to keep its cache-line traffic away from the per-CPU
-    // hot path on line 0.
+        // This processor's position in prefixOrder; the processor is inside the prefix
+        // while prefixIndex < prefixCount. Set by buildStealCandidates.
+        uint16_t prefixIndex = 0;
+
+        // Neighboring CPUs sorted by estimated steal cost (topology-aware).
+        // Read only in the steal loop.
+        std::unique_ptr<StealCandidate[]> stealCandidates;
+    };
+
+    // Service-loop region, owner-polled on every runServiceLoop iteration and spanning
+    // several lines: the sleep queues and tree, the ring, and the cold utilization-window
+    // fields riding the first line. cancelQueue takes rare foreign pushes; everything
+    // else is owner-only.
+    struct alignas(kCacheLineSize)
+    {
+        // Cold utilization-window state, touched at window boundaries: the
+        // SchedulerIdleTime reading at the window start, the deadline-bounded park time
+        // accumulated since - committed to sleepers, so it counts as busy - and the
+        // consecutive low-utilization window count feeding the shrink hysteresis.
+        uint64_t windowIdleNs = 0;
+        uint64_t windowBoundedNs = 0;
+        uint32_t lowWindowCount = 0;
+
+        // Sleep registration and cross-CPU cancellation queues, drained every iteration.
+        SleepStack sleepQueue;
+        SleepStack cancelQueue;
+        SleepTree sleepTree;
+
+        // io_uring ring for async IO (sq + cq + flags); the empty-check on the CQ head
+        // is hit on every service-loop iteration.
+        io_uring ring{};
+    };
+
+    // Foreign state, last so its cross-CPU traffic stays away from the per-CPU hot
+    // path on line 0. The queue is cache-aligned by its own layout and spans three
+    // lines; the backlog stamp trails it on a fresh line, and every stamp access
+    // sits next to a ready-queue operation.
     BoundedQueue<Fiber *> readyQueue;
+
+    // Cycle stamp of the oldest unbroken backlog observation on the ready queue:
+    // armed by a backlog check, cleared by the owner when the queue drains empty.
+    // A check starts the next prefix processor once the stamp ages past the
+    // width-adaptation time constant.
+    std::atomic<uint64_t> backlogSinceCycles{};
 };
 
 /**
@@ -399,41 +449,90 @@ struct FiberScheduler::SchedulerState
     void wakeThread() noexcept;
     void parkThread() noexcept;
 
-    //
-    // State.
-    //
+    // Read-hot line: read-only after initialize (stopping flips once at destroy),
+    // referenced by every hot path - dispatch, submit, wait, and wake all hit these,
+    // so they pack into a single line that stays shared-warm in every CPU's cache.
+    struct alignas(kCacheLineSize)
+    {
+        // Set once by destroy; polled by every scheduler-loop iteration.
+        std::atomic<bool> stopping{};
 
-    std::atomic<bool> stopping{};
+        uint16_t processorCount = 0;
 
-    uint16_t processorCount = 0;
-    uint16_t schedulerThreadCount = 0;
-    uint16_t workerThreadCount = 0;
+        // Per-CPU processor array, indexed by raw CPU number.
+        std::unique_ptr<ProcessorState[]> processorState;
 
-    // Maps every configured CPU to the processor a thread running there injects into:
-    // an active CPU to its own processor, an inactive CPU (excluded from the
-    // active set) to an active processor chosen round-robin, so work injected
-    // from a reserved core lands on a real ring instead of an uninitialized one.
-    std::unique_ptr<ProcessorState *[]> homeProcessor;
+        // Maps every configured CPU to the processor a thread running there injects into:
+        // an active CPU to its own processor, an inactive CPU (excluded from the
+        // active set) to an active processor chosen round-robin, so work injected
+        // from a reserved core lands on a real ring instead of an uninitialized one.
+        std::unique_ptr<ProcessorState *[]> homeProcessor;
 
-    // The set of active CPUs. Worker threads pin to it so silk never runs
-    // fibers on reserved cores.
-    cpu_set_t activeMask;
+        // Configured processors in prefix order - whole cores first, HT siblings after,
+        // ascending CPU number within each half. The polling regime covers the prefix
+        // prefixOrder[0, prefixCount); growth activates the next entry.
+        std::unique_ptr<uint16_t[]> prefixOrder;
 
-    std::unique_ptr<std::thread[]> schedulerThreads;
-    std::unique_ptr<std::thread[]> workerThreads;
+        // Futex-style waiter lookup table and its power-of-two size mask.
+        std::unique_ptr<WaitStack[]> waiterTable;
+        uint64_t waiterTableMask = 0;
 
-    MemoryPool<Fiber, &Fiber::stackEntry> fiberPool;
-    IntrusiveQueue<Fiber, &Fiber::reservedNode> readyQueue;
+        // Options::ioUringFlushTimeout in TSC cycles, derived once in initialize - the
+        // Tsc conversion is calibrated, not constexpr.
+        uint64_t ioUringFlushTimeoutCycles = 0;
+    };
 
-    sem_t threadSemaphore{};
+    // Prefix state on its own cache line: prefixCount is written only on grow
+    // and shrink transitions and read by the placement and backlog checks, so its
+    // invalidations never touch the read-only configuration around it.
+    struct alignas(kCacheLineSize)
+    {
+        // Processors inside the prefix - prefixOrder[0, prefixCount) - park timed and
+        // steal from each other; the rest park indefinitely and hold no work. Grown by
+        // an aged backlog check, shrunk by the rightmost's low-utilization windows.
+        std::atomic<uint16_t> prefixCount{};
 
-    std::unique_ptr<WaitStack[]> waiterTable;
-    uint64_t waiterTableMask{};
+        // Number of configured processors - prefixCount at full width. Set once by
+        // buildStealCandidates.
+        uint16_t prefixTotal = 0;
 
-    // Declared last so it is destroyed first: each ProcessorState's suspended
-    // list links nodes embedded in pool-owned fibers, so the lists must be
-    // destroyed before fiberPool frees the fiber memory.
-    std::unique_ptr<ProcessorState[]> processorState;
+        // Options::maxWaitNs in TSC cycles, derived once in initialize - the width
+        // adaptation window: the grow age and the utilization window span. Rides this
+        // line because the backlog checks read it right after the prefixCount gate.
+        uint64_t backlogAgeCycles = 0;
+    };
+
+    // Worker-pool region: the shared ready queue of thread-mode and overflow
+    // fibers and the semaphore its producers post - written by the same actors,
+    // producers on any CPU and the worker threads draining them.
+    struct alignas(kCacheLineSize)
+    {
+        IntrusiveQueue<Fiber, &Fiber::reservedNode> readyQueue;
+
+        sem_t threadSemaphore{};
+    };
+
+    // Fiber pool region: allocation and release traffic from every CPU, kept off
+    // the lines above.
+    struct alignas(kCacheLineSize)
+    {
+        MemoryPool<Fiber, &Fiber::stackEntry> fiberPool;
+    };
+
+    // Cold configuration: read-only after initialize, touched only at startup,
+    // teardown, and rescue-rate paths.
+    struct alignas(kCacheLineSize)
+    {
+        uint16_t schedulerThreadCount = 0;
+        uint16_t workerThreadCount = 0;
+
+        std::unique_ptr<std::thread[]> schedulerThreads;
+        std::unique_ptr<std::thread[]> workerThreads;
+
+        // The set of active CPUs. Worker threads pin to it so silk never runs
+        // fibers on reserved cores.
+        cpu_set_t activeMask{};
+    };
 };
 
 } // namespace silk

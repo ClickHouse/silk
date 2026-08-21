@@ -138,12 +138,14 @@ public:
         // being flushed to the kernel.
         uint32_t ioUringFlushTimeout = 100'000;
 
-        // Derived in initialize() from ioUringFlushTimeout; users do not set this.
-        uint64_t ioUringFlushTimeoutCycles = 0;
-
         // Scheduler park backoff (nanoseconds). The dispatch loop spins for up to
-        // spinThresholdNs after going idle; past that it parks on the eventfd with
-        // an exponential backoff starting at initialWaitNs and capped at maxWaitNs.
+        // spinThresholdNs after going idle; past that it parks with an exponential
+        // backoff starting at initialWaitNs and capped at maxWaitNs. Timed parks
+        // cover sleep deadlines and the deferred-SQE retry; outside the prefix a
+        // rammed-out park has no timeout - wakeups are doorbell-driven, and the
+        // pre-park backlog sweep ensures none is lost. maxWaitNs is also the width
+        // adaptation window: the backlog age that grows the prefix and the
+        // utilization window that shrinks it.
         uint32_t initialWaitNs = 1'000;
         uint32_t maxWaitNs = 10'000'000;
         uint32_t spinThresholdNs = 20'000;
@@ -691,7 +693,7 @@ private:
 
     struct StealCandidate
     {
-        uint32_t processorNumber;
+        uint16_t processorNumber;
         uint64_t costCycles;
     };
 
@@ -723,6 +725,7 @@ private:
     allocateFiber(FiberMain * fiberMain, FiberParametersDtor * parametersDtor, uint8_t category, FiberFuture * future) noexcept;
     static void freeFiber(Fiber * fiber) noexcept;
     static ProcessorState * enqueueReady(ProcessorState * processor, Fiber * fiber) noexcept;
+    static ProcessorState * migrateFiber(ProcessorState * processor, Fiber * fiber, uint16_t prefixCount) noexcept;
     static void yieldSuspendCallback(Fiber * fiber, void * context) noexcept;
     static void enterThreadModeSuspendCallback(Fiber * fiber, void * context) noexcept;
     static void exitThreadModeSuspendCallback(Fiber * fiber, void * context) noexcept;
@@ -733,6 +736,11 @@ private:
     static void runScheduler(ProcessorState * processor) noexcept;
     static bool runServiceLoop(ProcessorState * processor, uint64_t waitNs, CpuTimer * timer) noexcept;
     static bool runStealLoop(ProcessorState * processor, uint64_t idleSinceCycles, CpuTimer * timer) noexcept;
+    static void checkUtilization(ProcessorState * processor, uint64_t nowCycles) noexcept;
+    static void checkUtilizationSlow(ProcessorState * processor, uint64_t nowCycles) noexcept;
+    static void growPrefix(ProcessorState * producer, ProcessorState * target) noexcept;
+    static void growPrefixSlow(ProcessorState * producer, ProcessorState * target) noexcept;
+    static bool sweepBacklog(ProcessorState * processor) noexcept;
     static bool handleReadyQueue(ProcessorState * processor, CpuTimer * timer) noexcept;
     static bool handleCompletionQueue(ProcessorState * processor) noexcept;
     static bool handleCompletionQueueSlow(ProcessorState * processor) noexcept;
