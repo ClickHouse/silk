@@ -23,6 +23,17 @@ def _silk_ci_dependencies_component():
         "description": "Install Silk CI toolchains and build dependencies",
         "commands": [
             "export DEBIAN_FRONTEND=noninteractive",
+            # Stop stock Ubuntu background apt upgrades from holding the dpkg
+            # lock - both during this build (racing our own apt-get) and, once
+            # the AMI is baked, at runner boot (racing the controller start).
+            (
+                "systemctl disable --now apt-daily.timer apt-daily-upgrade.timer "
+                "unattended-upgrades.service || true"
+            ),
+            (
+                "DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=60 "
+                "purge -y unattended-upgrades || true"
+            ),
             (
                 "wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key "
                 "> /etc/apt/trusted.gpg.d/apt.llvm.org.asc"
@@ -151,7 +162,7 @@ def _praktika_launch_user_data():
 
 
 def _image_builders():
-    image_recipe_version = "1.0.11"
+    image_recipe_version = "1.0.12"
     prebuilt_venvs = [
         ImageBuilder.PrebuiltVenv(
             name=PRAKTIKA_BASE_VENV,
