@@ -27,9 +27,14 @@ def _silk_ci_dependencies_component():
             # lock - both during this build (racing our own apt-get) and, once
             # the AMI is baked, at runner boot (racing the controller start).
             (
+                "echo 'DPkg::Lock::Timeout \"120\";' "
+                "> /etc/apt/apt.conf.d/99praktika-lock-timeout"
+            ),
+            (
                 "systemctl disable --now apt-daily.timer apt-daily-upgrade.timer "
                 "unattended-upgrades.service || true"
             ),
+            "systemctl stop apt-daily.service apt-daily-upgrade.service || true",
             (
                 "DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=60 "
                 "purge -y unattended-upgrades || true"
@@ -162,7 +167,7 @@ def _praktika_launch_user_data():
 
 
 def _image_builders():
-    image_recipe_version = "1.0.12"
+    image_recipe_version = "1.0.13"
     prebuilt_venvs = [
         ImageBuilder.PrebuiltVenv(
             name=PRAKTIKA_BASE_VENV,
@@ -215,6 +220,21 @@ _GH_TOKEN_MINTER = Components.GitHubTokenMinter(
 )
 _IMAGE_BUILDERS = _image_builders()
 _IMAGE_BUILDERS_BY_NAME = {builder.name: builder for builder in _IMAGE_BUILDERS}
+
+# The Code Review job (`praktika review`) calls an OpenAI model on Bedrock via
+# the Converse API, which requires bedrock:InvokeModel. Only the dedicated
+# code-review runner pool below carries this grant (scoped to Bedrock
+# foundation-model / inference-profile resources) - general job runners stay
+# Bedrock-less, so an arbitrary job cannot reach the model API.
+_CODE_REVIEW_BEDROCK_IAM_STATEMENT = {
+    "Sid": "BedrockRuntimeInference",
+    "Effect": "Allow",
+    "Action": ["bedrock:InvokeModel"],
+    "Resource": [
+        "arn:aws:bedrock:*::foundation-model/*",
+        "arn:aws:bedrock:*:*:inference-profile/*",
+    ],
+}
 
 PROJECTS = [
     CloudInfrastructure.Config(
@@ -331,6 +351,30 @@ PROJECTS = [
                 # the /silk/praktika-system CloudWatch stream; see praktika
                 # docs/logging.md.
                 ext={"system_logs": True},
+            ),
+            # Dedicated pool for the AI Code Review job. Identical to arm-small,
+            # plus a scoped bedrock:InvokeModel grant via ext["iam_statements"]
+            # so only this pool's role can call the Bedrock model API.
+            Components.RunnerPool(
+                name="arm-small-bedrock",
+                instance_type="t4g.medium",
+                scaling=Components.RunnerPool.Scaling.Auto,
+                size=0,
+                max_size=50,
+                volume_size_gb=100,
+                image_builder=_IMAGE_BUILDERS_BY_NAME["ci-arm64-image"],
+                allowed_ssm_parameters=[],
+                user_data=_praktika_launch_user_data(),
+                allowed_secrets=[],
+                allowed_s3_prefixes=["artifacts-eu-north-1"],
+                allow_all_ssm_parameters=False,
+                allow_all_secrets=False,
+                allow_all_s3_prefixes=False,
+                allow_ssm_debug=False,
+                ext={
+                    "system_logs": True,
+                    "iam_statements": [_CODE_REVIEW_BEDROCK_IAM_STATEMENT],
+                },
             ),
         ],
     )

@@ -16,6 +16,18 @@ FMT_JOB = Job.Config(
     ),
 )
 
+CODE_REVIEW_JOB = Job.Config(
+    name="Code Review",
+    runs_on=[RunnerLabels.SMALL_ARM_BEDROCK],
+    command=(
+        "python3 -I -m praktika review --provider bedrock-openai "
+        "--model global.openai.gpt-5.6-sol --reasoning-effort high "
+        "--prompt ./ci/prompts/code_review.md"
+    ),
+    allow_failure=True,
+    enable_gh_auth=True,
+)
+
 TEST_DIGEST = Job.CacheDigestConfig(
     include_paths=[
         "src",
