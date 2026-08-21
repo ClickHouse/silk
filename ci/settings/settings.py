@@ -4,6 +4,7 @@ class RunnerLabels:
     MEDIUM_ARM = "arm-medium"
     MEDIUM_AMD = "amd-medium"
     LARGE_ARM = "arm-large"
+    SMALL_ARM_BEDROCK = "arm-small-bedrock"
 
 
 PROJECT_NAME = "silk"

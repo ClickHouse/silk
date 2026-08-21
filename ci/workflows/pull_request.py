@@ -1,5 +1,11 @@
 from praktika import Workflow
-from ci.workflows.jobs import BUILD_VARIANTS, FMT_JOB, TEST_AMD, TEST_ARM
+from ci.workflows.jobs import (
+    BUILD_VARIANTS,
+    CODE_REVIEW_JOB,
+    FMT_JOB,
+    TEST_AMD,
+    TEST_ARM,
+)
 
 WORKFLOWS = [
     Workflow.Config(
@@ -8,6 +14,7 @@ WORKFLOWS = [
         base_branches=["main"],
         jobs=[
             FMT_JOB.copy(),
+            CODE_REVIEW_JOB.copy(),
             *TEST_ARM.parametrize(*BUILD_VARIANTS),
             *TEST_AMD.parametrize(*BUILD_VARIANTS),
         ],
