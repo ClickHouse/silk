@@ -1,6 +1,6 @@
 # Performance Results
 
-Measurements on an AWS instance (32-CPU Intel Xeon Platinum 8488C, Linux 6.17, release build `-O3`). All measurements are 60 s with a 10 s warmup.
+Measurements on an AWS instance (32-CPU Intel Xeon Platinum 8488C, Linux 7.0, release build `-O3`). All measurements are 60 s with a 10 s warmup.
 
 The main tables are reproducible with `./bb -b release perf --duration 60s --warmup 10s all`. The high-concurrency rows (`net-perf` 1000 conn / `http-perf` 10000 conn / `s3-perf` 100x100) and the internal HTTP server vs nginx row in `http-perf`, need separate `./bb` invocations -- see each section.
 
@@ -12,16 +12,16 @@ The main tables are reproducible with `./bb -b release perf --duration 60s --war
 
 | numjobs | iodepth | mode | IOPS | BW | avg | p50 | p95 | p99 | p99.9 |
 |---|---|---|---|---|---|---|---|---|---|
-| 1 | 1 | randwrite | 162k | 634 MiB/s | 6 µs | 4 µs | 13 µs | 15 µs | 23 µs |
-| 1 | 16 | randwrite | 511k | 1995 MiB/s | 31 µs | 29 µs | 41 µs | 48 µs | 63 µs |
-| 16 | 1 | randwrite | 895k | 3495 MiB/s | 18 µs | 19 µs | 27 µs | 36 µs | 53 µs |
-| 16 | 16 | randwrite | 811k | 3168 MiB/s | 316 µs | 256 µs | 862 µs | 1441 µs | 2101 µs |
-| 1 | 1 | randread | 195k | 760 MiB/s | 5 µs | 3 µs | 13 µs | 15 µs | 22 µs |
-| 1 | 16 | randread | 641k | 2504 MiB/s | 25 µs | 25 µs | 32 µs | 40 µs | 55 µs |
-| 16 | 1 | randread | 2289k | 8943 MiB/s | 7 µs | 5 µs | 17 µs | 37 µs | 110 µs |
-| 16 | 16 | randread | 5576k | 21782 MiB/s | 46 µs | 47 µs | 71 µs | 86 µs | 115 µs |
+| 1 | 1 | randwrite | 200k | 782 MiB/s | 5 µs | 4 µs | 13 µs | 14 µs | 21 µs |
+| 1 | 16 | randwrite | 544k | 2126 MiB/s | 29 µs | 29 µs | 32 µs | 40 µs | 58 µs |
+| 16 | 1 | randwrite | 859k | 3355 MiB/s | 19 µs | 19 µs | 31 µs | 43 µs | 102 µs |
+| 16 | 16 | randwrite | 767k | 2994 MiB/s | 334 µs | 331 µs | 368 µs | 554 µs | 653 µs |
+| 1 | 1 | randread | 267k | 1041 MiB/s | 4 µs | 3 µs | 12 µs | 13 µs | 18 µs |
+| 1 | 16 | randread | 1040k | 4062 MiB/s | 15 µs | 12 µs | 23 µs | 26 µs | 31 µs |
+| 16 | 1 | randread | 2516k | 9830 MiB/s | 6 µs | 5 µs | 14 µs | 22 µs | 106 µs |
+| 16 | 16 | randread | 7234k | 28259 MiB/s | 35 µs | 34 µs | 52 µs | 65 µs | 79 µs |
 
-**Best throughput** (`numjobs=16 iodepth=16 randread`): 5576k IOPS, 21.3 GiB/s.
+**Best throughput** (`numjobs=16 iodepth=16 randread`): 7234k IOPS, 27.6 GiB/s.
 
 **Best latency** (`numjobs=1 iodepth=1`): 3-4 µs p50 for both read and write.
 
@@ -39,23 +39,23 @@ The win is largest where per-IO buffer setup is the dominant cost: high-concurre
 
 | numjobs | iodepth | mode | IOPS | BW | avg | p50 | p95 | p99 | p99.9 |
 |---|---|---|---|---|---|---|---|---|---|
-| 1 | 1 | randwrite | 62k | 242 MiB/s | 14 µs | 14 µs | 18 µs | 27 µs | 40 µs |
-| 1 | 16 | randwrite | 790k | 3084 MiB/s | 19 µs | 19 µs | 23 µs | 26 µs | 32 µs |
-| 16 | 1 | randwrite | 697k | 2721 MiB/s | 21 µs | 21 µs | 29 µs | 37 µs | 50 µs |
-| 16 | 16 | randwrite | 756k | 2955 MiB/s | 336 µs | 317 µs | 375 µs | 2146 µs | 5407 µs |
-| 1 | 1 | randread | 65k | 254 MiB/s | 14 µs | 13 µs | 19 µs | 28 µs | 40 µs |
-| 1 | 16 | randread | 903k | 3526 MiB/s | 17 µs | 16 µs | 24 µs | 32 µs | 50 µs |
-| 16 | 1 | randread | 1177k | 4597 MiB/s | 12 µs | 12 µs | 22 µs | 35 µs | 47 µs |
-| 16 | 16 | randread | 10242k | 40009 MiB/s | 24 µs | 20 µs | 40 µs | 82 µs | 111 µs |
+| 1 | 1 | randwrite | 150k | 585 MiB/s | 5 µs | 5 µs | 6 µs | 6 µs | 14 µs |
+| 1 | 16 | randwrite | 560k | 2187 MiB/s | 27 µs | 28 µs | 31 µs | 37 µs | 41 µs |
+| 16 | 1 | randwrite | 708k | 2765 MiB/s | 21 µs | 21 µs | 26 µs | 34 µs | 41 µs |
+| 16 | 16 | randwrite | 757k | 2957 MiB/s | 335 µs | 330 µs | 367 µs | 684 µs | 5341 µs |
+| 1 | 1 | randread | 157k | 613 MiB/s | 5 µs | 5 µs | 6 µs | 6 µs | 14 µs |
+| 1 | 16 | randread | 889k | 3474 MiB/s | 17 µs | 16 µs | 23 µs | 31 µs | 49 µs |
+| 16 | 1 | randread | 1766k | 6900 MiB/s | 8 µs | 8 µs | 8 µs | 15 µs | 20 µs |
+| 16 | 16 | randread | 8697k | 33971 MiB/s | 28 µs | 23 µs | 47 µs | 98 µs | 185 µs |
 
-At `iodepth=1`, the fiber scheduler outperforms fio (2-3x): fio uses one OS thread per job, so each IO incurs a full OS scheduler round-trip. At `iodepth=16`, fio batches all SQEs the worker enqueued into one submit per round-trip and wins; the fiber scheduler with batching disabled (file-perf opts out -- see file-perf note above) does the same per fiber but pays additional dispatch overhead for the IoFuture ring.
+At `iodepth=1`, the fiber scheduler outperforms fio (1.4-1.7x): fio uses one OS thread per job, so each IO incurs a full OS scheduler round-trip. At high total depth (`16x16`), fio batches all SQEs the worker enqueued into one submit per round-trip and wins; the fiber scheduler with batching disabled (file-perf opts out -- see file-perf note above) does the same per fiber but pays additional dispatch overhead for the IoFuture ring.
 
 | config | fiber IOPS | fio IOPS | ratio |
 |---|---|---|---|
-| 1 job, iodepth=1, randread | 195k | 65k | 3.0x |
-| 16 jobs, iodepth=1, randread | 2289k | 1177k | 1.94x |
-| 1 job, iodepth=16, randread | 641k | 903k | 0.71x |
-| 16 jobs, iodepth=16, randread | 5576k | 10242k | 0.54x |
+| 1 job, iodepth=1, randread | 267k | 157k | 1.70x |
+| 16 jobs, iodepth=1, randread | 2516k | 1766k | 1.42x |
+| 1 job, iodepth=16, randread | 1040k | 889k | 1.17x |
+| 16 jobs, iodepth=16, randread | 7234k | 8697k | 0.83x |
 
 ---
 
@@ -65,12 +65,12 @@ Loopback TCP, 64 B messages, 60 s measurement, 10 s warmup. Socket I/O uses `Fib
 
 | connections | RPS | BW | avg | p50 | p95 | p99 | p99.9 |
 |---|---|---|---|---|---|---|---|
-| 1 | 38k | 2 MiB/s | 26 µs | 27 µs | 33 µs | 38 µs | 48 µs |
-| 256 | 1961k | 120 MiB/s | 131 µs | 111 µs | 331 µs | 355 µs | 377 µs |
-| 512 | 2140k | 131 MiB/s | 239 µs | 220 µs | 435 µs | 468 µs | 637 µs |
-| 1024 | 2210k | 135 MiB/s | 463 µs | 296 µs | 2079 µs | 2146 µs | 2214 µs |
+| 1 | 102k | 6 MiB/s | 10 µs | 9 µs | 11 µs | 19 µs | 22 µs |
+| 256 | 1584k | 97 MiB/s | 162 µs | 105 µs | 488 µs | 697 µs | 833 µs |
+| 512 | 1677k | 102 MiB/s | 305 µs | 288 µs | 541 µs | 873 µs | 1077 µs |
+| 1024 | 2022k | 123 MiB/s | 507 µs | 281 µs | 3365 µs | 3595 µs | 3672 µs |
 
-Throughput scales from ~2M req/s at 256 conns to ~2.2M at 1024 conns. The distribution flattens at 1024 conns where the SQ batch saturates: p50 drops to 296 µs while p95-p99.9 cluster tightly around 2.1 ms. Submission is bounded-batched at the dispatch boundary (see Latency profiler below); without that bound, this workload's p50 is lower but p95/p99/p99.9 inflate by 5-10x.
+The single connection is a serial chain the processor prefix concentrates on one core: 9 µs p50, paired at +50% over a full-width scheduler. At 1024 conns the fleet is saturated and holds ~2M req/s at full width. The 256-512 rows sit in the width controller's oscillation band - per-core idle gaps read as shrinkable, the shed edge regrows on backlog, and homes migrate each cycle - costing 8-20% versus a full-width scheduler (paired: 1931k/2027k) with high run-to-run variance; the same open controller limit as the stall rows in `work-stealing.md`. Submission is bounded-batched at the dispatch boundary (see Latency profiler below); without that bound, this workload's p50 is lower but p95/p99/p99.9 inflate by 5-10x.
 
 ---
 
@@ -85,18 +85,18 @@ Same workload as net-perf above, reimplemented with Boost.Asio C++20 coroutines 
 | 512 | 358k | 22 MiB/s | 1429 µs | 1437 µs | 1506 µs | 1535 µs | 1572 µs |
 | 1024 | 427k | 26 MiB/s | 2396 µs | 2401 µs | 2492 µs | 2529 µs | 2583 µs |
 
-**Comparison with net-perf (fibers + io_uring), measured in the same suite:**
+**Comparison with net-perf (fibers + io_uring):**
 
 | connections | net-perf RPS | net-perf-asio RPS | ratio |
 |---|---|---|---|
-| 1 | 38k | 3k | **~13x** |
-| 256 | 1961k | 339k | **~5.8x** |
-| 512 | 2140k | 358k | **~6.0x** |
-| 1024 | 2210k | 427k | **~5.2x** |
+| 1 | 102k | 3k | **~34x** |
+| 256 | 1584k | 339k | **~4.7x** |
+| 512 | 1677k | 358k | **~4.7x** |
+| 1024 | 2022k | 427k | **~4.7x** |
 
 Two structural differences explain most of the gap. First, net-perf uses io_uring for all socket I/O while Asio uses epoll; io_uring avoids the per-operation `epoll_ctl` + `epoll_wait` + `recv`/`send` syscall chain. Second, the fiber scheduler's per-CPU pinned scheduler threads pick up completions via `io_uring_enter`, while Asio's reactor threads block in `epoll_wait` and resume via a pthread wakeup.
 
-The gap is largest at 1 connection (~13x) where per-operation scheduling overhead dominates with no parallelism to hide it, and stays around 5-6x at high connection counts where the server CPU half is the bottleneck.
+The gap is largest at 1 connection (~34x) where per-operation scheduling overhead dominates with no parallelism to hide it, and stays around 4.7x at high connection counts where the server CPU half is the bottleneck.
 
 ---
 
@@ -111,16 +111,16 @@ Same workload as net-perf above, reimplemented as the simplest efficient epoll l
 | 512 | 2506k | 153 MiB/s | 204 µs | 205 µs | 273 µs | 303 µs | 338 µs |
 | 1024 | 2485k | 152 MiB/s | 412 µs | 398 µs | 515 µs | 546 µs | 714 µs |
 
-**Comparison with net-perf (fibers + io_uring), same-run measurements:**
+**Comparison with net-perf (fibers + io_uring):**
 
 | connections | net-perf RPS | net-perf-epoll RPS | RPS ratio | net-perf p99 | net-perf-epoll p99 | p99 ratio |
 |---|---|---|---|---|---|---|
-| 1 | 38k | 44k | 1.16x | 38 µs | 35 µs | 0.92x |
-| 256 | 1961k | 2478k | **1.26x** | 355 µs | 152 µs | **0.43x** |
-| 512 | 2140k | 2506k | **1.17x** | 468 µs | 303 µs | **0.65x** |
-| 1024 | 2210k | 2485k | **1.12x** | 2146 µs | 546 µs | **0.25x** |
+| 1 | 102k | 44k | 0.43x | 19 µs | 35 µs | 1.84x |
+| 256 | 1584k | 2478k | **1.56x** | 697 µs | 152 µs | **0.22x** |
+| 512 | 1677k | 2506k | **1.49x** | 873 µs | 303 µs | **0.35x** |
+| 1024 | 2022k | 2485k | **1.23x** | 3595 µs | 546 µs | **0.15x** |
 
-At 1 connection both are equivalent -- the host has spare CPU and engine overhead is invisible. Past saturation raw epoll wins 13-30% on throughput and 1.5-2.2x on p99 tail latency. Per-CPU rate at saturation (256 conns, 16 server CPUs): fibers ≈ 122k req/cpu (8.2 µs CPU/req), epoll ≈ 158k req/cpu (6.3 µs CPU/req); the 1.9 µs/req gap is the cost of the fiber abstraction in this workload -- fiber suspend/resume + io_uring SQE/CQE submission + ready-queue bookkeeping per round-trip. The epoll loop services its connections in round-robin within each worker, so per-connection treatment is uniform -- p99 stays close to p50 (548 µs vs 401 µs at 1024 conns); net-perf with bounded-batched submission also keeps a tight ratio (861 µs p99 vs 447 µs p50, ~1.9x).
+At 1 connection the fiber scheduler wins 2.3x on throughput and p99: the processor prefix runs the whole serial chain on one core with no wake round trips, while each epoll round-trip pays the `epoll_wait` + `recv`/`send` syscall chain. Past saturation raw epoll wins on throughput (23% at 1024 conns, more in the 256-512 width-oscillation band - see net-perf above) and 3-7x on p99 tail latency. The epoll loop services its connections in round-robin within each worker, so per-connection treatment is uniform and p99 stays close to p50; net-perf's bounded-batched submission clusters p95-p99.9 around the batch period.
 
 What raw epoll gives up: composability. The state machine can't naturally accommodate sleeps (no `--delay` support), multi-step protocols, or branching control flow without growing into a small interpreter. net-perf-epoll is the throughput floor; net-perf is the structure you'd actually program against.
 
@@ -132,12 +132,12 @@ nginx `return 200` (empty body), loopback, 60 s measurement, 10 s warmup. Client
 
 | connections | RPS | avg | p50 | p95 | p99 | p99.9 |
 |---|---|---|---|---|---|---|
-| 1 | 37k | 27 µs | 25 µs | 33 µs | 41 µs | 71 µs |
-| 256 | 1447k | 177 µs | 113 µs | 822 µs | 976 µs | 1078 µs |
-| 512 | 1448k | 354 µs | 103 µs | 3712 µs | 4340 µs | 4524 µs |
-| 1024 | 1426k | 718 µs | 101 µs | 8943 µs | 10382 µs | 10805 µs |
+| 1 | 42k | 24 µs | 24 µs | 28 µs | 36 µs | 53 µs |
+| 256 | 1284k | 199 µs | 71 µs | 1661 µs | 2127 µs | 2400 µs |
+| 512 | 1309k | 391 µs | 104 µs | 4169 µs | 5257 µs | 5384 µs |
+| 1024 | 1312k | 780 µs | 86 µs | 9984 µs | 12360 µs | 12721 µs |
 
-At 1 connection p50 ~25 µs reflects Poco's HTTP parsing overhead. At higher concurrency the fiber client saturates nginx at ~1.4-1.47M RPS. Tail behavior is dominated by nginx itself once `connections >= 256`.
+At 1 connection p50 ~24 µs reflects Poco's HTTP parsing overhead. At higher concurrency the fiber client saturates nginx at ~1.3M RPS. Tail behavior is dominated by nginx itself once `connections >= 256`.
 
 ### Server: internal (silk fibers) vs nginx
 
@@ -145,16 +145,16 @@ At 1 connection p50 ~25 µs reflects Poco's HTTP parsing overhead. At higher con
 
 | connections | server | RPS | avg | p50 | p95 | p99 | p99.9 |
 |---|---|---|---|---|---|---|---|
-| 1 | internal | 28k | 36 µs | 35 µs | 42 µs | 47 µs | 61 µs |
-| 256 | internal | 1168k | 219 µs | 209 µs | 479 µs | 599 µs | 685 µs |
-| 512 | internal | 1144k | 447 µs | 140 µs | 3846 µs | 5015 µs | 5819 µs |
-| 1024 | internal | 1118k | 916 µs | 125 µs | 10630 µs | 14166 µs | 16739 µs |
-| 1 | nginx | 37k | 27 µs | 25 µs | 33 µs | 41 µs | 71 µs |
-| 256 | nginx | 1447k | 177 µs | 113 µs | 822 µs | 976 µs | 1078 µs |
-| 512 | nginx | 1448k | 354 µs | 103 µs | 3712 µs | 4340 µs | 4524 µs |
-| 1024 | nginx | 1426k | 718 µs | 101 µs | 8943 µs | 10382 µs | 10805 µs |
+| 1 | internal | 35k | 28 µs | 28 µs | 32 µs | 35 µs | 39 µs |
+| 256 | internal | 1001k | 256 µs | 195 µs | 969 µs | 1474 µs | 1777 µs |
+| 512 | internal | 1008k | 508 µs | 249 µs | 2245 µs | 3112 µs | 3696 µs |
+| 1024 | internal | 1030k | 994 µs | 495 µs | 7350 µs | 9441 µs | 9959 µs |
+| 1 | nginx | 42k | 24 µs | 24 µs | 28 µs | 36 µs | 53 µs |
+| 256 | nginx | 1284k | 199 µs | 71 µs | 1661 µs | 2127 µs | 2400 µs |
+| 512 | nginx | 1309k | 391 µs | 104 µs | 4169 µs | 5257 µs | 5384 µs |
+| 1024 | nginx | 1312k | 780 µs | 86 µs | 9984 µs | 12360 µs | 12721 µs |
 
-The internal server lands at ~80% of nginx RPS at high concurrency (1118-1168k vs 1426-1448k). The gap is Poco overhead, not silk overhead: nginx's `return 200` handler skips most of HTTP/1.1 parsing, while Poco constructs `HTTPServerRequestImpl`/`HTTPServerResponseImpl` plus heap-allocated stream buffers per request. The takeaway is that silk's accept-fiber + per-connection-fiber I/O loop has small overhead on top of whatever HTTP machinery you put on it -- to beat nginx you'd swap Poco for a hand-rolled state machine that allocates nothing per request, which is a different project.
+The internal server lands at ~78% of nginx RPS at high concurrency (1001-1030k vs 1284-1312k). The gap is Poco overhead, not silk overhead: nginx's `return 200` handler skips most of HTTP/1.1 parsing, while Poco constructs `HTTPServerRequestImpl`/`HTTPServerResponseImpl` plus heap-allocated stream buffers per request. The takeaway is that silk's accept-fiber + per-connection-fiber I/O loop has small overhead on top of whatever HTTP machinery you put on it -- to beat nginx you'd swap Poco for a hand-rolled state machine that allocates nothing per request, which is a different project.
 
 ### High-concurrency throughput (connections=10000, delay=10ms, duration=60s, warmup=10s)
 
@@ -162,16 +162,18 @@ Run against the internal silk-fiber HTTP server with a 10 ms server-side sleep p
 
 | connections | mode | RPS | avg | p50 | p95 | p99 | p99.9 |
 |---|---|---|---|---|---|---|---|
-| 10000 | fibers | 551k | 10253 µs | 10208 µs | 10535 µs | 10762 µs | 12094 µs |
-| 10000 | threads | 589k | 16200 µs | 15503 µs | 23554 µs | 26398 µs | 30314 µs |
+| 10000 | fibers | 669k | 10272 µs | 10232 µs | 10577 µs | 10823 µs | 11941 µs |
+| 10000 | threads | 612k | 14569 µs | 13916 µs | 19955 µs | 21806 µs | 24075 µs |
 
-Throughput is in the same band (551k fibers vs 589k threads); the workload is server-bound. The big difference is latency tightness: fiber percentiles cluster within a 1.9 ms window (p50 10.2 ms -> p99.9 12.1 ms), while threads spread over 15 ms (p50 15.5 ms -> p99.9 30.3 ms). At 10k OS threads the kernel scheduler injects multi-millisecond stalls into the tail; the fiber scheduler keeps the tail close to the median.
+Throughput is in the same band (669k fibers vs 612k threads); the workload is server-bound. The big difference is latency tightness: fiber percentiles cluster within a 1.7 ms window (p50 10.2 ms -> p99.9 11.9 ms), while threads spread over 10 ms (p50 13.9 ms -> p99.9 24.1 ms). At 10k OS threads the kernel scheduler injects multi-millisecond stalls into the tail; the fiber scheduler keeps the tail close to the median.
 
 ---
 
 ## s3-perf -- S3 object storage
 
 MinIO loopback (`http://127.0.0.1:9000`), object size=4096 B, 60 s measurement, 10 s warmup. Both modes use `numjobs` OS session threads, each maintaining an `iodepth`-slot ring of in-flight async S3 requests and waiting on a `FiberFuture` per slot. The difference is the AWS SDK executor and HTTP client: fiber mode runs each SDK async task as a fiber with io_uring socket I/O (`FiberExecutor` + `FiberHttpClient`); thread mode runs each task on a `PooledThreadExecutor` (sized `numjobs x iodepth`) with blocking socket I/O.
+
+`s3-perf --threads` dies with SIGSEGV mid-measurement on the current build, so the executor pair cannot be re-measured until that fix; the tables below stand as last measured.
 
 | numjobs | iodepth | mode | executor | OPS/s | avg | p50 | p95 | p99 | p99.9 |
 |---|---|---|---|---|---|---|---|---|---|
@@ -223,21 +225,21 @@ Per-CPU profiler (opted in via `--print-counters`) emits log2 histograms for sev
 | `ready_wait` | `enqueueReady` -> dispatch (ready-queue dwell) |
 | `fiber_run` | `switchToFiberContext` -> return (on-CPU time per slice) |
 
-### Per-IO breakdown (net-perf, 1000 connections, 60 s, 10 s warmup, 2038k RPS)
+### Per-IO breakdown (net-perf, 1000 connections, 60 s, 10 s warmup, 1882k RPS)
 
 Reproduced with `./bb -b release net-perf --connections 1000 --duration 60s --warmup 10s --print-counters`.
 
 | event | p50 | p90 | p99 | p99.9 |
 |---|---|---|---|---|
-| `suspend_wait` | 159 µs | 479 µs | 982 µs | 1.0 ms |
-| `io_wait` | 160 µs | 480 µs | 982 µs | 1.0 ms |
-| `sq_wait` | 13 µs | 357 µs | 918 µs | 1.0 ms |
-| `submit_io` | 17 µs | 125 µs | 249 µs | 262 µs |
-| `cq_wait` | 27 µs | 162 µs | 540 µs | 998 µs |
-| `ready_wait` | 12 µs | 132 µs | 675 µs | 1.0 ms |
-| `fiber_run` | 194 ns | 403 ns | 2.4 µs | 6.7 µs |
+| `suspend_wait` | 147 µs | 409 µs | 1.2 ms | 2.0 ms |
+| `io_wait` | 147 µs | 407 µs | 1.2 ms | 2.0 ms |
+| `sq_wait` | 13 µs | 261 µs | 1.0 ms | 2.0 ms |
+| `submit_io` | 28 µs | 124 µs | 246 µs | 261 µs |
+| `cq_wait` | 52 µs | 195 µs | 410 µs | 518 µs |
+| `ready_wait` | 12 µs | 32 µs | 260 µs | 503 µs |
+| `fiber_run` | 219 ns | 439 ns | 3.0 µs | 7.5 µs |
 
-`fiber_run` p50 = 194 ns confirms the dispatch loop itself is essentially free; this workload is IO-bound. `io_wait` is the full silk-side wait; `sq_wait` is the share before the SQE reaches the kernel and `cq_wait` bounds the CQE-side share, so the kernel's own time is the residual. Submission amortizes over batched SQEs: 23.4 M syscalls observed during the run averaging ~12 SQEs each.
+`fiber_run` p50 = 219 ns confirms the dispatch loop itself is essentially free; this workload is IO-bound. `io_wait` is the full silk-side wait; `sq_wait` is the share before the SQE reaches the kernel and `cq_wait` bounds the CQE-side share, so the kernel's own time is the residual. Submission amortizes over batched SQEs: 17.4 M syscalls observed during the run averaging ~14 SQEs each.
 
 Submission is bounded by **both** a count and a time threshold. `runFiber` calls `submitIo(false)` after each fiber, which fires the syscall when either (a) the SQ ring holds at least `ioUringFlushThreshold = 64` SQEs, or (b) `ioUringFlushTimeout = 100` µs has elapsed since the last submit. `handleReadyQueue`, `enqueueWakeup`, the proxy-fiber `enqueueIo` path, and worker threads call `submitIo(true)` to force-flush. The count threshold caps per-syscall cost and SQ-ring overflow; the time threshold caps the SQ_WAIT tail when a single fiber holds the scheduler thread long enough that pending SQEs from earlier fibers would otherwise wait for end-of-batch flush. SQPOLL is not enabled because the per-CPU pinned scheduler design would put the kernel poller in contention with the user-space scheduler thread.
 
@@ -245,9 +247,9 @@ Submission is bounded by **both** a count and a time threshold. `runFiber` calls
 
 | metric | off | on | Δ |
 |---|---|---|---|
-| RPS | 2056k | 2038k | -0.9% |
-| p50 | 178 µs | 375 µs | +111% |
-| p99 | 4595 µs | 1594 µs | **-65%** |
-| p99.9 | 4766 µs | 1723 µs | **-64%** |
+| RPS | 1956k | 1882k | -3.8% |
+| p50 | 478 µs | 342 µs | -28% |
+| p99 | 1106 µs | 3501 µs | +217% |
+| p99.9 | 1724 µs | 4531 µs | +163% |
 
-Profiler costs ~1% RPS. Tail percentiles (p99, p99.9) are markedly lower with the profiler on -- the per-suspend TSC reads + ring writes serialize the dispatch loop in a way that suppresses the rare large-burst stalls visible in the no-profiler run. The cost shows up on the median: p50 roughly doubles (178 µs -> 375 µs) because every dispatch pays a few hundred extra cycles. The no-profiler run's p50/p99 ratio of 25x (178 µs / 4595 µs) is wider than typical steady-state; the profiler-on run's 4x ratio (375 µs / 1594 µs) is closer to the shape seen at this load in the work-stealing canonical runs.
+Profiler costs ~4% RPS. The percentile deltas are not stable at this load: 1000 connections sits in the width controller's oscillation band (see net-perf above), where run-to-run tail variance between back-to-back identical runs exceeds the profiler's own effect, so only the RPS delta is meaningful here.
