@@ -887,6 +887,7 @@ void FiberScheduler::initialize(const Options * userOptions) noexcept
     scheduler = new SchedulerState();
     scheduler->ioUringFlushTimeoutCycles = Tsc::nanosecondsToCycles(options.ioUringFlushTimeout);
     scheduler->backlogAgeCycles = Tsc::nanosecondsToCycles(options.maxWaitNs);
+    scheduler->spinThresholdCycles = Tsc::nanosecondsToCycles(options.spinThresholdNs);
 
     scheduler->waiterTable = std::make_unique<WaitStack[]>(options.waiterTableSize);
     scheduler->waiterTableMask = options.waiterTableSize - 1;
@@ -1855,6 +1856,12 @@ bool FiberScheduler::runStealLoop(ProcessorState * processor, uint64_t idleSince
 
         // Skip uninitialized processors.
         if (!victim->initialized.load(std::memory_order_acquire))
+        {
+            continue;
+        }
+
+        // A victim attended within the spin horizon runs its own work sooner than a steal can move it.
+        if (victim->lastServiceCycles.load(std::memory_order_relaxed) + scheduler->spinThresholdCycles > now)
         {
             continue;
         }
