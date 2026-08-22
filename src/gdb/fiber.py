@@ -634,9 +634,10 @@ def _walk_tree(tree_val, entry_offset):
 
 def _dump_sleep_table(proc_states, count, cpu):
     """Print the per-processor sleep table and return a coarse 'now' estimate (the
-    max lastCqDrainCycles across all processors -- the park backstop refreshes it
-    at least every maxWaitNs).  The estimate is computed over every processor even
-    when @p cpu restricts the printed rows, so overdueCycles stays meaningful."""
+    max lastServiceCycles across all processors -- prefix parks refresh it every
+    maxWaitNs, the backstop bounds it at PARK_BACKSTOP_WINDOWS x maxWaitNs).  The
+    estimate is computed over every processor even when @p cpu restricts the
+    printed rows, so overdueCycles stays meaningful."""
     now_estimate = 0
     print("\n  per-processor sleep state:")
     print(
@@ -651,7 +652,7 @@ def _dump_sleep_table(proc_states, count, cpu):
             continue
 
         try:
-            drain = int(_atomic_load(proc["lastCqDrainCycles"]))
+            drain = int(_atomic_load(proc["lastServiceCycles"]))
             now_estimate = max(now_estimate, drain)
         except gdb.error:
             pass
@@ -681,7 +682,7 @@ def _dump_sleep_table(proc_states, count, cpu):
                 "set" if cancel_q else "empty",
             )
         )
-    print("  now estimate (max lastCqDrainCycles): %d" % now_estimate)
+    print("  now estimate (max lastServiceCycles): %d" % now_estimate)
     return now_estimate
 
 

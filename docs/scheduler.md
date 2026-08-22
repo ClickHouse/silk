@@ -205,7 +205,7 @@ The deadline is shared across all candidates and all fiber steals, bounding tota
 - `waitNs` starts at `Options::initialWaitNs` (1 us) and doubles each idle iteration up to `Options::maxWaitNs` (10 ms).
 - While `waitNs < Options::spinThresholdNs` (20 us): `spinWait` runs 64 x `cpuPause` iterations (~2 us) checking `hasWork`.
 - Once `waitNs >= Options::spinThresholdNs`: `parkThread` calls `io_uring_enter2` with a `waitNs` timeout. The timed wait ensures sleeping prefix processors wake periodically to attempt stealing even without an explicit wakeup.
-- A processor outside the prefix that has ramped to `Options::maxWaitNs` with no pending SQEs parks with no timeout; the standby keeps the timed cadence instead (see Processor Prefix).
+- A processor outside the prefix that has ramped to `Options::maxWaitNs` with no pending SQEs parks to the rare backstop (100 windows); the standby keeps the timed cadence instead (see Processor Prefix).
 
 Any productive iteration resets `waitNs` back to `Options::initialWaitNs`.
 
@@ -213,9 +213,9 @@ Any productive iteration resets `waitNs` back to `Options::initialWaitNs`.
 
 ## Processor Prefix
 
-**The scheduler runs on a processor prefix sized to load.** Processors are ordered whole cores first, HT siblings after; the prefix of that order is the awake set. Processors inside the prefix park timed (capped at `Options::maxWaitNs`) and steal from each other; processors outside park indefinitely and hold no work. The scheduler boots at full width and decays; a fully idle scheduler decays to zero plus a standby prober. The timed park is the only way parked neighbors learn about stealable backlog, so scoping it to the prefix removes the idle fleet's polling (each park pays kernel newidle balancing) and concentrates small loads on few cores, where every extra awake core inserts park/doorbell round trips into the commit path.
+**The scheduler runs on a processor prefix sized to load.** Processors are ordered whole cores first, HT siblings after; the prefix of that order is the awake set. Processors inside the prefix park timed (capped at `Options::maxWaitNs`) and steal from each other; processors outside park to a rare backstop and hold no work. The scheduler boots at full width and decays; a fully idle scheduler decays to zero plus a standby prober. The timed park is the only way parked neighbors learn about stealable backlog, so scoping it to the prefix removes the idle fleet's polling (each park pays kernel newidle balancing) and concentrates small loads on few cores, where every extra awake core inserts park/doorbell round trips into the commit path.
 
-**One time constant governs the width.** `Options::maxWaitNs` is the park backoff cap, the boundary past which an out-of-prefix park drops its timeout, the backlog age that grows the prefix, and the utilization window that shrinks it.
+**One time constant governs the width.** `Options::maxWaitNs` is the park backoff cap, the boundary past which an out-of-prefix park stretches to the backstop, the backlog age that grows the prefix, and the utilization window that shrinks it.
 
 **Growth: a queue continuously non-empty for one window starts the next processor.** A backlog observation stamps the queue; the owner clears the stamp whenever it drains the queue empty, so backlog consumed in time never grows anything; a stamp that survives a full window widens the prefix and rings the started processor's ordinary doorbell. No work is assigned to it - its own steal loop finds the backlog cheapest-first. Growth is paced to one processor per queue per window.
 
@@ -223,7 +223,7 @@ Any productive iteration resets `waitNs` back to `Options::initialWaitNs`.
 
 **The standby probes.** The first processor right of the prefix keeps timed parks - the only observer of backlog aging behind a prefix too busy to signal. Each growth appoints the new standby by doorbell (a sleeping processor never re-evaluates its role on its own); a standby that finds aged backlog activates itself into the prefix and wakes the next standby.
 
-**A pre-park sweep makes silence lossless.** Before parking, a prefix processor scans its neighbors' queues for aged backlog and aborts the park to steal it. The sweep and the growth check are fence-ordered against each other, so either the sweeper sees the enqueue or the producer sees the shrunk prefix and grows it - no interleaving loses both.
+**A pre-park sweep makes silence lossless.** Ready-queue work has a producer running scheduler code at arrival; ring work arrives from the kernel and sleep expiries from the clock, with no agent to signal. Each processor therefore publishes its attendance - a heartbeat stamped on every completed service pass, and its earliest sleep deadline - and before parking, a prefix processor scans its neighbors for aged ready backlog and for unattended work: a heartbeat stale for a full window while the ring holds completions or the published deadline is due, the signature of a thread held inside a long-running fiber or blocked outside the scheduler loop. A hit aborts the park and the steal loop takes the work. The sweep and the growth check are fence-ordered against each other, so either the sweeper sees the enqueue or the producer sees the shrunk prefix and grows it - no interleaving loses both. The indefinite park keeps a rare backstop timeout (100 windows) - insurance for a prefix whose every prober is simultaneously held.
 
 **Placement: a fiber migrates when its home cannot run it without a doorbell** - no home assigned yet, deactivated out of the prefix, or sleeping below full width while the awake producer could run it with its data still warm. The fiber lands on the producer when it is a prefix member, on the first processor otherwise; an empty prefix restarts. At full width placement stays sticky, and stealing is unchanged at every width. The `SchedulerThreadGrow` / `SchedulerThreadShrink` counters expose the controller.
 
