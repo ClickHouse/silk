@@ -1,11 +1,14 @@
 #include <silk/fibers/future.h>
 
 #include <silk/fibers/fiber.h>
+#include <silk/util/platform.h>
 
 #include <gtest/gtest.h>
 
 #include <cerrno>
 #include <vector>
+
+#include <unistd.h>
 
 namespace silk
 {
@@ -452,6 +455,43 @@ TEST(FiberFuture, setAllNoWaiter)
 TEST(FiberFuture, setAllEmpty)
 {
     FiberFuture::setAll(0, nullptr, 0);
+}
+
+/** Violates the subscribe contract - the callback must not block. */
+static void blockingSubscribeCallback(FiberFuture * future) noexcept
+{
+    SILK_UNUSED(future);
+    FiberScheduler::sleep(1'000'000);
+}
+
+static int emptyFiberMain(int * params) noexcept
+{
+    SILK_UNUSED(params);
+    return 0;
+}
+
+// The fiber-completion future is set by the scheduler thread, so the subscribed
+// callback runs there; its blocking sleep takes the proxy park, which must fail
+// loud instead of wedging the processor.
+TEST(FutureDeathTest, blockingSubscribeCallbackFailsOnSchedulerThread)
+{
+    GTEST_FLAG_SET(death_test_style, "threadsafe");
+
+    ASSERT_DEATH(
+        {
+            FiberFuture future;
+            bool subscribed = future.subscribe(blockingSubscribeCallback);
+            ASSERT_TRUE(subscribed);
+
+            int r = FiberScheduler::run(emptyFiberMain, 0, &future);
+            ASSERT_EQ(r, 0);
+
+            // The assert fires on a scheduler thread while this thread sleeps; the
+            // crash dump before the re-raise can take seconds, and the child exits
+            // clean the moment this statement returns - so outwait any dump.
+            ::usleep(60'000'000);
+        },
+        "a completion callback blocked the scheduler thread");
 }
 
 } // namespace silk

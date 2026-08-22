@@ -79,6 +79,11 @@ thread_local Fiber * threadFiber = nullptr;
 // Proxy fiber for the current non-fiber thread; destroyed at thread exit.
 static thread_local std::unique_ptr<Fiber> proxyFiber;
 
+// Set for the lifetime of a scheduler thread. A scheduler thread must never block
+// on the proxy path - a blocked scheduler thread stops draining its ring and wedges
+// the processor - so the proxy park fails loud when this is set.
+static thread_local bool schedulerThread = false;
+
 Fiber::Fiber(bool isProxyFiber) noexcept
     : state(isProxyFiber ? FiberState::RUNNING : FiberState::SUSPENDED)
     , isProxyFiber(isProxyFiber)
@@ -334,6 +339,12 @@ void Fiber::wakeThread() noexcept
 
 void Fiber::parkThread() noexcept
 {
+    // Only external threads may block through the proxy. On a scheduler thread this
+    // park means a completion callback or another thread-context hook issued a
+    // blocking call inside the service loop - the processor would stop draining its
+    // ring until someone else completes the wait.
+    SILK_ASSERT(!schedulerThread, "a completion callback blocked the scheduler thread");
+
     Perf::getSimpleCounter(simpleCounters[PROXY_FIBER_PARKED]).increment();
 
     for (;;)
@@ -1701,6 +1712,8 @@ LatencyReport FiberScheduler::reportLatency(ProfileEventKind kind, uint8_t categ
 
 void FiberScheduler::runScheduler(ProcessorState * processor) noexcept
 {
+    schedulerThread = true;
+
     int r = pinThreadToCpu(processor->number);
     SILK_ASSERT(!r, "could not pin the scheduler thread to its cpu: r=%d", r);
 
