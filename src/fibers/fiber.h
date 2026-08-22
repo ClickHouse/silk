@@ -46,6 +46,10 @@ static constexpr uint32_t SHRINK_WINDOW_COUNT = 3;
 // periodic timer breaks every idle streak while leaving the core almost entirely idle.
 static constexpr uint64_t SHRINK_UTILIZATION_PERCENT = 25;
 
+// Backstop on the indefinite park, in maxWaitNs windows: a wedge no signal covers
+// still gets swept and stolen within one backstop.
+static constexpr uint64_t PARK_BACKSTOP_WINDOWS = 100;
+
 // clang-format off
 #define FIBER_SIMPLE_COUNTERS(x) \
     x(FIBER_STARTED,           "FiberStarted") \
@@ -294,6 +298,8 @@ struct FiberScheduler::ProcessorState
     void wakeThread() noexcept;
     void parkThread(uint64_t waitNs, bool deadlineBounded, CpuTimer * timer) noexcept;
 
+    void publishSleepDeadline() noexcept;
+
     bool hasWork() const noexcept;
     uint32_t sqReady() const noexcept;
     uint32_t cqReady() const noexcept;
@@ -338,10 +344,10 @@ struct FiberScheduler::ProcessorState
         // suspendedLock so that insert/remove touch only this cache line.
         SuspendedList suspendedList;
 
-        // Timestamp (TSC cycles) of the most recent successful CQ drain on
-        // this ring. Used to emit CQ_WAIT profile events bounding how long
-        // any CQE in the next drain batch could have sat in the ring.
-        uint64_t lastCqDrainCycles = 0;
+        // Timestamp (TSC cycles) of the last completed service pass, stamped under
+        // serviceLoopLock by the owner or a claiming helper. Bounds CQE dwell for
+        // CQ_WAIT; foreign sweeps read it to spot unchecked queues.
+        std::atomic<uint64_t> lastServiceCycles{};
 
         // Timestamp (TSC cycles) of the most recent io_uring_submit call.
         // Read in submitIo (time-gate) and handleCompletionQueue (SQ_WAIT
@@ -402,8 +408,8 @@ struct FiberScheduler::ProcessorState
 
     // Service-loop region, owner-polled on every runServiceLoop iteration and spanning
     // several lines: the sleep queues and tree, the ring, and the cold utilization-window
-    // fields riding the first line. cancelQueue takes rare foreign pushes; everything
-    // else is owner-only.
+    // fields riding the first line. cancelQueue takes rare foreign pushes and foreign
+    // sweeps read the published deadline; everything else is owner-only.
     struct alignas(kCacheLineSize)
     {
         // Cold utilization-window state, touched at window boundaries: the
@@ -413,6 +419,10 @@ struct FiberScheduler::ProcessorState
         uint64_t windowIdleNs = 0;
         uint64_t windowBoundedNs = 0;
         uint32_t lowWindowCount = 0;
+
+        // Earliest sleepTree deadline, published under serviceLoopLock at every tree
+        // mutation; zero when the tree is empty. Foreign sweeps read it.
+        std::atomic<uint64_t> sleepDeadlineCycles{};
 
         // Sleep registration and cross-CPU cancellation queues, drained every iteration.
         SleepStack sleepQueue;

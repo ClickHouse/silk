@@ -416,8 +416,9 @@ void FiberScheduler::ProcessorState::initialize(uint16_t cpu) noexcept
         profiler = std::make_unique<Profiler>();
     }
 
-    lastCqDrainCycles = Tsc::getCycles();
-    lastSubmitCycles.store(lastCqDrainCycles, std::memory_order_relaxed);
+    uint64_t nowCycles = Tsc::getCycles();
+    lastServiceCycles.store(nowCycles, std::memory_order_relaxed);
+    lastSubmitCycles.store(nowCycles, std::memory_order_relaxed);
 }
 
 void FiberScheduler::ProcessorState::destroy() noexcept
@@ -535,15 +536,18 @@ void FiberScheduler::ProcessorState::parkThread(uint64_t waitNs, bool deadlineBo
 
     if (parking)
     {
+        // The rare backstop timeout: a prefix whose every prober is held still gets swept.
+        if (indefinitePark)
+        {
+            waitNs = options.maxWaitNs * PARK_BACKSTOP_WINDOWS;
+        }
+
         __kernel_timespec ts;
         ts.tv_sec = static_cast<int64_t>(waitNs / 1'000'000'000);
         ts.tv_nsec = static_cast<int64_t>(waitNs % 1'000'000'000);
 
         io_uring_getevents_arg arg{};
-        if (!indefinitePark)
-        {
-            arg.ts = reinterpret_cast<uint64_t>(&ts);
-        }
+        arg.ts = reinterpret_cast<uint64_t>(&ts);
 
         Perf::getSimpleCounter(simpleCounters[SCHEDULER_THREAD_PARKED], number).increment();
 
@@ -571,6 +575,12 @@ void FiberScheduler::ProcessorState::parkThread(uint64_t waitNs, bool deadlineBo
     }
 
     sleeping.store(false, std::memory_order_relaxed);
+}
+
+void FiberScheduler::ProcessorState::publishSleepDeadline() noexcept
+{
+    SleepFuture * nextSleep = sleepTree.min();
+    sleepDeadlineCycles.store(nextSleep ? nextSleep->deadlineCycles : 0, std::memory_order_relaxed);
 }
 
 bool FiberScheduler::ProcessorState::hasWork() const noexcept
@@ -1781,8 +1791,8 @@ bool FiberScheduler::runServiceLoop(ProcessorState * processor, uint64_t waitNs,
         }
 
         // Wait step starts at initialWaitNs and doubles each idle iteration up to maxWaitNs;
-        // past the indefinite-park threshold parkThread drops the timeout entirely, so a fully
-        // idle scheduler does not poll - wakeups are doorbell-driven.
+        // past the indefinite-park threshold parkThread stretches the timeout to the rare
+        // backstop, so a fully idle scheduler barely polls - wakeups are doorbell-driven.
         // Before going to sleep - spin a little to avoid eventfd syscalls.
         if (effectiveWaitNs)
         {
@@ -1810,6 +1820,9 @@ bool FiberScheduler::runServiceLoop(ProcessorState * processor, uint64_t waitNs,
     {
         processor->profiler->aggregate();
     }
+
+    // The attendance heartbeat: stale means this processor's queues went unchecked.
+    processor->lastServiceCycles.store(Tsc::getCycles(), std::memory_order_relaxed);
 
     processor->serviceLoopLock.unlock();
     return didWork;
@@ -2014,9 +2027,7 @@ bool FiberScheduler::sweepBacklog(ProcessorState * processor) noexcept
 
     // Cheapest-first sweep for aged ready backlog - the owner may be inside a long-running
     // fiber and unable to signal; young backlog stays with its awake owner, whose own
-    // pre-park hasWork re-check keeps it from ever being stranded. Undrained completions
-    // are left to the awake steal loops: probing neighbors' live CQ rings from
-    // here hammers their hot lines on every transient completion. A hit restarts the
+    // pre-park hasWork re-check keeps it from ever being stranded. A hit restarts the
     // stamp's age - the sweeping processor is about to take the backlog itself.
     uint64_t now = Tsc::getCycles();
     uint16_t candidateCount = scheduler->processorCount - 1;
@@ -2029,7 +2040,12 @@ bool FiberScheduler::sweepBacklog(ProcessorState * processor) noexcept
         }
 
         ProcessorState * neighbor = &scheduler->processorState[candidate->processorNumber];
-        if (neighbor->initialized.load(std::memory_order_acquire) && !neighbor->readyQueue.empty())
+        if (!neighbor->initialized.load(std::memory_order_acquire))
+        {
+            continue;
+        }
+
+        if (!neighbor->readyQueue.empty())
         {
             uint64_t since = neighbor->backlogSinceCycles.load(std::memory_order_relaxed);
             if (since != 0 && now - since >= scheduler->backlogAgeCycles)
@@ -2044,6 +2060,23 @@ bool FiberScheduler::sweepBacklog(ProcessorState * processor) noexcept
             if (since == 0)
             {
                 neighbor->backlogSinceCycles.store(now, std::memory_order_relaxed);
+            }
+        }
+
+        // Work present but unattended: ring completions or a due sleep deadline behind
+        // a stale heartbeat. A parked owner self-wakes; an attending one never hits.
+        if (!neighbor->sleeping.load(std::memory_order_relaxed)
+            && now - neighbor->lastServiceCycles.load(std::memory_order_relaxed) >= scheduler->backlogAgeCycles)
+        {
+            if (neighbor->cqReady())
+            {
+                return true;
+            }
+
+            uint64_t sleepDeadline = neighbor->sleepDeadlineCycles.load(std::memory_order_relaxed);
+            if (sleepDeadline != 0 && now >= sleepDeadline)
+            {
+                return true;
             }
         }
     }
@@ -2234,8 +2267,8 @@ __attribute__((noinline)) bool FiberScheduler::handleCompletionQueueSlow(Process
 
     if (didWork && processor->profiler)
     {
-        processor->profileEvent(ProfileEventKind::CQ_WAIT, 0, entryCycles - processor->lastCqDrainCycles);
-        processor->lastCqDrainCycles = entryCycles;
+        uint64_t durationCycles = entryCycles - processor->lastServiceCycles.load(std::memory_order_relaxed);
+        processor->profileEvent(ProfileEventKind::CQ_WAIT, 0, durationCycles);
     }
 
     return didWork;
@@ -2279,6 +2312,8 @@ __attribute__((noinline)) void FiberScheduler::handleSleepQueueSlow(ProcessorSta
         sleepFuture = next;
 
     } while (sleepFuture);
+
+    processor->publishSleepDeadline();
 }
 
 bool FiberScheduler::handleCancelQueue(ProcessorState * processor) noexcept
@@ -2309,6 +2344,8 @@ __attribute__((noinline)) void FiberScheduler::handleCancelQueueSlow(ProcessorSt
         ++count;
 
     } while (cancelEntry);
+
+    processor->publishSleepDeadline();
 
     Perf::getSimpleCounter(simpleCounters[SLEEP_CANCELLED], processor->number).increment(count);
 }
@@ -2361,6 +2398,8 @@ FiberScheduler::handleExpiredWaitersSlow(ProcessorState * processor, SleepFuture
         }
 
     } while (sleepFuture && sleepFuture->deadlineCycles <= now);
+
+    processor->publishSleepDeadline();
 
     Perf::getSimpleCounter(simpleCounters[SLEEP_EXPIRED], processor->number).increment(count);
 }
