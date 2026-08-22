@@ -510,6 +510,10 @@ struct FiberScheduler::SchedulerState
         // adaptation window: the grow age and the utilization window span. Rides this
         // line because the backlog checks read it right after the prefixCount gate.
         uint64_t backlogAgeCycles = 0;
+
+        // Options::spinThresholdNs in TSC cycles, derived once in initialize - the
+        // hot horizon: the steal loop skips a victim whose heartbeat is younger.
+        uint64_t spinThresholdCycles = 0;
     };
 
     // Worker-pool region: the shared ready queue of thread-mode and overflow
