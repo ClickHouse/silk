@@ -28,6 +28,8 @@ load% = (connections × stall_rate × stall_duration) / 16_cores
 
 ## Canonical results (10-minute runs, 30s warmup)
 
+The silk rows are full-width measurements: under stall load the processor prefix (`scheduler.md`) trades RPS for lower extreme tails - a stall is a sleep the shrink signal cannot see - so the stall rows shift with width adaptation while the no-stall row holds.
+
 | config | engine | RPS | p50 | p95 | p99 | p99.9 |
 |---|---|---|---|---|---|---|
 | 1024 baseline | silk | 2152k | 466 | 664 | 767 | **1776** |
@@ -63,6 +65,14 @@ Per-stage breakdown at 64% load (silk client, 60s with --print-counters):
 - **Baseline p99.9.** Even with no stall load, silk's p99.9 is 1.8 ms vs epoll's 0.6 ms at 1024 connections -- the fiber dispatch loop has structurally more tail than a per-thread epoll reactor.
 - **p99 at light stall load.** At 6.4% load (1024 × 10Hz × 100us) silk is worse than epoll on p99 (2.1 ms vs 0.7 ms) -- the stealing path doesn't fire often enough to offset silk's higher per-fiber overhead.
 
+## The load-imbalance tail
+
+**Anatomy of the p99.9 episodes.** Connection setup homes every fiber on the spawning processor, and stealing diffuses the clump only partially, leaving persistent homes of hundreds of connections - about one full CPU of message work with no headroom. Roughly once per run a server stall bunches that processor's responses, it falls behind its wave, its sends go silent for up to a second, and the whole window then releases at once - a relaxation oscillation that takes hundreds of milliseconds to damp. During an episode every CPU is busy, so no wake mechanism applies: nothing is asleep to wake.
+
+**Timed parks everywhere mask the mechanics.** The convoys form regardless of park policy; a full-width fleet of capped parks bulk-drains them within milliseconds, clipping episodes at ~15 ms, while a narrowed prefix lets them run ~300 ms and bounds the extreme tail lower.
+
+**The causal bound.** Homing new fibers round-robin instead of spawner-local kills the clumps at birth - p99.9 collapses and the run-to-run variance disappears - but throughput halves, because uniform static partitioning loses the pooling that spawner-local homes plus stealing provide. Spawner-local homing with stealing is the throughput-correct choice; the tail is its price.
+
 ## Counter evidence at three load points
 
 `silk + --print-counters`, illustrating where the throughput win comes from:
@@ -74,7 +84,6 @@ Per-stage breakdown at 64% load (silk client, 60s with --print-counters):
 | 160% (256 × 100Hz × 1ms) | 970k | **196,210** | 25.9M | 424s (44%) |
 
 `FiberStolen` rises ~112x at the saturation row but only 2.7x at 64% load. So the throughput win at 64% load is **not primarily from stealing** -- it's from silk's structural ability to spread stall load across all 16 cores (silk's scheduler thread idle on CPU N can drain CPU M's CQ via `runStealLoop`'s `runServiceLoop(victim)` call), where epoll's per-thread reactor leaves a stalled thread's 64 connections starved until the stall ends. Work-stealing is doing what it claims to do; its meaningful contribution is at saturation, not mid-load.
-
 
 ## Lower-rate stall sweep
 

@@ -10,6 +10,8 @@ Commands:
   fiber-switchcontext <Fiber*>    Switch to a SUSPENDED/READY fiber's context
   fiber-dump-sleep [cpu]          Dump per-processor sleep state (sleepTree + queues)
   fiber-dump-uring [cpu]          Dump per-processor io_uring ring state
+  fiber-dump-scheduler            Dump the scheduler-wide state
+  fiber-dump-counters [cpu]       Dump the Perf simple counters
 """
 
 import gdb
@@ -119,6 +121,16 @@ def _deref_u32(value_ptr):
     live in mmap'd kernel memory (e.g. io_uring ring head/tail/flags counters),
     which is readable on a live attach."""
     return int(value_ptr.dereference()) & 0xFFFFFFFF
+
+
+def _read_c_string(addr):
+    """Read a NUL-terminated C string at addr (e.g. a counter name literal)."""
+    if not addr:
+        return "?"
+    try:
+        return gdb.Value(addr).cast(gdb.lookup_type("char").pointer()).string()
+    except (gdb.error, UnicodeDecodeError):
+        return "0x%x" % addr
 
 
 def _field_offset(type_val, name):
@@ -910,6 +922,68 @@ def _dump_uring_table(proc_states, count, cpu):
                     )
 
 
+# ── Scheduler state and counter introspection ─────────────────────────────────
+#
+# Readers for the scheduler-wide state and the Perf simple counter registry.
+# Imbalanced counter pairs name the failed hand-off: FiberStarted > FiberStopped
+# means an injected fiber never finished, ProxyFiberParked > ProxyFiberWaked means
+# an external waiter never got its wake.
+
+
+def _dump_scheduler_state(sched):
+    """Print prefixCount / prefixTotal and prefixOrder (position -> cpu)."""
+    # prefixCount is atomic<uint16_t>; read exactly 2 bytes rather than over-reading
+    # into the adjacent fields.
+    prefix_count = struct.unpack_from(
+        "<H", _read(int(sched["prefixCount"].address), 2)
+    )[0]
+    prefix_total = int(sched["prefixTotal"])
+    print("  prefixCount: %d of %d" % (prefix_count, prefix_total))
+
+    order_base = _unique_ptr(sched["prefixOrder"])
+    if order_base and prefix_total:
+        order = struct.unpack_from(
+            "<%dH" % prefix_total, _read(order_base, prefix_total * 2)
+        )
+        print("  prefixOrder: %s" % " ".join(str(c) for c in order))
+
+
+def _dump_counter_table(sched, cpu):
+    """Print every registered Perf simple counter.  Values are summed across all
+    CPUs, or read from a single CPU's slots when @p cpu is not None.  Perf sizes
+    its per-CPU arrays with the same getProcessorCount the scheduler stores in
+    processorCount."""
+    # simpleCounterCount is atomic<uint32_t>; read exactly 4 bytes.
+    count_val = gdb.parse_and_eval("silk::Perf::simpleCounterCount")
+    slot_count = struct.unpack_from("<I", _read(int(count_val.address), 4))[0]
+    if not slot_count:
+        print("  no registered counters")
+        return
+
+    perf_states_base = _unique_ptr(gdb.parse_and_eval("silk::Perf::processorState"))
+    if not perf_states_base:
+        print("  Perf not initialized")
+        return
+
+    info_type = gdb.lookup_type("silk::Perf::CounterInfo").pointer()
+    infos = gdb.Value(
+        _unique_ptr(gdb.parse_and_eval("silk::Perf::simpleCounters"))
+    ).cast(info_type)
+
+    ps_type = gdb.lookup_type("silk::Perf::ProcessorState").pointer()
+    perf_states = gdb.Value(perf_states_base).cast(ps_type)
+
+    cpus = [cpu] if cpu is not None else range(int(sched["processorCount"]))
+    slot_bases = [_unique_ptr(perf_states[c]["simpleCounters"]) for c in cpus]
+
+    # SimpleCounter is a single atomic<uint64_t>; its value is the first word.
+    counter_size = gdb.lookup_type("silk::Perf::SimpleCounter").sizeof
+    for i in range(slot_count):
+        total = sum(_u64(base + i * counter_size) for base in slot_bases if base)
+        name = _read_c_string(int(infos[i]["name"]))
+        print("  %-28s %d" % (name, total))
+
+
 # ── Commands ──────────────────────────────────────────────────────────────────
 
 
@@ -1198,6 +1272,70 @@ class FiberDumpUring(gdb.Command):
         _dump_uring_table(proc_states, count, cpu)
 
 
+class FiberDumpScheduler(gdb.Command):
+    """fiber-dump-scheduler
+
+    Dump the scheduler-wide state.
+    """
+
+    def __init__(self):
+        super().__init__("fiber-dump-scheduler", gdb.COMMAND_USER)
+
+    def invoke(self, arg, from_tty):
+        try:
+            sched = _get_scheduler()
+        except (RuntimeError, gdb.error) as error:
+            print(f"fiber-dump-scheduler: {error}")
+            return
+
+        print("===== silk scheduler state =====")
+        try:
+            _dump_scheduler_state(sched)
+        except gdb.error as error:
+            print(f"fiber-dump-scheduler: {error}")
+
+
+class FiberDumpCounters(gdb.Command):
+    """fiber-dump-counters [cpu]
+
+    Dump every registered Perf simple counter.
+
+    Imbalanced counter pairs name the failed hand-off: FiberStarted >
+    FiberStopped means an injected fiber never finished; ProxyFiberParked >
+    ProxyFiberWaked means an external waiter never got its wake.
+
+    With no argument, counter values are accumulated across all CPUs.  Pass a
+    0-based processor index to show that CPU's own slot values instead.
+    """
+
+    def __init__(self):
+        super().__init__("fiber-dump-counters", gdb.COMMAND_USER)
+
+    def invoke(self, arg, from_tty):
+        try:
+            cpu = _parse_cpu_arg(arg)
+        except ValueError:
+            print("fiber-dump-counters: cpu argument must be an integer")
+            return
+
+        try:
+            sched = _get_scheduler()
+        except (RuntimeError, gdb.error) as error:
+            print(f"fiber-dump-counters: {error}")
+            return
+
+        count = int(sched["processorCount"])
+        if cpu is not None and not (0 <= cpu < count):
+            print(f"fiber-dump-counters: cpu {cpu} out of range (0..{count - 1})")
+            return
+
+        print("===== silk perf counters =====")
+        try:
+            _dump_counter_table(sched, cpu)
+        except gdb.error as error:
+            print(f"fiber-dump-counters: {error}")
+
+
 # ── Register commands ─────────────────────────────────────────────────────────
 
 FiberList()
@@ -1206,6 +1344,8 @@ FiberSwitchContext()
 FiberRestoreContext()
 FiberDumpSleep()
 FiberDumpUring()
+FiberDumpScheduler()
+FiberDumpCounters()
 
 print("fiber.py loaded -- commands:")
 print("  fiber-list [--proxy]")
@@ -1214,3 +1354,5 @@ print("  fiber-restorecontext")
 print("  fiber-switchcontext <Fiber*>")
 print("  fiber-dump-sleep [cpu]")
 print("  fiber-dump-uring [cpu]")
+print("  fiber-dump-scheduler")
+print("  fiber-dump-counters [cpu]")

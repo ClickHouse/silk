@@ -1,8 +1,10 @@
 file(GLOB_RECURSE TEST_SOURCES CONFIGURE_DEPENDS *.cpp)
 
-# fiber-cpuset-test is its own executable: it needs a main that restricts the scheduler
-# to a CPU subset before running, so it cannot share fibers-test's global init.
+# fiber-cpuset-test and fiber-steal-test are their own executables: each needs a main
+# that restricts the scheduler to a CPU subset before running, so they cannot share
+# fibers-test's global init.
 list(REMOVE_ITEM TEST_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/fiber-cpuset-test.cpp)
+list(REMOVE_ITEM TEST_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/fiber-steal-test.cpp)
 
 add_executable(fibers-test ${TEST_SOURCES})
 target_link_libraries(fibers-test PRIVATE silk-fibers GTest::gtest)
@@ -19,3 +21,10 @@ add_executable(fibers-cpuset-test fiber-cpuset-test.cpp)
 target_link_libraries(fibers-cpuset-test PRIVATE silk-fibers GTest::gtest)
 gtest_discover_tests(fibers-cpuset-test
     PROPERTIES RESOURCE_LOCK iouring TIMEOUT_SIGNAL_NAME SIGQUIT TIMEOUT_SIGNAL_GRACE_PERIOD 60)
+
+# fiber-steal-test asserts on SMT-stretch timing, so it runs alone: concurrent
+# test binaries on the same CPUs would distort the compute-fiber durations.
+add_executable(fibers-steal-test fiber-steal-test.cpp)
+target_link_libraries(fibers-steal-test PRIVATE silk-fibers GTest::gtest)
+gtest_discover_tests(fibers-steal-test
+    PROPERTIES RUN_SERIAL TRUE RESOURCE_LOCK iouring TIMEOUT_SIGNAL_NAME SIGQUIT TIMEOUT_SIGNAL_GRACE_PERIOD 60)

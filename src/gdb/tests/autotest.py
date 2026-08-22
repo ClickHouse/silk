@@ -136,6 +136,62 @@ def _run_tests():
     out = gdb.execute("fiber-dump-uring 99999", to_string=True)
     _check("out of range" in out, "fiber-dump-uring: rejects an out-of-range cpu")
 
+    # ── fiber-dump-scheduler ────────────────────────────────────────────────────
+
+    out = gdb.execute("fiber-dump-scheduler", to_string=True)
+    _check(
+        "silk scheduler state" in out,
+        "fiber-dump-scheduler: prints the scheduler-state header",
+    )
+
+    m = re.search(r"prefixCount: (\d+) of (\d+)", out)
+    _check(m is not None, "fiber-dump-scheduler: prints prefixCount", dump=out)
+    if m:
+        prefix_count, prefix_total = int(m.group(1)), int(m.group(2))
+        # The spinner keeps one processor busy, so the count never drops to zero.
+        _check(
+            1 <= prefix_count <= prefix_total,
+            f"fiber-dump-scheduler: prefixCount {prefix_count} within 1..{prefix_total}",
+            dump=out,
+        )
+    _check("prefixOrder:" in out, "fiber-dump-scheduler: prints prefixOrder", dump=out)
+
+    # ── fiber-dump-counters ─────────────────────────────────────────────────────
+
+    out = gdb.execute("fiber-dump-counters", to_string=True)
+    _check(
+        "silk perf counters" in out, "fiber-dump-counters: prints the counters header"
+    )
+
+    # spinner + holder + N_WAITERS waiters + N_SLEEPERS sleepers started; none
+    # has finished at the breakpoint, so FiberStopped must still be zero.
+    m = re.search(r"FiberStarted\s+(\d+)", out)
+    started = int(m.group(1)) if m else -1
+    _check(
+        started >= N_WAITERS + N_SLEEPERS + 2,
+        f"fiber-dump-counters: FiberStarted >= {N_WAITERS + N_SLEEPERS + 2}, got {started}",
+        dump=out,
+    )
+    m = re.search(r"FiberStopped\s+(\d+)", out)
+    stopped = int(m.group(1)) if m else -1
+    _check(
+        stopped == 0, f"fiber-dump-counters: FiberStopped is 0, got {stopped}", dump=out
+    )
+
+    out = gdb.execute("fiber-dump-counters 0", to_string=True)
+    _check(
+        "FiberStarted" in out,
+        "fiber-dump-counters 0: single-cpu filter prints the table",
+    )
+
+    out = gdb.execute("fiber-dump-counters 99999", to_string=True)
+    _check("out of range" in out, "fiber-dump-counters: rejects an out-of-range cpu")
+
+    out = gdb.execute("fiber-dump-counters notanumber", to_string=True)
+    _check(
+        "must be an integer" in out, "fiber-dump-counters: rejects a non-integer cpu"
+    )
+
 
 # Fiber counts created by gdb-test.cpp.
 N_WAITERS = 3
