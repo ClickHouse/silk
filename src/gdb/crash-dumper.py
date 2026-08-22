@@ -104,17 +104,25 @@ def _dump_fibers():
         gdb.execute("fiber-restorecontext")
 
 
-# Sleep + io_uring ring state, via fiber-dump-sleep / fiber-dump-uring (defined in the fiber.py sourced
-# above). They read the sleepTree/queues and the SQ/CQ rings directly: a lost sleep wakeup shows as a
-# sleepTree entry with positive overdueCycles still un-set; a park wedge shows as a parked proc
-# (sleeping=1) with cqReady>0. Needs a silk frame selected (same reason as fiber-list) since _dump_fibers
-# restored back into libc.
-def _dump_sleep_state():
+# Sleep, io_uring, scheduler-wide, and counter state, via the fiber-dump-* commands (defined in the
+# fiber.py sourced above). fiber-dump-sleep/-uring read the sleepTree/queues and the SQ/CQ rings
+# directly: a lost sleep wakeup shows as a sleepTree entry with positive overdueCycles still un-set; a
+# park wedge shows as a parked proc (sleeping=1) with cqReady>0. fiber-dump-scheduler prints the
+# scheduler-wide state and fiber-dump-counters prints the Perf counters, whose imbalanced pairs
+# (FiberStarted/FiberStopped, ProxyFiberParked/ProxyFiberWaked) name the failed hand-off. Needs a silk
+# frame selected (same reason as fiber-list) since _dump_fibers restored back into libc.
+def _dump_state():
     if not _select_silk_frame():
-        print("crash-dumper: no silk frame found; skipping sleep/uring dump")
+        print("crash-dumper: no silk frame found; skipping state dumps")
         return
 
-    for command in ("fiber-dump-sleep", "fiber-dump-uring"):
+    # The compact scheduler-wide state leads; the verbose per-processor tables follow.
+    for command in (
+        "fiber-dump-scheduler",
+        "fiber-dump-sleep",
+        "fiber-dump-uring",
+        "fiber-dump-counters",
+    ):
         print("")
         try:
             gdb.execute(command)
@@ -124,4 +132,4 @@ def _dump_sleep_state():
 
 _dump_threads()
 _dump_fibers()
-_dump_sleep_state()
+_dump_state()
