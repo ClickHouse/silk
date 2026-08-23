@@ -610,6 +610,7 @@ class NetPerfParams:
     stall_rate: float = 0.0
     stall_duration: str = "0"
     server_cpus: str = ""
+    client_cpus: str = ""
     flamegraph: bool = False
     print_counters: bool = False
     timeout: int = 180
@@ -642,6 +643,8 @@ def cmd_net_perf(preset: str, params: NetPerfParams) -> None:
     server_cpus, client_cpus = _cpu_split()
     if params.server_cpus:
         server_cpus = params.server_cpus
+    if params.client_cpus:
+        client_cpus = params.client_cpus
     local = params.host in ("127.0.0.1", "localhost")
     verbose_flag = ["--verbose"] if log.isEnabledFor(logging.DEBUG) else []
     print_counters_flag = ["--print-counters"] if params.print_counters else []
@@ -991,6 +994,8 @@ class HttpPerfParams:
     print_counters: bool = False
     timeout: int = 180
     nginx: bool = False
+    server_cpus: str = ""
+    client_cpus: str = ""
 
 
 _HP_HEADERS: list[str] = [
@@ -1096,6 +1101,10 @@ def cmd_http_perf(preset: str, params: HttpPerfParams) -> None:
     print()
 
     server_cpus, client_cpus = _cpu_split()
+    if params.server_cpus:
+        server_cpus = params.server_cpus
+    if params.client_cpus:
+        client_cpus = params.client_cpus
     workers = (os.cpu_count() or 2) // 2
 
     if params.nginx:
@@ -1240,6 +1249,8 @@ class S3PerfParams:
     data_dir: str = "/dev/shm/minio-data"
     print_counters: bool = False
     timeout: int = 180
+    server_cpus: str = ""
+    client_cpus: str = ""
 
 
 _S3P_HEADERS: list[str] = [
@@ -1329,6 +1340,10 @@ def cmd_s3_perf(preset: str, params: S3PerfParams) -> None:
 
     minio_bin, mcli_bin = _ensure_minio()
     server_cpus, client_cpus = _cpu_split()
+    if params.server_cpus:
+        server_cpus = params.server_cpus
+    if params.client_cpus:
+        client_cpus = params.client_cpus
 
     os.makedirs(params.data_dir, exist_ok=True)
     minio = start_process(
@@ -1809,6 +1824,13 @@ def _build_parser() -> argparse.ArgumentParser:
             help="taskset CPU list for the server (default: lower half of the machine)",
         )
         parser.add_argument(
+            "--client-cpus",
+            dest="net_client_cpus",
+            default=net_params.client_cpus,
+            metavar="CPUS",
+            help="taskset CPU list for the client (default: upper half of the machine)",
+        )
+        parser.add_argument(
             "--stall-duration",
             dest="net_stall_duration",
             default=net_params.stall_duration,
@@ -1913,6 +1935,20 @@ def _build_parser() -> argparse.ArgumentParser:
         help="print perf counters after each run",
     )
     http_perf_parser.add_argument(
+        "--server-cpus",
+        dest="http_server_cpus",
+        default=http_params.server_cpus,
+        metavar="CPUS",
+        help="taskset CPU list for the server (default: lower half of the machine)",
+    )
+    http_perf_parser.add_argument(
+        "--client-cpus",
+        dest="http_client_cpus",
+        default=http_params.client_cpus,
+        metavar="CPUS",
+        help="taskset CPU list for the client (default: upper half of the machine)",
+    )
+    http_perf_parser.add_argument(
         "--timeout",
         dest="http_timeout",
         default=180,
@@ -2001,6 +2037,20 @@ def _build_parser() -> argparse.ArgumentParser:
         dest="s3_print_counters",
         action="store_true",
         help="print perf counters after each run",
+    )
+    s3_perf_parser.add_argument(
+        "--server-cpus",
+        dest="s3_server_cpus",
+        default=s3_params.server_cpus,
+        metavar="CPUS",
+        help="taskset CPU list for the server (default: lower half of the machine)",
+    )
+    s3_perf_parser.add_argument(
+        "--client-cpus",
+        dest="s3_client_cpus",
+        default=s3_params.client_cpus,
+        metavar="CPUS",
+        help="taskset CPU list for the client (default: upper half of the machine)",
     )
     s3_perf_parser.add_argument(
         "--timeout",
