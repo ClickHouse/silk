@@ -60,6 +60,7 @@ private:
     //
 
     uint32_t slotsOffset() const noexcept { return alignUp<uint32_t>(sizeof(Chunk), alignment); }
+    uint32_t slotsPerChunk() const noexcept { return (chunkSize - slotsOffset()) / objectSize; }
     Chunk * allocateChunk() noexcept;
     void freeChunk(Chunk * chunk) noexcept;
 
