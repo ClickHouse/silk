@@ -16,7 +16,7 @@ MemoryPoolBase::MemoryPoolBase(
     , stackEntryOffset(stackEntryOffset)
     , initialize(initialize)
     , destroy(destroy)
-    , stack((chunkSize - slotsOffset()) / this->objectSize)
+    , stack(slotsPerChunk())
 {
     uint32_t processorCount = getProcessorCount();
     for (uint32_t i = 0; i < processorCount; ++i)
@@ -28,13 +28,20 @@ MemoryPoolBase::MemoryPoolBase(
 
 MemoryPoolBase::~MemoryPoolBase() noexcept
 {
-    if (destroy)
-    {
-        stack.drain([](StackEntry * entry, void * ctx) noexcept { static_cast<MemoryPoolBase *>(ctx)->destroy(entry); }, this);
-    }
+    stack.drain([](StackEntry *, void *) noexcept { }, nullptr);
 
     while (Chunk * chunk = chunks.pop())
     {
+        if (destroy)
+        {
+            uint8_t * slots = reinterpret_cast<uint8_t *>(chunk) + slotsOffset();
+            for (uint32_t i = 0; i < slotsPerChunk(); ++i)
+            {
+                StackEntry * entry = reinterpret_cast<StackEntry *>(slots + i * objectSize + stackEntryOffset);
+                destroy(entry);
+            }
+        }
+
         freeChunk(chunk);
     }
 }
@@ -75,7 +82,7 @@ MemoryPoolBase::Chunk * MemoryPoolBase::allocateChunk() noexcept
     StackEntry * tail = nullptr;
 
     uint32_t offset = slotsOffset();
-    uint32_t freelistSize = (chunkSize - offset) / objectSize;
+    uint32_t freelistSize = slotsPerChunk();
 
     uint8_t * slots = reinterpret_cast<uint8_t *>(chunk) + offset;
     for (uint32_t i = 0; i < freelistSize; ++i)
