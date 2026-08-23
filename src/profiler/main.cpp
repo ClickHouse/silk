@@ -116,6 +116,12 @@ int main(int argc, char ** argv)
         return 1;
     }
 
+    if (oncpu && sampleHz == 0)
+    {
+        SILK_ERROR("on-CPU sampling frequency must be greater than zero");
+        return 1;
+    }
+
     bool hasBpf = hasCapability(CAP_BPF);
     bool hasPerfmon = hasCapability(CAP_PERFMON);
 
