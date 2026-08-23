@@ -152,6 +152,17 @@ TEST_F(PerfTest, OverflowReturnsENOMEM)
     EXPECT_EQ(Perf::registerSimpleCounter(&overflow, "overflow"), ENOMEM);
 }
 
+TEST_F(PerfTest, CounterRegistrationCountOverflowReturnsENOMEM)
+{
+    const char * names[] = {"overflow"};
+    Perf::CounterGroup group;
+    ASSERT_EQ(Perf::registerSimpleCounters(&group, names, 1), 0);
+
+    Perf::CounterGroup overflow;
+    EXPECT_EQ(Perf::registerSimpleCounters(&overflow, names, UINT32_MAX), ENOMEM);
+    EXPECT_EQ(Perf::getSimpleCounterCount(), 1u);
+}
+
 TEST_F(PerfTest, DestroyResetsCounterCount)
 {
     const char * names[] = {"A"};
@@ -357,6 +368,17 @@ TEST_F(PerfTest, MemCounterOverflowReturnsENOMEM)
 
     Perf::CounterGroup overflow;
     EXPECT_EQ(Perf::registerMemCounter(&overflow, "overflow"), ENOMEM);
+}
+
+TEST_F(PerfTest, MemCounterRegistrationCountOverflowReturnsENOMEM)
+{
+    const char * names[] = {"overflow"};
+    Perf::CounterGroup group;
+    ASSERT_EQ(Perf::registerMemCounters(&group, names, 1), 0);
+
+    Perf::CounterGroup overflow;
+    EXPECT_EQ(Perf::registerMemCounters(&overflow, names, UINT32_MAX), ENOMEM);
+    EXPECT_EQ(Perf::getMemCounterCount(), 1u);
 }
 
 TEST_F(PerfTest, DestroyResetsMemCounterCount)

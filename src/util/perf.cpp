@@ -47,7 +47,7 @@ int Perf::registerSimpleCounters(CounterGroup * group, const char ** names, uint
     uint32_t base = simpleCounterCount.load(std::memory_order_relaxed);
     for (;;)
     {
-        if (base + count > NUM_SIMPLE_COUNTERS)
+        if (count > NUM_SIMPLE_COUNTERS - base)
         {
             return ENOMEM;
         }
@@ -101,7 +101,7 @@ int Perf::registerMemCounters(CounterGroup * group, const char ** names, uint32_
     uint32_t base = memCounterCount.load(std::memory_order_relaxed);
     for (;;)
     {
-        if (base + count > NUM_MEM_COUNTERS)
+        if (count > NUM_MEM_COUNTERS - base)
         {
             return ENOMEM;
         }
