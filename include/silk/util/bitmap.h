@@ -22,7 +22,7 @@ public:
     }
 
     /** Number of 64-bit words a bitmap of bitCount bits occupies. */
-    static constexpr uint32_t wordCount(uint32_t bitCount) noexcept { return alignUp(bitCount, WORD_BITS) / WORD_BITS; }
+    static constexpr uint32_t wordCount(uint32_t bitCount) noexcept { return bitCount / WORD_BITS + (bitCount % WORD_BITS != 0); }
 
     /** True if the bit at index is set. */
     bool test(uint32_t index) const noexcept { return (words[index / WORD_BITS] >> (index % WORD_BITS)) & 1; }

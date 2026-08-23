@@ -30,7 +30,17 @@ TEST(BitmapTest, WordCount)
         uint32_t expected;
     };
 
-    const Case cases[] = {{0, 0}, {1, 1}, {64, 1}, {65, 2}, {128, 2}, {129, 3}};
+    const Case cases[] = {
+        {0, 0},
+        {1, 1},
+        {64, 1},
+        {65, 2},
+        {128, 2},
+        {129, 3},
+        {UINT32_MAX - 63, 67'108'863},
+        {UINT32_MAX - 62, 67'108'864},
+        {UINT32_MAX, 67'108'864},
+    };
 
     for (const Case & testCase : cases)
     {
