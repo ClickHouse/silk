@@ -28,42 +28,40 @@ load% = (connections × stall_rate × stall_duration) / 16_cores
 
 ## Canonical results (10-minute runs, 30s warmup)
 
-The silk rows are full-width measurements: under stall load the processor prefix (`scheduler.md`) trades RPS for lower extreme tails - a stall is a sleep the shrink signal cannot see - so the stall rows shift with width adaptation while the no-stall row holds.
+The silk rows are measured with the processor prefix active: the shrink signal counts a wait rewarded by arriving work as demand, so stall-heavy load holds the width and the stall rows measure the same full prefix as the no-stall row (`scheduler.md`). Each silk stall row is still one draw from a warmup-locked mode distribution - the 64% row has been observed from 845k to 1576k across runs - while the epoll and asio rows repeat tightly.
 
 | config | engine | RPS | p50 | p95 | p99 | p99.9 |
 |---|---|---|---|---|---|---|
-| 1024 baseline | silk | 2152k | 466 | 664 | 767 | **1776** |
-| 1024 baseline | epoll | 2474k | 419 | 472 | 493 | **564** |
-| 1024 baseline | asio | 368k | 2786 | 2871 | 2908 | **2953** |
-| 1024 × 10Hz × 1ms (64%) | silk | 1641k | 74 | 234 | 1226 | **59384** |
-| 1024 × 10Hz × 1ms (64%) | epoll | 970k | 403 | 3411 | 5488 | **9483** |
-| 1024 × 10Hz × 1ms (64%) | asio | 381k | 2631 | 3180 | 3724 | **4206** |
-| 256 × 100Hz × 1ms (160%) | silk | 671k | 35 | 1032 | 4088 | **83816** |
-| 256 × 100Hz × 1ms (160%) | epoll | 53k | 2075 | 17127 | 21139 | **22166** |
-| 256 × 100Hz × 1ms (160%) | asio | 24k | 10574 | 11651 | 12028 | **12380** |
+| 1024 baseline | silk | 2054k | 452 | 750 | 1818 | **2768** |
+| 1024 baseline | epoll | 2387k | 425 | 542 | 567 | **650** |
+| 1024 baseline | asio | 408k | 2569 | 2668 | 2702 | **2748** |
+| 1024 × 10Hz × 1ms (64%) | silk | 1333k | 166 | 1354 | 5667 | **22790** |
+| 1024 × 10Hz × 1ms (64%) | epoll | 938k | 434 | 3412 | 5404 | **7501** |
+| 1024 × 10Hz × 1ms (64%) | asio | 411k | 2439 | 2978 | 3501 | **3933** |
+| 256 × 100Hz × 1ms (160%) | silk | 862k | 32 | 61 | 1072 | **147290** |
+| 256 × 100Hz × 1ms (160%) | epoll | 85k | 59 | 15118 | 20125 | **21147** |
+| 256 × 100Hz × 1ms (160%) | asio | 24k | 10581 | 11654 | 12033 | **12397** |
 
 Per-stage breakdown at 64% load (silk client, 60s with --print-counters):
 
 | span | p99 | p99.9 | meaning |
 |---|---|---|---|
-| `io_wait` | 1.7 ms | 4.3 ms | full silk-side IO wait |
-| `sq_wait` | 1.7 ms | 4.3 ms | SQE pending in silk's SQ ring before flush to kernel |
-| `cq_wait` | 58 µs | 65 µs | CQE-in-ring sitting upper bound |
-| `submit_io` | 43 µs | 64 µs | io_uring_submit syscall cost |
-| `ready_wait` | 7 µs | 14 µs | enqueueReady -> dispatch |
+| `io_wait` | 8.2 ms | 25.7 ms | full silk-side IO wait |
+| `sq_wait` | 8.2 ms | 27.6 ms | SQE pending in silk's SQ ring before flush to kernel |
+| `cq_wait` | 61 µs | 115 µs | CQE-in-ring sitting upper bound |
+| `submit_io` | 29 µs | 62 µs | io_uring_submit syscall cost |
+| `ready_wait` | 22 µs | 258 µs | enqueueReady -> dispatch |
 
 ## What silk wins
 
-- **Throughput under stalls.** ~1.7x at 64% load (1641k vs 970k req/s), ~12.7x at 160% (671k vs 53k). Per-CPU stall load on silk is averaged across all CPUs via work-stealing plus CQ-draining-by-stealer; on epoll it's per-thread isolation.
-- **p99 under stall load.** silk 1.2 ms vs epoll 5.5 ms at 64% -- silk wins by ~4.5x. At 160% silk 4.1 ms vs epoll 21 ms -- silk wins by ~5x.
-- **Graceful degradation.** At 160% offered load epoll silently piles up; silk completes ~12.7x more requests per second by best-effort sharing the deficit across CPUs.
+- **Throughput under stalls.** ~1.4x at 64% (1333k vs 938k req/s) and ~10x at 160% (862k vs 85k). Per-CPU stall load on silk is averaged across all CPUs via work-stealing plus CQ-draining-by-stealer; epoll's per-thread isolation leaves each reactor to eat its own stalls, and it silently piles up.
+- **The latency body at saturation.** At 160% silk holds p50 32 µs and p95 61 µs against epoll's 59 µs and 15 ms -- the shared deficit shows up only past p99, where epoll's whole distribution has already collapsed.
 
 ## Where silk still trails
 
-- **p99.9 at moderate stall load.** silk 59 ms vs epoll 9.5 ms at 64% load -- silk is **~6.2x** epoll's tail. Stall-driven dispatch jitter accumulates across many fibers in a way per-thread reactors avoid.
-- **p99.9 at saturation.** silk 84 ms vs epoll 22 ms at 160% load -- silk's throughput win comes with a ~3.8x worse worst-case tail.
-- **Baseline p99.9.** Even with no stall load, silk's p99.9 is 1.8 ms vs epoll's 0.6 ms at 1024 connections -- the fiber dispatch loop has structurally more tail than a per-thread epoll reactor.
-- **p99 at light stall load.** At 6.4% load (1024 × 10Hz × 100us) silk is worse than epoll on p99 (2.1 ms vs 0.7 ms) -- the stealing path doesn't fire often enough to offset silk's higher per-fiber overhead.
+- **p99.9 under stalls.** silk 23 ms vs epoll 7.5 ms at 64% (~3x), 147 ms vs 21 ms at 160% (~7x) -- stall-driven dispatch jitter accumulates across many fibers in a way per-thread reactors avoid, and the throughput win under stalls comes with the worse worst case.
+- **Baseline.** silk is -14% RPS (2054k vs 2387k) with p99.9 2.8 ms vs epoll's 0.65 ms at 1024 connections -- the fiber dispatch loop has structurally more tail than a per-thread epoll reactor.
+- **p99 at light stall load.** At 6.4% load (1024 × 10Hz × 100us) silk is worse than epoll on p99 (6.0 ms vs 0.7 ms in this draw) -- the stealing path doesn't fire often enough to offset silk's higher per-fiber overhead.
 
 ## The load-imbalance tail
 
@@ -79,11 +77,11 @@ Per-stage breakdown at 64% load (silk client, 60s with --print-counters):
 
 | load | RPS | FiberStolen | SchedulerThreadParked | SchedulerIdleTime |
 |---|---|---|---|---|
-| baseline | 2072k | 1,748 | 855k | 202s (21%) |
-| 64% (1024 × 10Hz × 1ms) | 1512k | 4,661 | 11.3M | 271s (28%) |
-| 160% (256 × 100Hz × 1ms) | 970k | **196,210** | 25.9M | 424s (44%) |
+| baseline | 1947k | 16,758 | 392k | 33s (3%) |
+| 64% (1024 × 10Hz × 1ms) | 804k | 15,709 | 12k | 33s (3%) |
+| 160% (256 × 100Hz × 1ms) | 901k | 1,384 | 881k | 22s (2%) |
 
-`FiberStolen` rises ~112x at the saturation row but only 2.7x at 64% load. So the throughput win at 64% load is **not primarily from stealing** -- it's from silk's structural ability to spread stall load across all 16 cores (silk's scheduler thread idle on CPU N can drain CPU M's CQ via `runStealLoop`'s `runServiceLoop(victim)` call), where epoll's per-thread reactor leaves a stalled thread's 64 connections starved until the stall ends. Work-stealing is doing what it claims to do; its meaningful contribution is at saturation, not mid-load.
+Idle time sits near 3% at every load - the width tracks demand. The parked column is the stall profile, not idleness: the 64% fleet is busy and barely parks, while the 160% fleet parks deadline-capped between stall expiries. `FiberStolen` collapses at saturation because the steal loop skips victims attended within the spin horizon; the saturation throughput win is structural spreading of stall load across the fleet (an idle scheduler thread drains a stalled core's CQ by claiming its service loop), where epoll's per-thread reactor leaves a stalled thread's 64 connections starved until the stall ends - moving fibers is the minor term.
 
 ## Lower-rate stall sweep
 
@@ -91,19 +89,19 @@ Sweep of stall patterns at 1024 connections, holding per-CPU offered load roughl
 
 | pattern | per-CPU load | engine | RPS | p50 | p99 | p99.9 |
 |---|---|---|---:|---:|---:|---:|
-| 1 Hz × 10 ms | 64% | silk | 1465k | 111 µs | 10084 µs | 10422 µs |
-| 1 Hz × 10 ms | 64% | epoll | 995k | 370 µs | 10486 µs | 30464 µs |
-| 5 Hz × 2 ms | 64% | silk | 1591k | 71 µs | 2444 µs | 8468 µs |
-| 5 Hz × 2 ms | 64% | epoll | 996k | 374 µs | 6478 µs | 12460 µs |
-| 10 Hz × 100 µs | 6.4% | silk | 2117k | 302 µs | 2079 µs | 2380 µs |
-| 10 Hz × 100 µs | 6.4% | epoll | 2409k | 408 µs | **678 µs** | **847 µs** |
-| 100 Hz × 100 µs | 64% | silk | 1620k | 115 µs | 15364 µs | 63992 µs |
-| 100 Hz × 100 µs | 64% | epoll | 1055k | 896 µs | 2184 µs | 4116 µs |
+| 1 Hz × 10 ms | 64% | silk | 883k | 308 µs | 10687 µs | 90674 µs |
+| 1 Hz × 10 ms | 64% | epoll | 936k | 380 µs | 20353 µs | 40433 µs |
+| 5 Hz × 2 ms | 64% | silk | 826k | 416 µs | 10669 µs | 28764 µs |
+| 5 Hz × 2 ms | 64% | epoll | 935k | 411 µs | 6450 µs | 10470 µs |
+| 10 Hz × 100 µs | 6.4% | silk | 1986k | 298 µs | 5969 µs | 6701 µs |
+| 10 Hz × 100 µs | 6.4% | epoll | 2243k | 438 µs | **695 µs** | **894 µs** |
+| 100 Hz × 100 µs | 64% | silk | 1525k | 52 µs | 29610 µs | 64681 µs |
+| 100 Hz × 100 µs | 64% | epoll | 996k | 989 µs | 2089 µs | 2522 µs |
 
 Two findings:
 
-- **At 6.4% offered load (10 Hz × 100 µs), epoll wins p99 by 3x** (678 µs vs 2079 µs). silk's per-fiber overhead dominates at light load and the stealer fires too rarely to amortize it. There is no regime where silk pulls ahead before saturation -- below saturation, epoll's lower per-request cost wins.
-- **Throughput edge to silk is consistent under any meaningful stall load** (47-65% more RPS at 64% load). The shape of the stalls (rare-long vs frequent-short) shifts silk's p99 distribution but not its throughput advantage.
+- **At 6.4% offered load (10 Hz × 100 µs), epoll wins p99** (695 µs vs 6.0 ms in this draw). silk's per-fiber overhead dominates at light load and the stealer fires too rarely to amortize it. There is no regime where silk pulls ahead before saturation -- below saturation, epoll's lower per-request cost wins.
+- **A single silk draw at a stall row is a mode sample, not a stable mean.** Warmup seeds the pipeline into one of several locked modes (the known limit in `scheduler.md`), so silk's 64% rows range from -12% (5 Hz × 2 ms) to +53% (100 Hz × 100 µs) against epoll across draws; epoll's rows repeat tightly.
 - **The 100 Hz × 100 µs row exposes silk's tail weakness under high stall frequency**: p99.9 64 ms vs epoll 4.1 ms. Each individual stall is short, but the dispatch jitter from constantly resuming fibers is substantial.
 
 ## Reproducing

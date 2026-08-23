@@ -36,19 +36,12 @@ static constexpr uint64_t CQE_TAG_CANCEL = 0;
 static constexpr uint64_t CQE_TAG_DOORBELL = 1;
 static constexpr uint64_t CQE_TAG_WAKEUP = 2;
 
-// Consecutive low-utilization windows required before the shrink fires. One window
-// is variance on a bursty fleet - a loaded edge must not shed and re-grow, migrating
-// its homes each cycle.
+// Consecutive wasteful windows required before the shrink fires.
 static constexpr uint32_t SHRINK_WINDOW_COUNT = 3;
 
-// Utilization below which the rightmost prefix processor extinguishes itself, in
-// percent of the trailing window. Utilization, not idleness continuity: a fast
-// periodic timer breaks every idle streak while leaving the core almost entirely idle.
-static constexpr uint64_t SHRINK_UTILIZATION_PERCENT = 25;
-
-// Backstop on the indefinite park, in maxWaitNs windows: a wedge no signal covers
-// still gets swept and stolen within one backstop.
-static constexpr uint64_t PARK_BACKSTOP_WINDOWS = 100;
+// Waste-to-reward wait-outcome ratio above which a window reads as shed-able;
+// loaded widths measure 3-4x.
+static constexpr uint64_t SHRINK_WASTE_FACTOR = 8;
 
 // clang-format off
 #define FIBER_SIMPLE_COUNTERS(x) \
@@ -296,7 +289,7 @@ struct FiberScheduler::ProcessorState
     void profileEvent(ProfileEventKind kind, uint8_t category, uint64_t durationCycles) noexcept;
 
     void wakeThread() noexcept;
-    void parkThread(uint64_t waitNs, bool deadlineBounded, CpuTimer * timer) noexcept;
+    bool parkThread(uint64_t waitNs, CpuTimer * timer) noexcept;
 
     void publishSleepDeadline() noexcept;
 
@@ -305,8 +298,8 @@ struct FiberScheduler::ProcessorState
     uint32_t cqReady() const noexcept;
 
     void enqueueDoorbell() noexcept;
-    void postWakeup(ProcessorState * target) noexcept;
-    bool enqueueWakeup(ProcessorState * target) noexcept;
+    bool postWakeup(ProcessorState * target) noexcept;
+    void enqueueWakeup(ProcessorState * target) noexcept;
 
     template <typename Setup>
     bool enqueueIo(IoFuture * future, Setup && setup) noexcept;
@@ -369,8 +362,9 @@ struct FiberScheduler::ProcessorState
         // for "no fiber".
         std::atomic<uint64_t> fiberCounter{1};
 
-        // Start of the current utilization window; the window early-exit polls it
-        // on every did-work iteration. The window's cold fields stay off this line.
+        // Start of the current shrink window, stamped at initialization; the window
+        // early-exit polls it on every did-work iteration. The window's cold fields
+        // stay off this line.
         uint64_t windowStartCycles = 0;
     };
 
@@ -407,17 +401,15 @@ struct FiberScheduler::ProcessorState
     };
 
     // Service-loop region, owner-polled on every runServiceLoop iteration and spanning
-    // several lines: the sleep queues and tree, the ring, and the cold utilization-window
+    // several lines: the sleep queues and tree, the ring, and the cold shrink-window
     // fields riding the first line. cancelQueue takes rare foreign pushes and foreign
     // sweeps read the published deadline; everything else is owner-only.
     struct alignas(kCacheLineSize)
     {
-        // Cold utilization-window state, touched at window boundaries: the
-        // SchedulerIdleTime reading at the window start, the deadline-bounded park time
-        // accumulated since - committed to sleepers, so it counts as busy - and the
-        // consecutive low-utilization window count feeding the shrink hysteresis.
-        uint64_t windowIdleNs = 0;
-        uint64_t windowBoundedNs = 0;
+        // Wait outcomes since the window start - rewarded is demand, expired-empty is
+        // waste - and the wasteful-window streak. Reset at every window boundary.
+        uint64_t windowWasteCount = 0;
+        uint64_t windowRewardCount = 0;
         uint32_t lowWindowCount = 0;
 
         // Earliest sleepTree deadline, published under serviceLoopLock at every tree
@@ -486,10 +478,6 @@ struct FiberScheduler::SchedulerState
         // Futex-style waiter lookup table and its power-of-two size mask.
         std::unique_ptr<WaitStack[]> waiterTable;
         uint64_t waiterTableMask = 0;
-
-        // Options::ioUringFlushTimeout in TSC cycles, derived once in initialize - the
-        // Tsc conversion is calibrated, not constexpr.
-        uint64_t ioUringFlushTimeoutCycles = 0;
     };
 
     // Prefix state on its own cache line: prefixCount is written only on grow
@@ -499,21 +487,16 @@ struct FiberScheduler::SchedulerState
     {
         // Processors inside the prefix - prefixOrder[0, prefixCount) - park timed and
         // steal from each other; the rest park indefinitely and hold no work. Grown by
-        // an aged backlog check, shrunk by the rightmost's low-utilization windows.
+        // an aged backlog check, shrunk by the rightmost's wasteful windows.
         std::atomic<uint16_t> prefixCount{};
 
         // Number of configured processors - prefixCount at full width. Set once by
         // buildStealCandidates.
         uint16_t prefixTotal = 0;
 
-        // Options::maxWaitNs in TSC cycles, derived once in initialize - the width
-        // adaptation window: the grow age and the utilization window span. Rides this
-        // line because the backlog checks read it right after the prefixCount gate.
-        uint64_t backlogAgeCycles = 0;
-
-        // Options::spinThresholdNs in TSC cycles, derived once in initialize - the
-        // hot horizon: the steal loop skips a victim whose heartbeat is younger.
-        uint64_t spinThresholdCycles = 0;
+        // The first processor in prefix order - the migrate target of an
+        // out-of-prefix producer. Set once by buildStealCandidates.
+        ProcessorState * firstProcessor = nullptr;
     };
 
     // Worker-pool region: the shared ready queue of thread-mode and overflow
