@@ -22,7 +22,6 @@
 #include <atomic>
 #include <cerrno>
 #include <cstdint>
-#include <limits>
 #include <memory>
 #include <mutex>
 #include <thread>
@@ -1593,9 +1592,9 @@ void FiberScheduler::splice(
     IoFuture * future) noexcept
 {
     future->result = bytesSpliced;
-    const uint32_t spliceLen = static_cast<uint32_t>(std::min<uint64_t>(len, std::numeric_limits<uint32_t>::max()));
+    uint32_t boundedLen = static_cast<uint32_t>(std::min<uint64_t>(len, UINT32_MAX));
     enqueueIo(
-        future, [=](io_uring_sqe * sqe) noexcept { ::io_uring_prep_splice(sqe, fdIn, offsetIn, fdOut, offsetOut, spliceLen, flags); });
+        future, [=](io_uring_sqe * sqe) noexcept { ::io_uring_prep_splice(sqe, fdIn, offsetIn, fdOut, offsetOut, boundedLen, flags); });
 }
 
 void FiberScheduler::cancelIo(IoFuture * future) noexcept
