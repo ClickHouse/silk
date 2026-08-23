@@ -136,7 +136,7 @@ cv.notify_one();   // or cv.notify_all()
 
 **wait_for** -- `cv.wait_for(lock, nanoseconds)` returns 0 on a notify-driven wakeup or `ETIMEDOUT` on timeout. Implemented via `FiberFuture::waitWithTimeout`; on timeout the future cancels itself, which removes it from the waiter list. A notify that races at the boundary may consume our future but `wait_for` still returns `ETIMEDOUT` -- the predicate re-check handles the lost wakeup, per the usual cv contract.
 
-**Cancel/notify race** -- a single `inWaiters` bool per waiter, read and written only under `spinLock`, serializes timeout-triggered self-cancel against `notify_one` / `notify_all`. Exactly one of those paths removes the future from the list and calls `set()`; the other observes `inWaiters` is false and bails. `notify_all` splices the waiter list into a local snapshot and clears `inWaiters` on each, all under the lock; the actual `set(0)` calls fire outside the lock.
+**Cancel/notify race** -- a single `inWaiters` bool per waiter, read and written only under `spinLock`, serializes timeout-triggered self-cancel against `notify_one` / `notify_all`. Exactly one of those paths removes the future from the list and completes it; the other observes `inWaiters` is false and bails. `notify_all` splices the waiter list into a local snapshot and clears `inWaiters` on each, all under the lock; the actual future completions fire outside the lock.
 
 ---
 

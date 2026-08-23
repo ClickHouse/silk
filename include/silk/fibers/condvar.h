@@ -41,7 +41,7 @@ public:
         // True while this Future is linked in FiberCondVar::waiters. Read and
         // written only under spinLock; serializes cancel() vs notify_one() /
         // notify_all() so exactly one path removes the future from the list
-        // and calls set().
+        // and completes it.
         bool inWaiters = false;
     };
 

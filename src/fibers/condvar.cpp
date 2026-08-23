@@ -47,9 +47,23 @@ void FiberCondVar::notify_all() noexcept
 
     spinLock.unlock();
 
+    constexpr uint64_t WAKE_BATCH = 32;
+    FiberFuture * wakeBatch[WAKE_BATCH];
+    uint64_t batchSize = 0;
+
     while (Future * future = snapshot.pop_front())
     {
-        future->set(0);
+        wakeBatch[batchSize++] = future;
+        if (batchSize == WAKE_BATCH)
+        {
+            FiberFuture::setAll(0, wakeBatch, batchSize);
+            batchSize = 0;
+        }
+    }
+
+    if (batchSize)
+    {
+        FiberFuture::setAll(0, wakeBatch, batchSize);
     }
 }
 
