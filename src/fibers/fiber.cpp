@@ -419,6 +419,7 @@ void FiberScheduler::ProcessorState::initialize(uint16_t cpu) noexcept
     uint64_t nowCycles = Tsc::getCycles();
     lastServiceCycles.store(nowCycles, std::memory_order_relaxed);
     lastSubmitCycles.store(nowCycles, std::memory_order_relaxed);
+    windowStartCycles = nowCycles;
 }
 
 void FiberScheduler::ProcessorState::destroy() noexcept
@@ -470,111 +471,38 @@ void FiberScheduler::ProcessorState::wakeThread() noexcept
     }
 }
 
-void FiberScheduler::ProcessorState::parkThread(uint64_t waitNs, bool deadlineBounded, CpuTimer * timer) noexcept
+bool FiberScheduler::ProcessorState::parkThread(uint64_t waitNs, CpuTimer * timer) noexcept
 {
-    // Flush deferred SQEs: the idle path has no other submit, and parking
-    // passes to_submit=0, so a deferred doorbell rearm, MSG_RING wakeup, or
-    // remote cancel would sit queued until unrelated activity lands on this
-    // ring. If the submit defers again: on EBUSY hasWork() sees the full CQ
-    // and skips the park; on EAGAIN the timed park is the retry backoff.
-    submitIo(true);
+    __kernel_timespec ts;
+    ts.tv_sec = static_cast<int64_t>(waitNs / 1'000'000'000);
+    ts.tv_nsec = static_cast<int64_t>(waitNs % 1'000'000'000);
 
-    FiberScheduler::checkUtilization(this, Tsc::getCycles());
+    // waitNs of zero parks without a timeout.
+    io_uring_getevents_arg arg{};
+    arg.ts = waitNs ? reinterpret_cast<uint64_t>(&ts) : 0;
 
-    // The park goes indefinite only outside the prefix, once the backoff rams
-    // out with no bounding deadline. The first processor right of the prefix stays the
-    // standby prober instead: timed parks plus the pre-park sweep, the only observer
-    // of backlog aging behind a prefix too busy to signal.
-    bool indefinitePark = false;
-    bool standby = false;
-    if (waitNs >= options.maxWaitNs && !sqReady())
+    Perf::getSimpleCounter(simpleCounters[SCHEDULER_THREAD_PARKED], number).increment();
+
+    timer->reset(simpleCounters[SCHEDULER_IDLE_TIME], number);
+
+    bool parkExpired = false;
+
+    int r = ::io_uring_enter2(ring.ring_fd, 0, 1, parkEnterFlags, &arg, sizeof(arg));
+    if (r < 0)
     {
-        uint16_t count = scheduler->prefixCount.load(std::memory_order_relaxed);
-        standby = prefixIndex == count;
-        indefinitePark = !deadlineBounded && prefixIndex > count;
-    }
-
-    // Announce that we are about to park, then a seq_cst fence pairing with the one in wakeThread:
-    // release alone is not a StoreLoad barrier, so without this the store could reorder past the
-    // hasWork() re-check below while a concurrent wakeThread reads sleeping=false - both miss, and
-    // the wakeup is lost on weak memory models (e.g. arm64). Same pattern as enqueueWaiter.
-    // The same fence publishes the prefix shrink for the producers' backlog checks.
-    sleeping.store(true, std::memory_order_release);
-
-    std::atomic_thread_fence(std::memory_order_seq_cst);
-
-    // Double-check: work may have arrived between the last drain and here.
-    // If so, skip the park entirely so that work is not delayed by waitNs.
-    bool parking = !hasWork();
-
-    if (parking && (indefinitePark || standby))
-    {
-        // Pre-park backlog sweep behind the fence - the indefinite-park half of the
-        // no-lost-wakeup handshake, and the standby's probe cadence. A hit aborts the
-        // park: the scheduler loop's own steal loop takes it from here, cheapest-first
-        // under the idle budget, the same stealing principles as always. A standby
-        // hit self-activates and wakes the next standby into the probe duty.
-        if (FiberScheduler::sweepBacklog(this))
+        // io_uring_enter2 returns -errno directly; it does not set errno.
+        // ETIME: timeout expired with no CQE (normal); EINTR: signal interrupted (normal);
+        // EBUSY: a full CQ blocked the overflow flush (the caller's drain clears it).
+        SILK_ASSERT(-r == ETIME || -r == EINTR || -r == EBUSY);
+        if (-r == ETIME)
         {
-            if (standby)
-            {
-                uint16_t expected = prefixIndex;
-                bool activated = scheduler->prefixCount.compare_exchange_weak(expected, prefixIndex + 1, std::memory_order_relaxed);
-                if (activated)
-                {
-                    Perf::getSimpleCounter(simpleCounters[SCHEDULER_THREAD_GROW], number).increment();
-                    if (prefixIndex + 1 < scheduler->prefixTotal)
-                    {
-                        postWakeup(&scheduler->processorState[scheduler->prefixOrder[prefixIndex + 1]]);
-                    }
-                }
-            }
-
-            parking = false;
+            parkExpired = true;
         }
     }
 
-    if (parking)
-    {
-        // The rare backstop timeout: a prefix whose every prober is held still gets swept.
-        if (indefinitePark)
-        {
-            waitNs = options.maxWaitNs * PARK_BACKSTOP_WINDOWS;
-        }
+    timer->reset(simpleCounters[SCHEDULER_SYSTEM_TIME], number);
 
-        __kernel_timespec ts;
-        ts.tv_sec = static_cast<int64_t>(waitNs / 1'000'000'000);
-        ts.tv_nsec = static_cast<int64_t>(waitNs % 1'000'000'000);
-
-        io_uring_getevents_arg arg{};
-        arg.ts = reinterpret_cast<uint64_t>(&ts);
-
-        Perf::getSimpleCounter(simpleCounters[SCHEDULER_THREAD_PARKED], number).increment();
-
-        timer->reset(simpleCounters[SCHEDULER_IDLE_TIME], number);
-
-        uint64_t parkedCycles = Tsc::getCycles();
-
-        int r = ::io_uring_enter2(ring.ring_fd, 0, 1, parkEnterFlags, &arg, sizeof(arg));
-        if (r < 0)
-        {
-            // io_uring_enter2 returns -errno directly; it does not set errno.
-            // ETIME: timeout expired with no CQE (normal); EINTR: signal interrupted (normal);
-            // EBUSY: a full CQ blocked the overflow flush (the drain below clears it).
-            SILK_ASSERT(-r == ETIME || -r == EINTR || -r == EBUSY);
-        }
-
-        timer->reset(simpleCounters[SCHEDULER_SYSTEM_TIME], number);
-
-        // A deadline-bounded park is committed to this processor's sleepers, not
-        // shrinkable idleness - the utilization window counts it as busy.
-        if (deadlineBounded)
-        {
-            windowBoundedNs += Tsc::cyclesToNanoseconds(Tsc::getCycles() - parkedCycles);
-        }
-    }
-
-    sleeping.store(false, std::memory_order_relaxed);
+    return parkExpired;
 }
 
 void FiberScheduler::ProcessorState::publishSleepDeadline() noexcept
@@ -629,68 +557,60 @@ void FiberScheduler::ProcessorState::enqueueDoorbell() noexcept
     // CQE each time wakeThread writes to it. The kernel ends the poll on CQ overflow
     // (a CQE without IORING_CQE_F_MORE), so the completion drain re-arms it here. A
     // missed re-arm leaves the doorbell deaf forever, so retry through a full SQ ring.
-    for (;;)
-    {
-        bool enqueued = enqueueIo(
-            nullptr,
-            [this](io_uring_sqe * sqe) noexcept
-            {
-                ::io_uring_prep_poll_multishot(sqe, eventFd, POLLIN);
-                ::io_uring_sqe_set_data64(sqe, CQE_TAG_DOORBELL);
-            });
-
-        submitIo(true);
-
-        if (enqueued)
+    while (!enqueueIo(
+        nullptr,
+        [this](io_uring_sqe * sqe) noexcept
         {
-            break;
-        }
+            ::io_uring_prep_poll_multishot(sqe, eventFd, POLLIN);
+            ::io_uring_sqe_set_data64(sqe, CQE_TAG_DOORBELL);
+        }))
+    {
+        submitIo(true);
     }
+
+    submitIo(true);
 }
 
-void FiberScheduler::ProcessorState::postWakeup(ProcessorState * target) noexcept
+bool FiberScheduler::ProcessorState::postWakeup(ProcessorState * target) noexcept
 {
-    // Same lost-wakeup handshake as wakeThread: this seq_cst fence pairs with parkThread, so a target
-    // observed awake here cannot have missed the ready-queue store its parkThread hasWork() re-check sees.
+    // Same lost-wakeup handshake as wakeThread: this seq_cst fence pairs with parkProcessor, so a target
+    // observed awake here cannot have missed the ready-queue store its hasWork re-check sees.
     std::atomic_thread_fence(std::memory_order_seq_cst);
 
+    // A running target dispatches its own queue; false tells the caller to check the backlog.
     if (!target->sleeping.load(std::memory_order_acquire))
     {
-        // Running target: the fiber sits in its queue and the running fiber may never
-        // yield, so check the backlog stamp. External threads inject through here too.
-        growPrefix(this, target);
-        return;
+        return false;
     }
 
     Perf::getSimpleCounter(simpleCounters[SCHEDULER_THREAD_WAKED], number).increment();
 
-    // Fill the doorbell SQE and submit it; retry until the SQE is accepted (the SQ ring may be full).
-    for (;;)
-    {
-        bool enqueued = enqueueWakeup(target);
-        submitIo(true);
-        if (enqueued)
-        {
-            break;
-        }
-    }
+    enqueueWakeup(target);
+    submitIo(true);
+
+    return true;
 }
 
-bool FiberScheduler::ProcessorState::enqueueWakeup(ProcessorState * target) noexcept
+void FiberScheduler::ProcessorState::enqueueWakeup(ProcessorState * target) noexcept
 {
     // Fill (do not submit) a doorbell SQE on this (the caller's) ring posting straight into the target's
     // CQ via IORING_OP_MSG_RING, waking its io_uring_enter2 - cheaper than the eventfd doorbell.
     // IOSQE_CQE_SKIP_SUCCESS drops our send-side completion, so only the target's CQE lands, tagged
-    // CQE_TAG_WAKEUP for the drain to skip. Returns false if the SQ ring is momentarily full.
+    // CQE_TAG_WAKEUP for the drain to skip. A momentarily full SQ ring drains via submit and the fill
+    // retries; the caller submits for delivery.
     int targetRingFd = target->ring.ring_fd;
-    return enqueueIo(
+
+    while (!enqueueIo(
         nullptr,
         [targetRingFd](io_uring_sqe * sqe) noexcept
         {
             ::io_uring_prep_msg_ring(sqe, targetRingFd, 0, CQE_TAG_WAKEUP, 0);
             ::io_uring_sqe_set_data64(sqe, CQE_TAG_WAKEUP);
             ::io_uring_sqe_set_flags(sqe, IOSQE_CQE_SKIP_SUCCESS);
-        });
+        }))
+    {
+        submitIo(true);
+    }
 }
 
 template <typename Setup>
@@ -749,7 +669,7 @@ bool FiberScheduler::ProcessorState::submitIo(bool flush) noexcept
     if (!flush)
     {
         bool countMet = count >= options.ioUringFlushThreshold;
-        bool staleMet = nowCycles - lastSubmitCycles.load(std::memory_order_relaxed) > scheduler->ioUringFlushTimeoutCycles;
+        bool staleMet = nowCycles - lastSubmitCycles.load(std::memory_order_relaxed) > options.ioUringFlushTimeoutCycles;
         if (!countMet && !staleMet)
         {
             return false;
@@ -853,7 +773,7 @@ void FiberScheduler::SchedulerState::parkThread() noexcept
     }
 }
 
-cpu_set_t FiberScheduler::Options::defaultCpuMask() noexcept
+cpu_set_t FiberScheduler::defaultCpuMask() noexcept
 {
     cpu_set_t cpuSet;
     CPU_ZERO(&cpuSet);
@@ -884,11 +804,11 @@ void FiberScheduler::initialize(const Options * userOptions) noexcept
     SILK_ASSERT(options.ioUringFlushThreshold >= 1 && options.ioUringFlushThreshold <= options.ioUringQueueSize);
     SILK_ASSERT(options.waiterTableSize >= 2 && (options.waiterTableSize & (options.waiterTableSize - 1)) == 0);
 
-    scheduler = new SchedulerState();
-    scheduler->ioUringFlushTimeoutCycles = Tsc::nanosecondsToCycles(options.ioUringFlushTimeout);
-    scheduler->backlogAgeCycles = Tsc::nanosecondsToCycles(options.maxWaitNs);
-    scheduler->spinThresholdCycles = Tsc::nanosecondsToCycles(options.spinThresholdNs);
+    options.ioUringFlushTimeoutCycles = Tsc::nanosecondsToCycles(options.ioUringFlushTimeout);
+    options.backlogAgeCycles = Tsc::nanosecondsToCycles(options.maxWaitNs);
+    options.spinThresholdCycles = Tsc::nanosecondsToCycles(options.spinThresholdNs);
 
+    scheduler = new SchedulerState();
     scheduler->waiterTable = std::make_unique<WaitStack[]>(options.waiterTableSize);
     scheduler->waiterTableMask = options.waiterTableSize - 1;
 
@@ -1091,6 +1011,7 @@ void FiberScheduler::buildStealCandidates() noexcept
     }
 
     scheduler->prefixTotal = orderIndex;
+    scheduler->firstProcessor = &scheduler->processorState[scheduler->prefixOrder[0]];
     scheduler->prefixCount.store(orderIndex, std::memory_order_relaxed);
 }
 
@@ -1233,9 +1154,11 @@ bool FiberScheduler::schedule(Fiber * fiber) noexcept
     {
         ProcessorState * processor = currentProcessor();
         ProcessorState * target = enqueueReady(processor, fiber);
-        if (target)
+        if (target && !processor->postWakeup(target))
         {
-            processor->postWakeup(target);
+            // Running target: the fiber sits in its queue and the running fiber may
+            // never yield, so check the backlog stamp.
+            growPrefix(processor, target);
         }
         return true;
     }
@@ -1288,10 +1211,13 @@ FiberScheduler::ProcessorState * FiberScheduler::enqueueReady(ProcessorState * p
                 }
             }
 
-            // A fiber without a usable home - none assigned yet, or dropped above - migrates.
+            // A fiber without a usable home - none assigned yet, or dropped above -
+            // migrates: the producer takes it while it is a prefix member, with the
+            // wake's data warm in its cache; the first processor otherwise.
             if (!target)
             {
-                target = migrateFiber(processor, fiber, prefixCount);
+                target = processor->prefixIndex < prefixCount ? processor : scheduler->firstProcessor;
+                fiber->processorNumber = target->number;
             }
 
             if (target->readyQueue.enqueue(fiber))
@@ -1314,32 +1240,6 @@ FiberScheduler::ProcessorState * FiberScheduler::enqueueReady(ProcessorState * p
     }
 
     return nullptr;
-}
-
-// Migrate a fiber whose home cannot run it - not assigned yet, deactivated, or
-// asleep below full width: the producer takes it while it is a prefix member, with
-// the wake's data warm in its cache; processor zero otherwise. An empty prefix
-// restarts processor zero and wakes the new standby into its probe duty.
-__attribute__((noinline)) FiberScheduler::ProcessorState *
-FiberScheduler::migrateFiber(ProcessorState * processor, Fiber * fiber, uint16_t prefixCount) noexcept
-{
-    if (prefixCount == 0)
-    {
-        if (!scheduler->prefixCount.compare_exchange_weak(prefixCount, 1, std::memory_order_relaxed))
-        {
-            prefixCount = scheduler->prefixCount.load(std::memory_order_relaxed);
-        }
-        prefixCount = prefixCount ? prefixCount : 1;
-
-        if (prefixCount < scheduler->prefixTotal)
-        {
-            processor->postWakeup(&scheduler->processorState[scheduler->prefixOrder[prefixCount]]);
-        }
-    }
-
-    ProcessorState * target = processor->prefixIndex < prefixCount ? processor : &scheduler->processorState[scheduler->prefixOrder[0]];
-    fiber->processorNumber = target->number;
-    return target;
 }
 
 void FiberScheduler::scheduleAll(Fiber ** fibers, uint64_t count) noexcept
@@ -1386,10 +1286,7 @@ void FiberScheduler::scheduleAll(Fiber ** fibers, uint64_t count) noexcept
 
         Perf::getSimpleCounter(simpleCounters[SCHEDULER_THREAD_WAKED], processor->number).increment();
 
-        while (!processor->enqueueWakeup(target))
-        {
-            processor->submitIo(true);
-        }
+        processor->enqueueWakeup(target);
         enqueued = true;
     }
 
@@ -1751,15 +1648,17 @@ void FiberScheduler::runScheduler(ProcessorState * processor) noexcept
             didWork |= runStealLoop(processor, idleSinceCycles, &timer);
         }
 
+        uint64_t nowCycles = Tsc::getCycles();
         if (didWork)
         {
-            idleSinceCycles = Tsc::getCycles();
+            idleSinceCycles = nowCycles;
             waitNs = 0;
-            checkUtilization(processor, idleSinceCycles);
+            shrinkPrefix(processor, idleSinceCycles);
         }
         else
         {
             waitNs = waitNs ? std::min<uint64_t>(waitNs * 2, options.maxWaitNs) : options.initialWaitNs;
+            shrinkPrefix(processor, nowCycles);
         }
     }
 }
@@ -1772,6 +1671,8 @@ bool FiberScheduler::runServiceLoop(ProcessorState * processor, uint64_t waitNs,
         return false;
     }
 
+    bool parkExpired = false;
+
     if (waitNs)
     {
         // Cap the park at the earliest sleep deadline; cross-proc wakeups still ring the doorbell.
@@ -1779,14 +1680,14 @@ bool FiberScheduler::runServiceLoop(ProcessorState * processor, uint64_t waitNs,
         SleepFuture * nextSleep = processor->sleepTree.min();
         if (nextSleep)
         {
-            uint64_t now = Tsc::getCycles();
-            if (now >= nextSleep->deadlineCycles)
+            uint64_t nowCycles = Tsc::getCycles();
+            if (nowCycles >= nextSleep->deadlineCycles)
             {
                 effectiveWaitNs = 0;
             }
             else
             {
-                uint64_t untilNs = Tsc::cyclesToNanoseconds(nextSleep->deadlineCycles - now);
+                uint64_t untilNs = Tsc::cyclesToNanoseconds(nextSleep->deadlineCycles - nowCycles);
                 effectiveWaitNs = std::min(effectiveWaitNs, untilNs);
             }
         }
@@ -1799,12 +1700,20 @@ bool FiberScheduler::runServiceLoop(ProcessorState * processor, uint64_t waitNs,
         {
             if (effectiveWaitNs < options.spinThresholdNs)
             {
-                spinWait([=] { return processor->hasWork() || scheduler->stopping.load(std::memory_order_relaxed); });
+                bool spinHit = spinWait([=] { return processor->hasWork() || scheduler->stopping.load(std::memory_order_relaxed); });
+                if (spinHit)
+                {
+                    ++processor->windowRewardCount;
+                }
+                else
+                {
+                    ++processor->windowWasteCount;
+                }
             }
             else
             {
                 bool deadlineBounded = nextSleep != nullptr;
-                processor->parkThread(effectiveWaitNs, deadlineBounded, timer);
+                parkExpired = parkProcessor(processor, effectiveWaitNs, deadlineBounded, timer);
             }
         }
     }
@@ -1815,6 +1724,19 @@ bool FiberScheduler::runServiceLoop(ProcessorState * processor, uint64_t waitNs,
     didWork |= handleSleepQueue(processor);
     didWork |= handleCancelQueue(processor);
     didWork |= handleExpiredWaiters(processor);
+
+    // An expired park whose drain finds due work (a ripe sleeper) is demand; an empty expiry is waste.
+    if (parkExpired)
+    {
+        if (didWork)
+        {
+            ++processor->windowRewardCount;
+        }
+        else
+        {
+            ++processor->windowWasteCount;
+        }
+    }
 
     // Aggregate profile events.
     if (processor->profiler)
@@ -1833,16 +1755,16 @@ bool FiberScheduler::runStealLoop(ProcessorState * processor, uint64_t idleSince
 {
     bool didWork = false;
 
-    uint64_t now = Tsc::getCycles();
     // Budget for stealing equals idle time: don't steal from a CPU whose topology
     // cost exceeds how long we have been idle, and don't spend more time stealing
     // than we have already sat idle. A freshly-idle processor skips stealing
     // entirely and lets the backoff in runServiceLoop accumulate idle time first.
-    uint64_t idleCycles = now - idleSinceCycles;
-    uint64_t deadlineCycles = now + idleCycles;
+    uint64_t nowCycles = Tsc::getCycles();
+    uint64_t idleCycles = nowCycles - idleSinceCycles;
+    uint64_t deadlineCycles = nowCycles + idleCycles;
 
     uint16_t candidateCount = scheduler->processorCount - 1;
-    for (uint16_t i = 0; i < candidateCount && now < deadlineCycles; ++i)
+    for (uint16_t i = 0; i < candidateCount && nowCycles < deadlineCycles; ++i)
     {
         // Candidates are sorted cheapest first. Once the threshold exceeds our
         // idle duration all remaining candidates are even more expensive.
@@ -1861,7 +1783,7 @@ bool FiberScheduler::runStealLoop(ProcessorState * processor, uint64_t idleSince
         }
 
         // A victim attended within the spin horizon runs its own work sooner than a steal can move it.
-        if (victim->lastServiceCycles.load(std::memory_order_relaxed) + scheduler->spinThresholdCycles > now)
+        if (victim->lastServiceCycles.load(std::memory_order_relaxed) + options.spinThresholdCycles > nowCycles)
         {
             continue;
         }
@@ -1870,7 +1792,7 @@ bool FiberScheduler::runStealLoop(ProcessorState * processor, uint64_t idleSince
 
         // We have a limited budget to spend doing work for others.
         bool stoleAny = false;
-        for (now = Tsc::getCycles(); now < deadlineCycles; now = Tsc::getCycles())
+        for (nowCycles = Tsc::getCycles(); nowCycles < deadlineCycles; nowCycles = Tsc::getCycles())
         {
             Fiber * fiber;
             if (!victim->readyQueue.dequeue(&fiber))
@@ -1897,132 +1819,103 @@ bool FiberScheduler::runStealLoop(ProcessorState * processor, uint64_t idleSince
     return didWork;
 }
 
-void FiberScheduler::checkUtilization(ProcessorState * processor, uint64_t nowCycles) noexcept
+bool FiberScheduler::parkProcessor(ProcessorState * processor, uint64_t waitNs, bool deadlineBounded, CpuTimer * timer) noexcept
 {
-    // The hot half: one own-line load per did-work iteration; everything past the
-    // window boundary is out of line.
-    if (processor->windowStartCycles != 0 && nowCycles - processor->windowStartCycles < scheduler->backlogAgeCycles)
+    // Flush deferred SQEs: the idle path has no other submit, and parking
+    // passes to_submit=0, so a deferred doorbell rearm, MSG_RING wakeup, or
+    // remote cancel would sit queued until unrelated activity lands on this
+    // ring. If the submit defers again: on EBUSY hasWork sees the full CQ
+    // and skips the park; on EAGAIN the timed park is the retry backoff.
+    processor->submitIo(true);
+
+    // Announce that we are about to park, then a seq_cst fence pairing with the one in wakeThread:
+    // release alone is not a StoreLoad barrier, so without this the store could reorder past the
+    // re-checks below while a concurrent wakeThread reads sleeping=false - both miss, and
+    // the wakeup is lost on weak memory models (e.g. arm64). Same pattern as enqueueWaiter.
+    // The same fence publishes the prefix shrink for the producers' backlog checks.
+    processor->sleeping.store(true, std::memory_order_release);
+
+    std::atomic_thread_fence(std::memory_order_seq_cst);
+
+    // Classify the role behind the fence: either this read sees the new width, or the
+    // grower's fence-paired sleeping check sees the park and rings. Outside the prefix
+    // the park goes indefinite; the first processor right of it is the timed poller.
+    bool indefinitePark = false;
+    bool standby = false;
+    if (waitNs >= options.maxWaitNs && !processor->sqReady())
     {
-        return;
+        uint16_t prefixCount = scheduler->prefixCount.load(std::memory_order_relaxed);
+        if (!deadlineBounded && processor->prefixIndex > prefixCount)
+        {
+            indefinitePark = true;
+        }
+        if (processor->prefixIndex == prefixCount)
+        {
+            standby = true;
+        }
     }
 
-    checkUtilizationSlow(processor, nowCycles);
-}
+    // Double-check: work may have arrived between the last drain and here.
+    // If so, skip the park entirely so that work is not delayed by waitNs.
+    bool parking = !processor->hasWork();
 
-__attribute__((noinline)) void FiberScheduler::checkUtilizationSlow(ProcessorState * processor, uint64_t nowCycles) noexcept
-{
-    // Utilization over the trailing window - the shrink signal: the rightmost prefix
-    // processor extinguishes itself below SHRINK_UTILIZATION_PERCENT, even when sleep
-    // deadlines still bound its parks - it serves its sleepTree as an inactive
-    // processor, its wakers migrate left, and the drained tree lets it park
-    // indefinitely. Sampled from parkThread on idle processors and from the did-work
-    // loop iterations on busy ones, which never park.
-    uint64_t idleNs = Perf::getSimpleCounter(simpleCounters[SCHEDULER_IDLE_TIME], processor->number).value.load(std::memory_order_relaxed);
-
-    if (processor->windowStartCycles != 0)
+    if (parking && (indefinitePark || standby))
     {
-        uint64_t windowNs = Tsc::cyclesToNanoseconds(nowCycles - processor->windowStartCycles);
-        uint64_t idleDeltaNs = std::min(windowNs, idleNs - processor->windowIdleNs);
-        uint64_t boundedNs = std::min(idleDeltaNs, processor->windowBoundedNs);
-        uint64_t busyNs = windowNs - idleDeltaNs + boundedNs;
-
-        if (busyNs * 100 < windowNs * SHRINK_UTILIZATION_PERCENT)
+        // Pre-park sweep behind the fence - a hit aborts the park and the steal loop
+        // takes it. A standby hit self-activates; the next poller was appointed first.
+        if (sweepBacklog(processor))
         {
-            // One low window is variance on a bursty fleet; only a sustained run of
-            // them extinguishes the rightmost - a loaded edge that sheds and re-grows
-            // migrates its homes on every cycle.
-            processor->lowWindowCount++;
-
-            uint16_t count = scheduler->prefixCount.load(std::memory_order_relaxed);
-            if (processor->lowWindowCount >= SHRINK_WINDOW_COUNT && processor->prefixIndex + 1 == count)
+            if (standby)
             {
-                if (scheduler->prefixCount.compare_exchange_weak(count, processor->prefixIndex, std::memory_order_relaxed))
-                {
-                    Perf::getSimpleCounter(simpleCounters[SCHEDULER_THREAD_SHRINK], processor->number).increment();
-                    processor->lowWindowCount = 0;
-                }
+                startProcessor(processor, processor->prefixIndex);
             }
+
+            parking = false;
         }
-        else
+    }
+
+    bool parkExpired = false;
+
+    if (parking)
+    {
+        // Outside the prefix the park has no timeout - wakeups are doorbell-driven.
+        if (indefinitePark)
         {
-            processor->lowWindowCount = 0;
+            waitNs = 0;
+        }
+
+        parkExpired = processor->parkThread(waitNs, timer);
+
+        // A park cut short by arriving work is a rewarded wait; an expiry is classified after the drain.
+        if (!parkExpired)
+        {
+            ++processor->windowRewardCount;
         }
     }
 
-    processor->windowStartCycles = nowCycles;
-    processor->windowIdleNs = idleNs;
-    processor->windowBoundedNs = 0;
+    processor->sleeping.store(false, std::memory_order_relaxed);
+
+    return parkExpired;
 }
 
-void FiberScheduler::growPrefix(ProcessorState * producer, ProcessorState * target) noexcept
+bool FiberScheduler::startProcessor(ProcessorState * producer, uint16_t prefixCount) noexcept
 {
-    // The hot half: a single shared-warm load per enqueue to an awake target. At full
-    // width there is no processor left to start, and the full polling prefix itself
-    // rescues backlog; everything below full width is out of line.
-    if (options.disableWorkStealing || scheduler->prefixCount.load(std::memory_order_relaxed) == scheduler->prefixTotal)
+    // Appoint the next poller before the width moves - the timed observer never
+    // lapses; a lost race costs one spurious doorbell.
+    if (prefixCount + 1 < scheduler->prefixTotal)
     {
-        return;
+        producer->postWakeup(&scheduler->processorState[scheduler->prefixOrder[prefixCount + 1]]);
     }
 
-    growPrefixSlow(producer, target);
-}
-
-__attribute__((noinline)) void FiberScheduler::growPrefixSlow(ProcessorState * producer, ProcessorState * target) noexcept
-{
-    // Backlog persistence: the first observation arms the target's stamp and the target
-    // clears it when its ready queue drains empty, so only a queue continuously
-    // non-empty for the width-adaptation time constant starts the next processor - the
-    // exact dual of the shrink signal, a processor sitting idle for the same time.
-    // Growth restarts the age, pacing it to one processor per target per window.
-    uint64_t now = Tsc::getCycles();
-    uint64_t since = target->backlogSinceCycles.load(std::memory_order_relaxed);
-    if (since == 0)
+    // Widen the prefix from the expected width by one; false when the width moved.
+    if (!scheduler->prefixCount.compare_exchange_weak(prefixCount, prefixCount + 1, std::memory_order_relaxed))
     {
-        target->backlogSinceCycles.store(now, std::memory_order_relaxed);
-        return;
+        return false;
     }
-
-    if (now - since < scheduler->backlogAgeCycles)
-    {
-        return;
-    }
-
-    // Grow the prefix by one and ring the started processor's doorbell - nothing more:
-    // it wakes with an untouched idle budget, so its own steal loop covers every
-    // candidate cheapest-first, the same stealing principles as always. The prefix
-    // order engages whole idle cores before any HT sibling.
-    uint16_t count = scheduler->prefixCount.load(std::memory_order_relaxed);
-    if (count >= scheduler->prefixTotal || !scheduler->prefixCount.compare_exchange_weak(count, count + 1, std::memory_order_relaxed))
-    {
-        return;
-    }
-
-    target->backlogSinceCycles.store(now, std::memory_order_relaxed);
-
-    ProcessorState * started = &scheduler->processorState[scheduler->prefixOrder[count]];
 
     Perf::getSimpleCounter(simpleCounters[SCHEDULER_THREAD_GROW], producer->number).increment();
-    Perf::getSimpleCounter(simpleCounters[SCHEDULER_THREAD_WAKED], producer->number).increment();
 
-    // Fill the doorbell SQE and submit it; retry until the SQE is accepted (the SQ
-    // ring may be full).
-    for (;;)
-    {
-        bool enqueued = producer->enqueueWakeup(started);
-        producer->submitIo(true);
-        if (enqueued)
-        {
-            break;
-        }
-    }
-
-    // Every growth wakes the new standby - the first processor right of the grown
-    // prefix - into its timed-park probe duty; a sleeping processor never
-    // re-evaluates its role on its own.
-    if (count + 1 < scheduler->prefixTotal)
-    {
-        producer->postWakeup(&scheduler->processorState[scheduler->prefixOrder[count + 1]]);
-    }
+    return true;
 }
 
 bool FiberScheduler::sweepBacklog(ProcessorState * processor) noexcept
@@ -2032,11 +1925,9 @@ bool FiberScheduler::sweepBacklog(ProcessorState * processor) noexcept
         return false;
     }
 
-    // Cheapest-first sweep for aged ready backlog - the owner may be inside a long-running
-    // fiber and unable to signal; young backlog stays with its awake owner, whose own
-    // pre-park hasWork re-check keeps it from ever being stranded. A hit restarts the
-    // stamp's age - the sweeping processor is about to take the backlog itself.
-    uint64_t now = Tsc::getCycles();
+    // Cheapest-first sweep for aged backlog and unattended work. A hit restarts the
+    // stamp's age - the sweeper is about to take the backlog.
+    uint64_t nowCycles = Tsc::getCycles();
     uint16_t candidateCount = scheduler->processorCount - 1;
     for (uint16_t i = 0; i < candidateCount; ++i)
     {
@@ -2054,41 +1945,146 @@ bool FiberScheduler::sweepBacklog(ProcessorState * processor) noexcept
 
         if (!neighbor->readyQueue.empty())
         {
-            uint64_t since = neighbor->backlogSinceCycles.load(std::memory_order_relaxed);
-            if (since != 0 && now - since >= scheduler->backlogAgeCycles)
+            uint64_t backlogSinceCycles = neighbor->backlogSinceCycles.load(std::memory_order_relaxed);
+            if (backlogSinceCycles != 0 && nowCycles - backlogSinceCycles >= options.backlogAgeCycles)
             {
-                neighbor->backlogSinceCycles.store(now, std::memory_order_relaxed);
+                neighbor->backlogSinceCycles.store(nowCycles, std::memory_order_relaxed);
                 return true;
             }
 
-            // Unarmed backlog: no producer stamped it - the backlog checks arm only below
-            // full width, so work enqueued while every prefix processor was running carries no
-            // stamp. Arm it here so the next backlog check finds it aged and grows.
-            if (since == 0)
+            // Arm backlog enqueued at full width - producers only stamp below it.
+            if (backlogSinceCycles == 0)
             {
-                neighbor->backlogSinceCycles.store(now, std::memory_order_relaxed);
+                neighbor->backlogSinceCycles.store(nowCycles, std::memory_order_relaxed);
             }
         }
 
         // Work present but unattended: ring completions or a due sleep deadline behind
         // a stale heartbeat. A parked owner self-wakes; an attending one never hits.
-        if (!neighbor->sleeping.load(std::memory_order_relaxed)
-            && now - neighbor->lastServiceCycles.load(std::memory_order_relaxed) >= scheduler->backlogAgeCycles)
+        if (!neighbor->sleeping.load(std::memory_order_relaxed))
         {
-            if (neighbor->cqReady())
+            uint64_t lastServiceCycles = neighbor->lastServiceCycles.load(std::memory_order_relaxed);
+            if (nowCycles - lastServiceCycles >= options.backlogAgeCycles)
             {
-                return true;
-            }
+                if (neighbor->cqReady())
+                {
+                    return true;
+                }
 
-            uint64_t sleepDeadline = neighbor->sleepDeadlineCycles.load(std::memory_order_relaxed);
-            if (sleepDeadline != 0 && now >= sleepDeadline)
-            {
-                return true;
+                uint64_t sleepDeadline = neighbor->sleepDeadlineCycles.load(std::memory_order_relaxed);
+                if (sleepDeadline != 0 && nowCycles >= sleepDeadline)
+                {
+                    return true;
+                }
             }
         }
     }
 
     return false;
+}
+
+void FiberScheduler::shrinkPrefix(ProcessorState * processor, uint64_t nowCycles) noexcept
+{
+    // The hot half; without stealing the width stays pinned at full.
+    if (options.disableWorkStealing)
+    {
+        return;
+    }
+
+    if (nowCycles - processor->windowStartCycles < options.backlogAgeCycles)
+    {
+        return;
+    }
+
+    // Only the rightmost prefix processor may shed, and never processor zero - the
+    // width floors at one.
+    uint16_t prefixCount = scheduler->prefixCount.load(std::memory_order_relaxed);
+    if (processor->prefixIndex == 0 || processor->prefixIndex + 1 != prefixCount)
+    {
+        return;
+    }
+
+    shrinkPrefixSlow(processor, nowCycles, prefixCount);
+}
+
+__attribute__((noinline)) void
+FiberScheduler::shrinkPrefixSlow(ProcessorState * processor, uint64_t nowCycles, uint16_t prefixCount) noexcept
+{
+    // A wait rewarded by arriving work is demand; an expired spin or an empty park
+    // expiry is waste.
+    if (processor->windowWasteCount > processor->windowRewardCount * SHRINK_WASTE_FACTOR)
+    {
+        // One wasteful window is variance - only a sustained run sheds.
+        processor->lowWindowCount++;
+
+        if (processor->lowWindowCount >= SHRINK_WINDOW_COUNT)
+        {
+            if (scheduler->prefixCount.compare_exchange_weak(prefixCount, processor->prefixIndex, std::memory_order_relaxed))
+            {
+                Perf::getSimpleCounter(simpleCounters[SCHEDULER_THREAD_SHRINK], processor->number).increment();
+                processor->lowWindowCount = 0;
+            }
+        }
+    }
+    else
+    {
+        processor->lowWindowCount = 0;
+    }
+
+    processor->windowStartCycles = nowCycles;
+    processor->windowWasteCount = 0;
+    processor->windowRewardCount = 0;
+}
+
+void FiberScheduler::growPrefix(ProcessorState * producer, ProcessorState * target) noexcept
+{
+    // The hot half: a single shared-warm load per enqueue to an awake target.
+    if (options.disableWorkStealing)
+    {
+        return;
+    }
+
+    uint16_t prefixCount = scheduler->prefixCount.load(std::memory_order_relaxed);
+    if (prefixCount == scheduler->prefixTotal)
+    {
+        return;
+    }
+
+    growPrefixSlow(producer, target, prefixCount);
+}
+
+__attribute__((noinline)) void
+FiberScheduler::growPrefixSlow(ProcessorState * producer, ProcessorState * target, uint16_t prefixCount) noexcept
+{
+    // The first observation arms the stamp; only backlog older than a full window
+    // grows. Growth restarts the age, pacing one processor per target per window.
+    uint64_t nowCycles = Tsc::getCycles();
+    uint64_t backlogSinceCycles = target->backlogSinceCycles.load(std::memory_order_relaxed);
+    if (backlogSinceCycles == 0)
+    {
+        target->backlogSinceCycles.store(nowCycles, std::memory_order_relaxed);
+        return;
+    }
+
+    if (nowCycles - backlogSinceCycles < options.backlogAgeCycles)
+    {
+        return;
+    }
+
+    // Grow by one and ring the started processor - its own steal loop finds the work.
+    if (!startProcessor(producer, prefixCount))
+    {
+        return;
+    }
+
+    target->backlogSinceCycles.store(nowCycles, std::memory_order_relaxed);
+
+    ProcessorState * started = &scheduler->processorState[scheduler->prefixOrder[prefixCount]];
+
+    Perf::getSimpleCounter(simpleCounters[SCHEDULER_THREAD_WAKED], producer->number).increment();
+
+    producer->enqueueWakeup(started);
+    producer->submitIo(true);
 }
 
 bool FiberScheduler::handleReadyQueue(ProcessorState * processor, CpuTimer * timer) noexcept
@@ -2102,21 +2098,12 @@ bool FiberScheduler::handleReadyQueue(ProcessorState * processor, CpuTimer * tim
         Fiber * fiber;
         if (processor->readyQueue.dequeue(&fiber))
         {
-            // Backlog behind the fiber about to run: run the backlog check before
-            // committing - the fiber may run long, and this check is the only signal
-            // for work this processor enqueued on itself.
-            if (!processor->readyQueue.empty())
-            {
-                growPrefix(processor, processor);
-            }
-
             runFiber(fiber, timer);
             didWork = true;
         }
         else
         {
-            // The queue drained empty - disarm the backlog stamp so the next
-            // backlog observation starts a fresh age.
+            // Drained empty - disarm the backlog stamp.
             if (processor->backlogSinceCycles.load(std::memory_order_relaxed) != 0)
             {
                 processor->backlogSinceCycles.store(0, std::memory_order_relaxed);
@@ -2367,18 +2354,18 @@ bool FiberScheduler::handleExpiredWaiters(ProcessorState * processor) noexcept
         return false;
     }
 
-    uint64_t now = Tsc::getCycles();
-    if (sleepFuture->deadlineCycles > now)
+    uint64_t nowCycles = Tsc::getCycles();
+    if (sleepFuture->deadlineCycles > nowCycles)
     {
         return false;
     }
 
-    handleExpiredWaitersSlow(processor, sleepFuture, now);
+    handleExpiredWaitersSlow(processor, sleepFuture, nowCycles);
     return true;
 }
 
 __attribute__((noinline)) void
-FiberScheduler::handleExpiredWaitersSlow(ProcessorState * processor, SleepFuture * sleepFuture, uint64_t now) noexcept
+FiberScheduler::handleExpiredWaitersSlow(ProcessorState * processor, SleepFuture * sleepFuture, uint64_t nowCycles) noexcept
 {
     uint64_t count = 0;
     do
@@ -2404,7 +2391,7 @@ FiberScheduler::handleExpiredWaitersSlow(ProcessorState * processor, SleepFuture
             }
         }
 
-    } while (sleepFuture && sleepFuture->deadlineCycles <= now);
+    } while (sleepFuture && sleepFuture->deadlineCycles <= nowCycles);
 
     processor->publishSleepDeadline();
 
@@ -2527,9 +2514,11 @@ void FiberScheduler::runFiber(Fiber * fiber, CpuTimer * timer) noexcept
             }
 
             ProcessorState * target = enqueueReady(processor, fiber);
-            if (target)
+            if (target && !processor->postWakeup(target))
             {
-                processor->postWakeup(target);
+                // Running target: the fiber sits in its queue and the running fiber may
+                // never yield, so check the backlog stamp.
+                growPrefix(processor, target);
             }
         }
         return;

@@ -65,12 +65,12 @@ Loopback TCP, 64 B messages, 60 s measurement, 10 s warmup. Socket I/O uses `Fib
 
 | connections | RPS | BW | avg | p50 | p95 | p99 | p99.9 |
 |---|---|---|---|---|---|---|---|
-| 1 | 102k | 6 MiB/s | 10 µs | 9 µs | 11 µs | 19 µs | 22 µs |
-| 256 | 1584k | 97 MiB/s | 162 µs | 105 µs | 488 µs | 697 µs | 833 µs |
-| 512 | 1677k | 102 MiB/s | 305 µs | 288 µs | 541 µs | 873 µs | 1077 µs |
-| 1024 | 2022k | 123 MiB/s | 507 µs | 281 µs | 3365 µs | 3595 µs | 3672 µs |
+| 1 | 101k | 6 MiB/s | 10 µs | 10 µs | 11 µs | 16 µs | 22 µs |
+| 256 | 1643k | 100 MiB/s | 156 µs | 119 µs | 432 µs | 859 µs | 1134 µs |
+| 512 | 1993k | 122 MiB/s | 257 µs | 229 µs | 486 µs | 701 µs | 875 µs |
+| 1024 | 1966k | 120 MiB/s | 521 µs | 484 µs | 832 µs | 1449 µs | 1629 µs |
 
-The single connection is a serial chain the processor prefix concentrates on one core: 9 µs p50, paired at +50% over a full-width scheduler. At 1024 conns the fleet is saturated and holds ~2M req/s at full width. The 256-512 rows sit in the width controller's oscillation band - per-core idle gaps read as shrinkable, the shed edge regrows on backlog, and homes migrate each cycle - costing 8-20% versus a full-width scheduler (paired: 1931k/2027k) with high run-to-run variance; the same open controller limit as the stall rows in `work-stealing.md`. Submission is bounded-batched at the dispatch boundary (see Latency profiler below); without that bound, this workload's p50 is lower but p95/p99/p99.9 inflate by 5-10x.
+The single connection is a serial chain the processor prefix concentrates on one core: 9 µs p50, paired at +50% over a full-width scheduler. At 1024 conns the fleet is saturated and holds ~2M req/s at full width. At 256-512 conns per-core idle gaps open between messages, but a wait rewarded by arriving work reads as demand, so the width holds and the rows track full-width throughput. Submission is bounded-batched at the dispatch boundary (see Latency profiler below); without that bound, this workload's p50 is lower but p95/p99/p99.9 inflate by 5-10x.
 
 ---
 
@@ -80,23 +80,23 @@ Same workload as net-perf above, reimplemented with Boost.Asio C++20 coroutines 
 
 | connections | RPS | BW | avg | p50 | p95 | p99 | p99.9 |
 |---|---|---|---|---|---|---|---|
-| 1 | 3k | 0 MiB/s | 314 µs | 349 µs | 515 µs | 611 µs | 739 µs |
-| 256 | 339k | 21 MiB/s | 755 µs | 771 µs | 837 µs | 862 µs | 895 µs |
-| 512 | 358k | 22 MiB/s | 1429 µs | 1437 µs | 1506 µs | 1535 µs | 1572 µs |
-| 1024 | 427k | 26 MiB/s | 2396 µs | 2401 µs | 2492 µs | 2529 µs | 2583 µs |
+| 1 | 3k | 0 MiB/s | 326 µs | 370 µs | 517 µs | 612 µs | 735 µs |
+| 256 | 358k | 22 MiB/s | 715 µs | 722 µs | 772 µs | 794 µs | 823 µs |
+| 512 | 389k | 24 MiB/s | 1317 µs | 1332 µs | 1400 µs | 1428 µs | 1466 µs |
+| 1024 | 407k | 25 MiB/s | 2517 µs | 2520 µs | 2593 µs | 2624 µs | 2667 µs |
 
 **Comparison with net-perf (fibers + io_uring):**
 
 | connections | net-perf RPS | net-perf-asio RPS | ratio |
 |---|---|---|---|
-| 1 | 102k | 3k | **~34x** |
-| 256 | 1584k | 339k | **~4.7x** |
-| 512 | 1677k | 358k | **~4.7x** |
-| 1024 | 2022k | 427k | **~4.7x** |
+| 1 | 101k | 3k | **~34x** |
+| 256 | 1643k | 358k | **~4.6x** |
+| 512 | 1993k | 389k | **~5.1x** |
+| 1024 | 1966k | 407k | **~4.8x** |
 
 Two structural differences explain most of the gap. First, net-perf uses io_uring for all socket I/O while Asio uses epoll; io_uring avoids the per-operation `epoll_ctl` + `epoll_wait` + `recv`/`send` syscall chain. Second, the fiber scheduler's per-CPU pinned scheduler threads pick up completions via `io_uring_enter`, while Asio's reactor threads block in `epoll_wait` and resume via a pthread wakeup.
 
-The gap is largest at 1 connection (~34x) where per-operation scheduling overhead dominates with no parallelism to hide it, and stays around 4.7x at high connection counts where the server CPU half is the bottleneck.
+The gap is largest at 1 connection (~34x) where per-operation scheduling overhead dominates with no parallelism to hide it, and stays around 4.6-5.1x at high connection counts where the server CPU half is the bottleneck.
 
 ---
 

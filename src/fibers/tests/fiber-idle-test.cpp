@@ -72,11 +72,11 @@ uint64_t IdleTest::readProcessCpuTimeUs() noexcept
     return userUs + systemUs;
 }
 
-// An idle scheduler decays its prefix to zero and only the standby keeps timed
-// parks - the total park rate stays at the standby's cadence and every other
-// thread parks indefinitely. Parks only get rarer under external load (a
-// preempted timed park oversleeps and an idle scheduler receives no doorbells),
-// so the bound holds on a busy machine.
+// An idle scheduler decays its prefix to one processor, and only that processor
+// and the standby keep timed parks - the total park rate stays at two cadences
+// and every other thread parks indefinitely. Parks only get rarer under external
+// load (a preempted timed park oversleeps and an idle scheduler receives no
+// doorbells), so the bound holds on a busy machine.
 TEST_F(IdleTest, parkRateWhileIdle)
 {
     cpu_set_t affinity;
@@ -87,10 +87,11 @@ TEST_F(IdleTest, parkRateWhileIdle)
     int processorCount = CPU_COUNT(&affinity);
     ASSERT_GT(processorCount, 0);
 
-    // The prefix width is the boot width plus grows minus shrinks, so a zero
-    // width means shrinks lead grows by the boot width. Waiting for it proves
-    // the decay and keeps decay parks out of the measurement window.
-    uint64_t bootWidth = processorCount;
+    // The prefix width is the boot width plus grows minus shrinks, and the width
+    // floors at one, so a fully decayed scheduler has shrinks leading grows by the
+    // boot width minus one. Waiting for it proves the decay and keeps decay parks
+    // out of the measurement window.
+    uint64_t decayCount = processorCount - 1;
     uint64_t growCount = 0;
     uint64_t shrinkCount = 0;
 
@@ -99,7 +100,7 @@ TEST_F(IdleTest, parkRateWhileIdle)
         shrinkCount = readSimpleCounter("SchedulerThreadShrink");
         growCount = readSimpleCounter("SchedulerThreadGrow");
 
-        if (shrinkCount - growCount == bootWidth)
+        if (shrinkCount - growCount == decayCount)
         {
             break;
         }
@@ -107,7 +108,7 @@ TEST_F(IdleTest, parkRateWhileIdle)
         ::usleep(DECAY_POLL_US);
     }
 
-    ASSERT_EQ(shrinkCount - growCount, bootWidth);
+    ASSERT_EQ(shrinkCount - growCount, decayCount);
 
     uint64_t parkedBefore = readSimpleCounter("SchedulerThreadParked");
     uint64_t wakedBefore = readSimpleCounter("SchedulerThreadWaked");
@@ -131,7 +132,7 @@ TEST_F(IdleTest, parkRateWhileIdle)
     printf("idle wakes/s: %.1f\n", wakesPerSecond);
     printf("idle process cpu ms/s: %.2f\n", cpuMsPerSecond);
 
-    ASSERT_LE(parksPerSecond, 2.0 * standbyParksPerSecond);
+    ASSERT_LE(parksPerSecond, 3.0 * standbyParksPerSecond);
 }
 
 } // namespace silk
