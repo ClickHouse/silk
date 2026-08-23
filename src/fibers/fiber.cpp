@@ -1511,10 +1511,9 @@ void FiberScheduler::splice(
     IoFuture * future) noexcept
 {
     future->result = bytesSpliced;
+    uint32_t boundedLen = static_cast<uint32_t>(std::min<uint64_t>(len, UINT32_MAX));
     enqueueIo(
-        future,
-        [=](io_uring_sqe * sqe) noexcept
-        { ::io_uring_prep_splice(sqe, fdIn, offsetIn, fdOut, offsetOut, static_cast<unsigned int>(len), flags); });
+        future, [=](io_uring_sqe * sqe) noexcept { ::io_uring_prep_splice(sqe, fdIn, offsetIn, fdOut, offsetOut, boundedLen, flags); });
 }
 
 void FiberScheduler::cancelIo(IoFuture * future) noexcept
