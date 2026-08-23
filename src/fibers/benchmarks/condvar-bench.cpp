@@ -7,6 +7,7 @@
 #include <benchmark/benchmark.h>
 
 #include <atomic>
+#include <vector>
 
 namespace silk
 {
@@ -153,9 +154,9 @@ BENCHMARK_F(FiberCondVarBench, RoundTrip)(benchmark::State & state)
 // fires notify_all() and waits for every waiter to retire, then the cycle
 // repeats. Each iteration = N waiters suspending + one notify_all that wakes
 // them all + the driver re-checking the count.
-BENCHMARK_F(FiberCondVarBench, NotifyAllWakesN)(benchmark::State & state)
+BENCHMARK_DEFINE_F(FiberCondVarBench, NotifyAllWakesN)(benchmark::State & state)
 {
-    static constexpr int N = 8;
+    int waiterCount = static_cast<int>(state.range(0));
 
     struct Shared
     {
@@ -164,6 +165,7 @@ BENCHMARK_F(FiberCondVarBench, NotifyAllWakesN)(benchmark::State & state)
         FiberMutex mutex;
         int generation = 0;
         int doneCount = 0;
+        int waiterCount = 0;
         std::atomic<bool> stop{false};
     };
 
@@ -212,7 +214,7 @@ BENCHMARK_F(FiberCondVarBench, NotifyAllWakesN)(benchmark::State & state)
                 s->startSignal.notify_all();
 
                 s->mutex.lock();
-                while (s->doneCount != N)
+                while (s->doneCount != s->waiterCount)
                 {
                     s->doneSignal.wait(s->mutex);
                 }
@@ -223,8 +225,10 @@ BENCHMARK_F(FiberCondVarBench, NotifyAllWakesN)(benchmark::State & state)
     };
 
     Shared shared;
-    FiberFuture waiters[N], driver;
-    for (int i = 0; i < N; ++i)
+    shared.waiterCount = waiterCount;
+    std::vector<FiberFuture> waiters(waiterCount);
+    FiberFuture driver;
+    for (int i = 0; i < waiterCount; ++i)
     {
         int r = FiberScheduler::run(Waiter::fiberMain, {&shared}, &waiters[i]);
         SILK_ASSERT(!r);
@@ -239,10 +243,11 @@ BENCHMARK_F(FiberCondVarBench, NotifyAllWakesN)(benchmark::State & state)
     shared.mutex.unlock();
     shared.startSignal.notify_all();
 
-    for (int i = 0; i < N; ++i)
+    for (int i = 0; i < waiterCount; ++i)
     {
         waiters[i].wait();
     }
 }
+BENCHMARK_REGISTER_F(FiberCondVarBench, NotifyAllWakesN)->Arg(1)->Arg(8)->Arg(64);
 
 } // namespace silk

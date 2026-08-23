@@ -53,7 +53,7 @@ TEST(FiberCondVar, notifyOneWakesWaiter)
 
 TEST(FiberCondVar, notifyAllWakesAll)
 {
-    static constexpr int N = 4;
+    static constexpr int N = 33;
 
     struct Params
     {
