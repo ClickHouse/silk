@@ -182,6 +182,11 @@ void Profiler::stop() noexcept
         bpf_link__destroy(link);
     }
     perfLinks.clear();
+
+    if (skel)
+    {
+        profiler_bpf__detach(skel);
+    }
 }
 
 void Profiler::emitFoldedStacks(Symbolizer * symbolizer)
