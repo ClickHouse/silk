@@ -197,12 +197,14 @@ void Profiler::emitFoldedStacks(Symbolizer * symbolizer)
     int oncpuFd = bpf_map__fd(skel->maps.oncpu);
     int offcpuFd = bpf_map__fd(skel->maps.offcpu);
 
-    uint64_t sampleNs = 1'000'000'000ULL / sampleHz;
-
     // Merge both maps into {stack_key → (on_ns, off_ns)}.
     std::unordered_map<uint64_t, std::pair<uint64_t, uint64_t>> merged;
 
-    drainStacks(oncpuFd, merged, true, sampleNs);
+    if (oncpu)
+    {
+        uint64_t sampleNs = 1'000'000'000ULL / sampleHz;
+        drainStacks(oncpuFd, merged, true, sampleNs);
+    }
     drainStacks(offcpuFd, merged, false, 1);
 
     std::string folded;
