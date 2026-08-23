@@ -292,6 +292,45 @@ TEST(FiberMutex, sharedDoesNotExcludeShared)
     }
 }
 
+// With no exclusive holder or waiter anywhere, a try_lock_shared losing its CAS to a racing
+// shared locker must retry inside the try, never surface the race as a failure.
+TEST(FiberMutex, tryLockSharedNeverFailsAgainstSharedLockers)
+{
+    static constexpr int N_FIBERS = 8;
+    static constexpr uint32_t N_ROUNDS = 100'000;
+
+    struct Params
+    {
+        FiberMutex * mutex;
+
+        static int fiberMain(Params * p) noexcept
+        {
+            for (uint32_t i = 0; i < N_ROUNDS; ++i)
+            {
+                bool acquired = p->mutex->try_lock_shared();
+                SILK_ASSERT(acquired, "try_lock_shared failed with only shared lockers racing: i=%u", i);
+                p->mutex->unlock_shared();
+            }
+
+            return 0;
+        }
+    };
+
+    FiberMutex mutex;
+    FiberFuture futures[N_FIBERS];
+
+    for (int i = 0; i < N_FIBERS; ++i)
+    {
+        int r = FiberScheduler::run(Params::fiberMain, {&mutex}, &futures[i]);
+        ASSERT_FALSE(r);
+    }
+
+    for (int i = 0; i < N_FIBERS; ++i)
+    {
+        futures[i].wait();
+    }
+}
+
 TEST(FiberMutex, sharedWakesAfterExclusiveRelease)
 {
     struct ReaderParams

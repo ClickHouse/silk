@@ -87,17 +87,21 @@ public:
 
     /**
      * Attempt to acquire a shared lock without suspending; returns true on success. Respects
-     * writer priority - returns false if any exclusive waiter is queued.
+     * writer priority - returns false only when the lock is held exclusive or an exclusive
+     * waiter is queued; racing shared lockers retry, never a spurious failure.
      */
     [[nodiscard]] bool try_lock_shared() noexcept
     {
         State currentState;
         currentState.raw = state.load(std::memory_order_relaxed);
-        if (!currentState.exclusive && !currentState.hasExclusiveWaiters)
+        while (!currentState.exclusive && !currentState.hasExclusiveWaiters)
         {
             State newState(currentState);
             newState.value = currentState.value + 1;
-            return state.compare_exchange_weak(currentState.raw, newState.raw, std::memory_order_acquire, std::memory_order_relaxed);
+            if (state.compare_exchange_weak(currentState.raw, newState.raw, std::memory_order_acquire, std::memory_order_relaxed))
+            {
+                return true;
+            }
         }
         return false;
     }
