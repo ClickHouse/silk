@@ -779,6 +779,7 @@ class SimulatorParams:
     param: list[str] = field(default_factory=list)
     flamegraph: bool = False
     print_counters: bool = False
+    disable_cpu_adjust: bool = False
     timeout: int = 180
 
 
@@ -820,6 +821,8 @@ def cmd_simulator(preset: str, params: SimulatorParams) -> None:
         args += ["--param", param]
     if params.print_counters:
         args += ["--print-counters"]
+    if params.disable_cpu_adjust:
+        args += ["--disable-cpu-adjust"]
 
     param_note = f" ({', '.join(params.param)})" if params.param else ""
     print()
@@ -2010,6 +2013,12 @@ def _build_parser() -> argparse.ArgumentParser:
         dest="sim_print_counters",
         action="store_true",
         help="print perf counters after the run",
+    )
+    simulator_parser.add_argument(
+        "--disable-cpu-adjust",
+        dest="sim_disable_cpu_adjust",
+        action="store_true",
+        help="pin the scheduler CPU width at full (static-width baselines)",
     )
     simulator_parser.add_argument(
         "--flamegraph",
