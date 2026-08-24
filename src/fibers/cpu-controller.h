@@ -1,9 +1,7 @@
 #pragma once
 
 #include <silk/util/platform.h>
-#include <silk/util/spinlock.h>
 
-#include <algorithm>
 #include <atomic>
 #include <cstdint>
 
@@ -11,10 +9,9 @@ namespace silk
 {
 
 /**
- * Width policy for the scheduler's active CPU set: every grow and shed decision routes
- * through one gate, one growth-probe ledger, and one failed-growth suppression loop.
- * Part of the scheduler state; each processor embeds a Window, and the scheduler
- * executes the returned decisions.
+ * Width policy for the scheduler's active CPU set: every grow and shrink decision routes
+ * through one gate. Part of the scheduler state; each processor embeds a Window, and
+ * the scheduler executes the returned decisions.
  */
 class CpuController
 {
@@ -34,7 +31,7 @@ public:
         /** Deepest single dispatch pass of the window. */
         uint32_t peakDispatched = 0;
 
-        /** Consecutive shed-eligible windows; a shed needs a sustained run. */
+        /** Consecutive shrink-eligible windows; a shrink needs a sustained run. */
         uint32_t lowWindowCount = 0;
 
         /** Account a wait outcome: rewarded by arriving work is demand, expired empty is waste. */
@@ -68,50 +65,34 @@ public:
         }
     };
 
-    /** What the caller executes: GROW starts the next prefix processor, SHED moves the width down. */
+    /** What the caller executes: GROW starts the next prefix processor, SHRINK moves the width down. */
     enum class Action : uint8_t
     {
         NONE,
         GROW,
-        SHED,
+        SHRINK,
     };
 
-    /** One window verdict; a SHED moves the width from fromWidth to toWidth by CAS. */
+    /** One window verdict; a SHRINK moves the width down to width by CAS. */
     struct Decision
     {
         /** The move the caller executes. */
         Action action = Action::NONE;
 
-        /** The width the SHED expects - a width moved meanwhile stays, the shed is best-effort. */
-        uint16_t fromWidth = 0;
-
-        /** The width the SHED drops to. */
-        uint16_t toWidth = 0;
+        /** The width the SHRINK drops to. */
+        uint16_t width = 0;
     };
 
-    /** Set the window length and start the probe clock; called once at scheduler initialization. */
-    void initialize(uint64_t windowCycles_, uint64_t nowCycles) noexcept
-    {
-        windowCycles = windowCycles_;
-
-        // Start the probe clock so the first probe's pre-grow rate spans a real window,
-        // not the whole uptime.
-        probeCycles.store(nowCycles, std::memory_order_relaxed);
-    }
+    /** Set the window length; called once at scheduler initialization. */
+    void initialize(uint64_t windowCycles_) noexcept { windowCycles = windowCycles_; }
 
     /**
-     * Evaluate a member's completed window: a due probe resolves first, then the window
-     * votes. elapsedCycles is the window's age, enqueuedTotal the fleet's cumulative
-     * wake count. Resets the window counters; the caller restamps its window start.
+     * Evaluate a member's completed window: a backlogged window votes to grow, a
+     * sustained wasteful run on the rightmost member shrinks. elapsedCycles is the
+     * window's age. Resets the window counters; the caller restamps its window start.
      */
     Decision evaluateWindow(
-        Window * state,
-        uint16_t prefixIndex,
-        uint16_t width,
-        uint16_t widthTotal,
-        uint64_t enqueuedTotal,
-        uint64_t elapsedCycles,
-        uint64_t nowCycles) noexcept;
+        Window * state, uint16_t prefixIndex, uint16_t width, uint16_t widthTotal, uint64_t elapsedCycles, uint64_t nowCycles) noexcept;
 
     /** Arm-or-age a ready queue's backlog stamp; true when the backlog aged a full window. */
     bool observeBacklog(std::atomic<uint64_t> * backlogSinceCycles, uint64_t nowCycles) noexcept
@@ -129,41 +110,47 @@ public:
         return nowCycles - sinceCycles >= windowCycles;
     }
 
-    /** The single grow gate: suppression, a pending probe, and full width all refuse. */
+    /** The advisory grow gate: full width and the growth pace refuse; claimGrow enforces. */
     bool approveGrow(uint16_t width, uint16_t widthTotal, uint64_t nowCycles) const noexcept
     {
-        if (width == widthTotal || isSuppressed(nowCycles))
+        // One growth per window fleet-wide - steal traffic needs a window to re-home
+        // the last member's share before the next one can prove demand.
+        if (nowCycles - lastGrowCycles.load(std::memory_order_relaxed) < windowCycles)
         {
             return false;
         }
 
-        return startedNumber.load(std::memory_order_relaxed) == kInvalidProcessorNumber;
+        return width != widthTotal;
     }
 
-    /** Record a committed growth: arm the probe on the started member, snapshot the pre-grow rate. */
-    void commitGrow(uint16_t startedNumber_, uint16_t width, uint64_t enqueuedTotal, uint64_t nowCycles) noexcept;
+    /** Claim the one growth per window - the pace ticket; a fresh growth or a lost race refuses. */
+    bool claimGrow(uint64_t nowCycles) noexcept
+    {
+        uint64_t growCycles = lastGrowCycles.load(std::memory_order_relaxed);
 
-    /** Record a committed shed: reset the streak; the probe's own start shedding is a failed verdict. */
-    void commitShed(Window * state, uint16_t number, uint64_t nowCycles) noexcept;
+        if (nowCycles - growCycles < windowCycles)
+        {
+            return false;
+        }
 
-    /** Stamp a growth from any door; shedding holds off a few windows past it. */
-    void stampGrow(uint64_t nowCycles) noexcept { lastGrowCycles.store(nowCycles, std::memory_order_relaxed); }
+        return lastGrowCycles.compare_exchange_weak(growCycles, nowCycles, std::memory_order_relaxed);
+    }
 
-    /** True while failed-growth suppression holds; the aged-backlog rescue respects it too. */
-    bool isSuppressed(uint64_t nowCycles) const noexcept { return nowCycles < suppressUntilCycles.load(std::memory_order_relaxed); }
+    /** Record a committed shrink - resets the shrink streak. */
+    void commitShrink(Window * state) noexcept { state->lowWindowCount = 0; }
 
 private:
     //
     // Constants.
     //
 
-    /** Consecutive shed-eligible windows required before the shed fires. */
+    /** Consecutive shrink-eligible windows required before the shrink fires. */
     static constexpr uint32_t SHRINK_WINDOW_COUNT = 3;
 
-    /** Windows the shed waits out past the last growth, letting steal traffic re-home the started member's share. */
+    /** Windows the shrink waits out past the last growth, letting steal traffic re-home the started member's share. */
     static constexpr uint32_t SHRINK_HOLDOFF_WINDOWS = 4;
 
-    /** Waste-to-reward wait-outcome ratio above which a window reads as shed-able; loaded widths measure 3-4x. */
+    /** Waste-to-reward wait-outcome ratio above which a window reads as shrink-able; loaded widths measure 3-4x. */
     static constexpr uint64_t SHRINK_WASTE_FACTOR = 8;
 
     /**
@@ -173,48 +160,12 @@ private:
      */
     static constexpr uint64_t GROW_BACKLOG_COUNT = 16;
 
-    /**
-     * Failed-growth suppression bounds, in windows: each failure doubles the suppression
-     * from the floor to the cap; a growth that survives its verdict halves it back.
-     */
-    static constexpr uint32_t GROW_SUPPRESS_MIN_WINDOWS = 8;
-    static constexpr uint32_t GROW_SUPPRESS_MAX_WINDOWS = 512;
-
-    /** Windows a growth probe runs before its verdict - long enough for steal traffic to show in the wake rate. */
-    static constexpr uint32_t GROW_VERDICT_WINDOWS = 8;
-
-    /**
-     * The verdict's gain bar is preRate / (margin * width) - a quarter of one more
-     * core's proportional share. Wide fleets accept small marginal gains, a lone core
-     * demands a quarter jump - noise cannot fake that.
-     */
-    static constexpr uint32_t GROW_VERDICT_MARGIN = 4;
-
-    /**
-     * Wake rates are fixed-point wakes per 2^20 cycles: a 1M wakes/s fleet on a 3 GHz
-     * clock reads ~350, so the gain bar keeps resolution at low rates, and the shifted
-     * delta only overflows past ~10^13 wakes per span.
-     */
-    static constexpr uint32_t RATE_SHIFT = 20;
-
     //
     // Helpers.
     //
 
-    /** Resolve a due probe by the fleet's wake rate; a failed verdict returns the width revert. */
-    Decision resolveProbe(uint64_t enqueuedTotal, uint64_t nowCycles) noexcept;
-
-    /** Evaluate the wasteful-window shed on the rightmost member, maintaining the streak. */
-    void evaluateShed(Window * state, uint16_t prefixIndex, uint16_t width, uint64_t nowCycles, Decision * decision) noexcept;
-
-    /** Double the suppression from the floor to the cap - a growth failed to pay. */
-    void suppressGrow(uint64_t nowCycles) noexcept
-    {
-        uint32_t windows = suppressWindows.load(std::memory_order_relaxed);
-        windows = windows ? std::min<uint32_t>(windows * 2, GROW_SUPPRESS_MAX_WINDOWS) : GROW_SUPPRESS_MIN_WINDOWS;
-        suppressWindows.store(windows, std::memory_order_relaxed);
-        suppressUntilCycles.store(nowCycles + windows * windowCycles, std::memory_order_relaxed);
-    }
+    /** Evaluate the wasteful-window shrink on the rightmost member, maintaining the streak. */
+    void evaluateShrink(Window * state, uint16_t prefixIndex, uint16_t width, uint64_t nowCycles, Decision * decision) noexcept;
 
     //
     // State.
@@ -223,28 +174,8 @@ private:
     /** The window length in TSC cycles - the width-adaptation time constant. */
     uint64_t windowCycles = 0;
 
-    /** Serializes the probe ledger - arming, resolution, and the shed fast-fail. */
-    SpinLock probeLock;
-
-    /** The last growth's stamp, from any door; shedding waits SHRINK_HOLDOFF_WINDOWS past it. */
+    /** The last growth's stamp, from any door - the growth pace and the shrink holdoff. */
     std::atomic<uint64_t> lastGrowCycles{};
-
-    /** No grow passes the gate before this stamp; doubled per failed growth. */
-    std::atomic<uint64_t> suppressUntilCycles{};
-
-    /** Current suppression length in windows; doubles per failure, halves per surviving growth. */
-    std::atomic<uint32_t> suppressWindows{};
-
-    /** The pending probe's started member; its shed is an instant failure verdict. */
-    std::atomic<uint16_t> startedNumber{kInvalidProcessorNumber};
-
-    /** The pre-grow width a failed probe reverts to. */
-    std::atomic<uint16_t> probeWidth{};
-
-    /** The pre-probe snapshot: stamp, fleet enqueue counter, and wake rate. */
-    std::atomic<uint64_t> probeCycles{};
-    std::atomic<uint64_t> probeEnqueued{};
-    std::atomic<uint64_t> probeRate{};
 };
 
 } // namespace silk
