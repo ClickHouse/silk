@@ -1,5 +1,9 @@
-#include "common.h"
-
+#include <perf/util/latency.h>
+#include <perf/util/net.h>
+#include <perf/util/parse.h>
+#include <perf/util/report.h>
+#include <perf/util/signals.h>
+#include <perf/util/stall.h>
 #include <silk/fibers/fiber.h>
 #include <silk/util/assert.h>
 #include <silk/util/crash-dumper.h>
@@ -535,14 +539,14 @@ public:
     void start();
     void stop();
 
-    std::vector<uint64_t> collectLatencies();
+    LatencyHistogram collectLatencies();
 
 private:
     struct Connection
     {
         TcpConnection conn;
         silk::FiberFuture future;
-        std::vector<uint64_t> latencies;
+        LatencyHistogram latencies;
     };
 
     //
@@ -603,12 +607,12 @@ void Client::stop()
     }
 }
 
-std::vector<uint64_t> Client::collectLatencies()
+LatencyHistogram Client::collectLatencies()
 {
-    std::vector<uint64_t> all;
+    LatencyHistogram all;
     for (Connection & connection : connections)
     {
-        all.insert(all.end(), connection.latencies.begin(), connection.latencies.end());
+        all.merge(connection.latencies);
     }
     return all;
 }
@@ -654,16 +658,16 @@ int Client::clientFiberMain(ClientFiberParams * params) noexcept
         if (start >= client->warmupEndCycles.load(std::memory_order_relaxed))
         {
             uint64_t end = silk::Tsc::getCycles();
-            connection->latencies.push_back(silk::Tsc::cyclesToNanoseconds(end - start));
+            connection->latencies.record(silk::Tsc::cyclesToNanoseconds(end - start));
         }
     }
 
     return 0;
 }
 
-static void printJson(std::vector<uint64_t> & latNs, const ClientConfig & cfg)
+static void printJson(const LatencyHistogram & latencies, const ClientConfig & cfg)
 {
-    uint64_t total = latNs.size();
+    uint64_t total = latencies.getCount();
     double durationS = static_cast<double>(cfg.durationNs) / 1e9;
     double rps = static_cast<double>(total) / durationS;
     double bwBytesS = rps * cfg.msgSize;
@@ -677,7 +681,7 @@ static void printJson(std::vector<uint64_t> & latNs, const ClientConfig & cfg)
     printf("  \"total\": %lu,\n", total);
     printf("  \"rps\": %.1f,\n", rps);
     printf("  \"bw_bytes\": %.0f,\n", bwBytesS);
-    printLatencyUs(latNs);
+    printLatencyUs(latencies);
     if (cfg.printCounters)
     {
         printf(",");
@@ -844,7 +848,7 @@ static void runClient(int argc, char ** argv)
     SILK_INFO("stopping client");
     client.stop();
 
-    std::vector<uint64_t> allLat = client.collectLatencies();
+    LatencyHistogram allLat = client.collectLatencies();
     printJson(allLat, cfg);
 
     silk::FiberScheduler::destroy();

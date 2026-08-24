@@ -1,5 +1,9 @@
-#include "common.h"
-
+#include <perf/util/latency.h>
+#include <perf/util/net.h>
+#include <perf/util/parse.h>
+#include <perf/util/report.h>
+#include <perf/util/signals.h>
+#include <perf/util/stall.h>
 #include <silk/util/assert.h>
 #include <silk/util/crash-dumper.h>
 #include <silk/util/init.h>
@@ -848,7 +852,7 @@ public:
     void start();
     void stop();
 
-    std::vector<uint64_t> collectLatencies();
+    LatencyHistogram collectLatencies();
 
 private:
     static constexpr int EPOLL_BATCH = 1024;
@@ -870,7 +874,7 @@ private:
         bool writable = true;
         uint64_t startCycles = 0;
         StallScheduler stalls;
-        std::vector<uint64_t> latencies;
+        LatencyHistogram latencies;
     };
 
     struct Worker;
@@ -983,18 +987,12 @@ void Client::stop()
     started = false;
 }
 
-std::vector<uint64_t> Client::collectLatencies()
+LatencyHistogram Client::collectLatencies()
 {
-    std::vector<uint64_t> all;
-    uint64_t total = 0;
+    LatencyHistogram all;
     for (Connection & connection : connections)
     {
-        total += connection.latencies.size();
-    }
-    all.reserve(total);
-    for (Connection & connection : connections)
-    {
-        all.insert(all.end(), connection.latencies.begin(), connection.latencies.end());
+        all.merge(connection.latencies);
     }
     return all;
 }
@@ -1059,7 +1057,7 @@ bool Client::drive(Connection * conn, const ClientConfig & cfg, uint64_t warmupE
                 if (conn->startCycles >= warmupEndCycles)
                 {
                     uint64_t end = silk::Tsc::getCycles();
-                    conn->latencies.push_back(silk::Tsc::cyclesToNanoseconds(end - conn->startCycles));
+                    conn->latencies.record(silk::Tsc::cyclesToNanoseconds(end - conn->startCycles));
                 }
                 conn->state = State::Writing;
                 conn->offset = 0;
@@ -1147,9 +1145,9 @@ void Client::workerMain(WorkerParams params) noexcept
     }
 }
 
-static void printJson(std::vector<uint64_t> & latNs, const ClientConfig & cfg)
+static void printJson(const LatencyHistogram & latencies, const ClientConfig & cfg)
 {
-    uint64_t total = latNs.size();
+    uint64_t total = latencies.getCount();
     double durationS = static_cast<double>(cfg.durationNs) / 1e9;
     double rps = static_cast<double>(total) / durationS;
     double bwBytesS = rps * cfg.msgSize;
@@ -1164,7 +1162,7 @@ static void printJson(std::vector<uint64_t> & latNs, const ClientConfig & cfg)
     printf("  \"total\": %lu,\n", total);
     printf("  \"rps\": %.1f,\n", rps);
     printf("  \"bw_bytes\": %.0f,\n", bwBytesS);
-    printLatencyUs(latNs);
+    printLatencyUs(latencies);
     if (cfg.printCounters)
     {
         printf(",");
@@ -1331,7 +1329,7 @@ static void runClient(int argc, char ** argv)
     SILK_INFO("stopping client");
     client.stop();
 
-    std::vector<uint64_t> allLat = client.collectLatencies();
+    LatencyHistogram allLat = client.collectLatencies();
     printJson(allLat, cfg);
 
     silk::destroy();

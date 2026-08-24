@@ -1,5 +1,9 @@
-#include "common.h"
-
+#include <perf/util/latency.h>
+#include <perf/util/net.h>
+#include <perf/util/parse.h>
+#include <perf/util/report.h>
+#include <perf/util/signals.h>
+#include <perf/util/stall.h>
 #include <silk/util/assert.h>
 #include <silk/util/crash-dumper.h>
 #include <silk/util/init.h>
@@ -219,13 +223,13 @@ public:
     void start();
     void stop();
 
-    std::vector<uint64_t> collectLatencies();
+    LatencyHistogram collectLatencies();
 
 private:
     struct Connection
     {
         std::shared_ptr<tcp::socket> socket;
-        std::vector<uint64_t> latencies;
+        LatencyHistogram latencies;
     };
 
     static asio::awaitable<void> clientConnection(Client * client, Connection * connection);
@@ -324,17 +328,17 @@ asio::awaitable<void> Client::clientConnection(Client * client, Connection * con
 
         if (start >= client->warmupEndCycles.load(std::memory_order_relaxed))
         {
-            connection->latencies.push_back(silk::Tsc::cyclesToNanoseconds(silk::Tsc::getCycles() - start));
+            connection->latencies.record(silk::Tsc::cyclesToNanoseconds(silk::Tsc::getCycles() - start));
         }
     }
 }
 
-std::vector<uint64_t> Client::collectLatencies()
+LatencyHistogram Client::collectLatencies()
 {
-    std::vector<uint64_t> all;
+    LatencyHistogram all;
     for (Connection & conn : connections)
     {
-        all.insert(all.end(), conn.latencies.begin(), conn.latencies.end());
+        all.merge(conn.latencies);
     }
     return all;
 }
@@ -343,9 +347,9 @@ std::vector<uint64_t> Client::collectLatencies()
 // Output
 //
 
-static void printJson(std::vector<uint64_t> & latNs, const ClientConfig & cfg)
+static void printJson(const LatencyHistogram & latencies, const ClientConfig & cfg)
 {
-    uint64_t total = latNs.size();
+    uint64_t total = latencies.getCount();
     double durationS = static_cast<double>(cfg.durationNs) / 1e9;
     double rps = static_cast<double>(total) / durationS;
     double bwBytesS = rps * cfg.msgSize;
@@ -359,7 +363,7 @@ static void printJson(std::vector<uint64_t> & latNs, const ClientConfig & cfg)
     printf("  \"total\": %lu,\n", total);
     printf("  \"rps\": %.1f,\n", rps);
     printf("  \"bw_bytes\": %.0f,\n", bwBytesS);
-    printLatencyUs(latNs);
+    printLatencyUs(latencies);
     if (cfg.printCounters)
     {
         printf(",");
@@ -531,7 +535,7 @@ static void runClient(int argc, char ** argv)
         thread.join();
     }
 
-    std::vector<uint64_t> allLat = client.collectLatencies();
+    LatencyHistogram allLat = client.collectLatencies();
     printJson(allLat, cfg);
 }
 

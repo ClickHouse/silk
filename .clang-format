@@ -38,7 +38,7 @@ IndentPPDirectives: AfterHash
 IncludeCategories:
   - Regex: '^"'
     Priority: 1
-  - Regex: '^<(silk)/'
+  - Regex: '^<(silk|perf)/'
     Priority: 2
   - Regex: '^<(boost|gtest|benchmark|Poco|aws)/'
     Priority: 3
