@@ -217,6 +217,7 @@ A config has a `params` section and a `pipeline` section. `params` declares the 
 | `--cpus CPUS` | | taskset CPU list for the run |
 | `--flamegraph` | | Profile the run and generate flamegraph SVG |
 | `--print-counters` | | Print perf counters after the run |
+| `--disable-cpu-adjust` | | Pin the scheduler CPU width at full (static-width baselines) |
 | `--timeout SECONDS` | 180 | Per-run timeout (0=none) |
 
 ```

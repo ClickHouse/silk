@@ -29,6 +29,7 @@ int main(int argc, char ** argv)
     // cxxopts splits list values on commas, so one --param argument may carry several pairs.
     std::vector<std::string> paramArgs;
     bool countersRequested = false;
+    bool cpuAdjustDisabled = false;
     bool verbose = false;
 
     cxxopts::Options cli("fibers-simulator", "fiber scheduler workload simulator");
@@ -40,6 +41,7 @@ int main(int argc, char ** argv)
         ("warmup",         "override the warmup",                             cxxopts::value<std::string>(warmup))
         ("param",          "override a config param (name=value, repeatable)", cxxopts::value<std::vector<std::string>>(paramArgs))
         ("print-counters", "print scheduler latency and counters",            cxxopts::value<bool>(countersRequested))
+        ("disable-cpu-adjust", "pin the scheduler CPU width at full",    cxxopts::value<bool>(cpuAdjustDisabled))
         ("v,verbose",      "enable debug logging",                            cxxopts::value<bool>(verbose))
         ("h,help",         "print help");
     // clang-format on
@@ -105,7 +107,7 @@ int main(int argc, char ** argv)
 
     config.verifyConsumed();
 
-    silk::FiberScheduler::Options options{.enableProfiler = countersRequested};
+    silk::FiberScheduler::Options options{.enableProfiler = countersRequested, .disableCpuAdjust = cpuAdjustDisabled};
     silk::FiberScheduler::initialize(&options);
 
     executor.execute(pipeline.get());

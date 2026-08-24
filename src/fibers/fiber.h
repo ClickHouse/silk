@@ -1,5 +1,6 @@
 #pragma once
 
+#include "cpu-controller.h"
 #include "profiler.h"
 
 #include <silk/fibers/fiber.h>
@@ -35,13 +36,6 @@ namespace silk
 static constexpr uint64_t CQE_TAG_CANCEL = 0;
 static constexpr uint64_t CQE_TAG_DOORBELL = 1;
 static constexpr uint64_t CQE_TAG_WAKEUP = 2;
-
-// Consecutive wasteful windows required before the shrink fires.
-static constexpr uint32_t SHRINK_WINDOW_COUNT = 3;
-
-// Waste-to-reward wait-outcome ratio above which a window reads as shed-able;
-// loaded widths measure 3-4x.
-static constexpr uint64_t SHRINK_WASTE_FACTOR = 8;
 
 // clang-format off
 #define FIBER_SIMPLE_COUNTERS(x) \
@@ -406,11 +400,9 @@ struct FiberScheduler::ProcessorState
     // sweeps read the published deadline; everything else is owner-only.
     struct alignas(kCacheLineSize)
     {
-        // Wait outcomes since the window start - rewarded is demand, expired-empty is
-        // waste - and the wasteful-window streak. Reset at every window boundary.
-        uint64_t windowWasteCount = 0;
-        uint64_t windowRewardCount = 0;
-        uint32_t lowWindowCount = 0;
+        // The width controller's window signals, reset at every window boundary; only
+        // the owner writes them.
+        CpuController::Window window;
 
         // Earliest sleepTree deadline, published under serviceLoopLock at every tree
         // mutation; zero when the tree is empty. Foreign sweeps read it.
@@ -485,18 +477,22 @@ struct FiberScheduler::SchedulerState
     // invalidations never touch the read-only configuration around it.
     struct alignas(kCacheLineSize)
     {
-        // Processors inside the prefix - prefixOrder[0, prefixCount) - park timed and
-        // steal from each other; the rest park indefinitely and hold no work. Grown by
-        // an aged backlog check, shrunk by the rightmost's wasteful windows.
-        std::atomic<uint16_t> prefixCount{};
-
         // Number of configured processors - prefixCount at full width. Set once by
         // buildStealCandidates.
         uint16_t prefixTotal = 0;
 
+        // Processors inside the prefix - prefixOrder[0, prefixCount) - park timed and
+        // steal from each other; the rest park indefinitely and hold no work. Grown by
+        // the backlogged window vote and the standby's sweep, shrunk by the rightmost's
+        // wasteful windows after the grow holdoff.
+        std::atomic<uint16_t> prefixCount{};
+
         // The first processor in prefix order - the migrate target of an
         // out-of-prefix producer. Set once by buildStealCandidates.
         ProcessorState * firstProcessor = nullptr;
+
+        // The width controller: the growth gate, probe ledger, and suppression loop.
+        CpuController cpuController;
     };
 
     // Worker-pool region: the shared ready queue of thread-mode and overflow

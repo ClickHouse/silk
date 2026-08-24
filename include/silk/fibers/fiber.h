@@ -163,6 +163,11 @@ public:
         // prefix at full width. Production should leave this off.
         bool disableWorkStealing = false;
 
+        // Disable CPU-width adaptation, pinning the processor prefix at full width
+        // while stealing stays active. Set to measure static-width baselines under
+        // a fixed CPU set. Production should leave this off.
+        bool disableCpuAdjust = false;
+
         // Optional per-fiber context-switch hooks. fiberResume fires on the
         // thread about to run the fiber, immediately before control enters it
         // (first run and every resume); fiberSuspend fires on the same thread
@@ -745,12 +750,13 @@ private:
     static bool runServiceLoop(ProcessorState * processor, uint64_t waitNs, CpuTimer * timer) noexcept;
     static bool runStealLoop(ProcessorState * processor, uint64_t idleSinceCycles, CpuTimer * timer) noexcept;
     static bool parkProcessor(ProcessorState * processor, uint64_t waitNs, bool deadlineBounded, CpuTimer * timer) noexcept;
-    static bool startProcessor(ProcessorState * producer, uint16_t prefixCount) noexcept;
+    static bool startProcessor(ProcessorState * producer, uint16_t prefixCount, uint64_t nowCycles) noexcept;
     static bool sweepBacklog(ProcessorState * processor) noexcept;
-    static void shrinkPrefix(ProcessorState * processor, uint64_t nowCycles) noexcept;
-    static void shrinkPrefixSlow(ProcessorState * processor, uint64_t nowCycles, uint16_t prefixCount) noexcept;
+    static void adjustPrefix(ProcessorState * processor, uint64_t nowCycles) noexcept;
+    static void adjustPrefixSlow(ProcessorState * processor, uint64_t nowCycles, uint16_t prefixCount) noexcept;
     static void growPrefix(ProcessorState * producer, ProcessorState * target) noexcept;
     static void growPrefixSlow(ProcessorState * producer, ProcessorState * target, uint16_t prefixCount) noexcept;
+    static uint64_t sumEnqueued() noexcept;
     static bool handleReadyQueue(ProcessorState * processor, CpuTimer * timer) noexcept;
     static bool handleCompletionQueue(ProcessorState * processor) noexcept;
     static bool handleCompletionQueueSlow(ProcessorState * processor) noexcept;
