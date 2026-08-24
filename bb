@@ -771,6 +771,100 @@ def cmd_net_perf(preset: str, params: NetPerfParams) -> None:
 
 
 @dataclass
+class SimulatorParams:
+    config: str = ""
+    duration: str = ""
+    warmup: str = ""
+    cpus: str = ""
+    param: list[str] = field(default_factory=list)
+    flamegraph: bool = False
+    print_counters: bool = False
+    timeout: int = 180
+
+
+SIM_CONFIGS_DIR = os.path.join(ROOT, "src/perf/simulator/configs")
+
+
+def _resolve_simulator_config(config: str) -> str:
+    if os.path.isfile(config):
+        return config
+    named = os.path.join(SIM_CONFIGS_DIR, f"{config}.cfg")
+    if os.path.isfile(named):
+        return named
+    names = sorted(
+        os.path.splitext(os.path.basename(f))[0]
+        for f in glob.glob(os.path.join(SIM_CONFIGS_DIR, "*.cfg"))
+    )
+    log.error(
+        "unknown simulator config %r; bundled configs: %s", config, ", ".join(names)
+    )
+    sys.exit(1)
+
+
+def _sim_us(lat: dict[str, Any], key: str) -> str:
+    return f"{lat[key]:.0f} µs" if key in lat else "-"
+
+
+def cmd_simulator(preset: str, params: SimulatorParams) -> None:
+    config = _resolve_simulator_config(params.config)
+    binary = os.path.join(ROOT, f"build/{preset}/bin/fibers-simulator")
+    verbose_flag = ["--verbose"] if log.isEnabledFor(logging.DEBUG) else []
+    taskset = ["taskset", "-c", params.cpus] if params.cpus else []
+
+    args = [*taskset, binary, "--config", config, *verbose_flag]
+    if params.duration:
+        args += ["--duration", params.duration]
+    if params.warmup:
+        args += ["--warmup", params.warmup]
+    for param in params.param:
+        args += ["--param", param]
+    if params.print_counters:
+        args += ["--print-counters"]
+
+    param_note = f" ({', '.join(params.param)})" if params.param else ""
+    print()
+    print(f"## fibers-simulator -- {os.path.basename(config)}{param_note}")
+    print()
+
+    if params.flamegraph:
+        _run_flamegraph(preset, "fibers-simulator", args)
+        return
+
+    result = run_capture(*args, timeout=params.timeout or None)
+    data = json.loads(result.stdout)
+
+    print(
+        f"duration={data.get('duration_s', 0):.1f}s, measured={data.get('measured_s', 0):.1f}s"
+    )
+    print()
+
+    steps = data.get("steps", {})
+    headers = ["step", "type", "executions", "rate/s", "avg", "p50", "p90", "p99", "p99.9", "max"]
+    widths = [max([len(headers[0]), *(len(n) for n in steps)]), 10, 12, 12, 9, 9, 9, 9, 9, 9]
+    print(_perf_row(headers, widths))
+    print(_perf_sep(widths))
+
+    for name, step in steps.items():
+        lat = step.get("latency_us", {})
+        cells = [
+            name,
+            step.get("type", "?"),
+            f"{step.get('executions', 0):,}",
+            f"{step.get('rate', 0):,.0f}",
+            _sim_us(lat, "avg"),
+            _sim_us(lat, "p50"),
+            _sim_us(lat, "p90"),
+            _sim_us(lat, "p99"),
+            _sim_us(lat, "p999"),
+            _sim_us(lat, "max"),
+        ]
+        print(_perf_row(cells, widths))
+
+    if params.print_counters:
+        _print_counters(data)
+
+
+@dataclass
 class FilePerfParams:
     file: str = "/dev/shm/file-perf.bin"
     bs: str = "4k"
@@ -1873,6 +1967,65 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     _add_net_args(net_perf_epoll_parser)
 
+    simulator_parser = sub.add_parser(
+        "simulator",
+        help="build then run fibers-simulator (fiber workload pipelines)",
+    )
+    simulator_parser.add_argument(
+        "sim_config",
+        metavar="CONFIG",
+        help="config file path or a bundled config name (e.g. chain, net-baseline)",
+    )
+    simulator_parser.add_argument(
+        "--duration",
+        dest="sim_duration",
+        default="",
+        metavar="DURATION",
+        help="override the run duration",
+    )
+    simulator_parser.add_argument(
+        "--warmup",
+        dest="sim_warmup",
+        default="",
+        metavar="DURATION",
+        help="override the warmup",
+    )
+    simulator_parser.add_argument(
+        "--cpus",
+        dest="sim_cpus",
+        default="",
+        metavar="CPUS",
+        help="taskset CPU list for the run (default: no pinning)",
+    )
+    simulator_parser.add_argument(
+        "--param",
+        dest="sim_param",
+        action="append",
+        default=[],
+        metavar="NAME=VALUE",
+        help="override a config param (repeatable; comma-separated pairs allowed)",
+    )
+    simulator_parser.add_argument(
+        "--print-counters",
+        dest="sim_print_counters",
+        action="store_true",
+        help="print perf counters after the run",
+    )
+    simulator_parser.add_argument(
+        "--flamegraph",
+        dest="sim_flamegraph",
+        action="store_true",
+        help="profile the run and generate flamegraph SVG",
+    )
+    simulator_parser.add_argument(
+        "--timeout",
+        dest="sim_timeout",
+        default=180,
+        type=int,
+        metavar="SECONDS",
+        help="run timeout in seconds (default: 180, 0=none)",
+    )
+
     #
     # http-perf
     #
@@ -2131,6 +2284,10 @@ def main() -> None:
         cmd_build(preset, ["net-perf-epoll"])
         params = _params_from_args(args, "net", NetPerfParams)
         cmd_net_perf(preset, replace(params, engine=NetPerfEngine.EPOLL))
+    elif args.command == "simulator":
+        _check_no_extra(extra)
+        cmd_build(preset, ["fibers-simulator"])
+        cmd_simulator(preset, _params_from_args(args, "sim", SimulatorParams))
     elif args.command == "http-perf":
         _check_no_extra(extra)
         cmd_build(preset, ["http-perf"])

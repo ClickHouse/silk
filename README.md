@@ -13,6 +13,7 @@ Fibers are lightweight stackful coroutines that suspend rather than block their 
 - [`docs/coroutines.md`](docs/coroutines.md) — stackless coroutines vs stackful fibers: design differences and performance data
 - [`docs/perf.md`](docs/perf.md) — `net-perf` and `file-perf` benchmark results and fio comparison
 - [`docs/scheduler.md`](docs/scheduler.md) — scheduler loop, context switching, suspension pattern, async IO, sleep cancellation, work-stealing design, and performance benchmarks
+- [`docs/simulator.md`](docs/simulator.md) — fiber workload simulator: pipeline config format, step types, parameterized scenarios, and modeling limits
 - [`docs/sync.md`](docs/sync.md) — synchronization primitives: `FiberFuture`, `FiberFutex`, `FiberMutex`, `FiberSequencer`, `FiberEvent`, `FairFiberMutex`
 - [`docs/tls.md`](docs/tls.md) - thread-local storage with migrating fibers: why native `thread_local` is unsafe across a suspension, the rules for fiber code, and how silk hardens its own context accessors
 - [`docs/util.md`](docs/util.md) — utility library: lock-free data structures, TSC timing, memory pool, CPU topology, logging, assertions
@@ -200,6 +201,31 @@ TCP echo benchmark using Boost.Asio C++20 coroutines. Same options as `net-perf`
 ./bb -b release net-perf-asio --connections 1 64 256 1024
 ./bb -b release net-perf-asio --delay 1ms
 ./bb -b release net-perf-asio --flamegraph
+```
+
+#### `simulator`
+
+Runs `fibers-simulator`: a synthetic fiber workload described by a pipeline config file, for exercising the scheduler (chains of dependent wakes, micro-bursts, fan-out/fan-in, injected stalls, load steps) without a network stack. `CONFIG` is a file path or the name of a bundled config from `src/perf/simulator/configs/` (`net-baseline`, `net-stall`, `chain`, `micro-burst`, `fan-out`, `phased`, `mixed`, `pool`, `amber`).
+
+A config has a `params` section and a `pipeline` section. `params` declares the run settings (`duration`, `warmup`, `seed`) plus any `$name` placeholders with their defaults; every param can be overridden with `--param name=value`. `pipeline` is a tree of named steps, each with a `type` key: `cpu` (busy-loop), `wait` (fiber sleep, optionally exponential), `yield`, `sequence`, `loop` (`count` / `duration` / `period` pacing), `parallel` (fan out N fibers over the child steps and join), `concurrent` (one fiber per child step), `chain` (a token ring of dependent wakes), `maybe` (probabilistic body, e.g. stalls), `pool` (worker fibers serving submitted requests, optionally combining a `batch` per execution, with `affinity` binding each submitter to one worker's queue), and `submit` (call a pool and wait the completion); any value may reference `$name`. `measure = 1` on a step reports its wall-time percentiles; loops measure per iteration and chains per round. Each parameterized config's header documents the measured cases as ready-made `--param` lines: the `net-stall` cases from `docs/work-stealing.md` and the `amber` transfer-fiber counts (1, 32, 200, 400, 800).
+
+| Option | Default | Description |
+|---|---|---|
+| `--duration DURATION` | config | Override the run duration |
+| `--warmup DURATION` | config | Override the warmup |
+| `--param NAME=VALUE` | config | Override a config param (repeatable; comma-separated pairs allowed) |
+| `--cpus CPUS` | | taskset CPU list for the run |
+| `--flamegraph` | | Profile the run and generate flamegraph SVG |
+| `--print-counters` | | Print perf counters after the run |
+| `--timeout SECONDS` | 180 | Per-run timeout (0=none) |
+
+```
+./bb -b release simulator chain
+./bb -b release simulator net-stall --duration 60s --print-counters
+./bb -b release simulator net-stall --cpus 0-15 --param connections=256,stall_rate=100,workers=256
+./bb -b release simulator amber --param fibers=800
+./bb -b release simulator src/perf/simulator/configs/mixed.cfg --cpus 0-15
+./bb -b release simulator micro-burst --flamegraph
 ```
 
 #### `http-perf`
