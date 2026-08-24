@@ -16,7 +16,7 @@ class FiberMutexBench : public benchmark::Fixture
 
 // Measures the uncontended fast path: lock() CAS acquire + unlock() CAS release
 // with no other fiber competing.
-BENCHMARK_F(FiberMutexBench, Uncontended)(benchmark::State & state)
+BENCHMARK_DEFINE_F(FiberMutexBench, Uncontended)(benchmark::State & state)
 {
     struct Params
     {
@@ -38,12 +38,13 @@ BENCHMARK_F(FiberMutexBench, Uncontended)(benchmark::State & state)
     int r = FiberScheduler::run(Params::fiberMain, {&state, &mutex});
     SILK_ASSERT(!r);
 }
+BENCHMARK_REGISTER_F(FiberMutexBench, Uncontended)->UseRealTime();
 
 // Measures the contended handoff cost: two fibers compete for the same mutex.
 // A driver fiber runs the benchmark loop while a contender fiber locks and
 // unlocks as fast as possible. Each iteration = one lock acquisition under
 // contention + one unlock.
-BENCHMARK_F(FiberMutexBench, Contended)(benchmark::State & state)
+BENCHMARK_DEFINE_F(FiberMutexBench, Contended)(benchmark::State & state)
 {
     struct Driver
     {
@@ -90,12 +91,13 @@ BENCHMARK_F(FiberMutexBench, Contended)(benchmark::State & state)
     stop.store(true, std::memory_order_relaxed);
     contender.wait();
 }
+BENCHMARK_REGISTER_F(FiberMutexBench, Contended)->UseRealTime();
 
 // Strict fiber-to-fiber round-trip using two mutexes as binary semaphores.
 // FiberMutex does not enforce ownership in unlock(), so unlock() acts as a
 // post and lock() acts as a wait. Each iteration = two unlocks + two locks,
 // directly comparable to FiberFutexBench/RoundTrip.
-BENCHMARK_F(FiberMutexBench, RoundTrip)(benchmark::State & state)
+BENCHMARK_DEFINE_F(FiberMutexBench, RoundTrip)(benchmark::State & state)
 {
     struct Responder
     {
@@ -151,9 +153,10 @@ BENCHMARK_F(FiberMutexBench, RoundTrip)(benchmark::State & state)
     req.unlock();
     responder.wait();
 }
+BENCHMARK_REGISTER_F(FiberMutexBench, RoundTrip)->UseRealTime();
 
 // Uncontended shared fast path: lock_shared + unlock_shared with no other fiber.
-BENCHMARK_F(FiberMutexBench, UncontendedShared)(benchmark::State & state)
+BENCHMARK_DEFINE_F(FiberMutexBench, UncontendedShared)(benchmark::State & state)
 {
     struct Params
     {
@@ -175,10 +178,11 @@ BENCHMARK_F(FiberMutexBench, UncontendedShared)(benchmark::State & state)
     int r = FiberScheduler::run(Params::fiberMain, {&state, &mutex});
     SILK_ASSERT(!r);
 }
+BENCHMARK_REGISTER_F(FiberMutexBench, UncontendedShared)->UseRealTime();
 
 // Two readers contending on the counter word: no mutual exclusion, just CAS
 // traffic against another concurrent reader on the same cache line.
-BENCHMARK_F(FiberMutexBench, ContendedSharedShared)(benchmark::State & state)
+BENCHMARK_DEFINE_F(FiberMutexBench, ContendedSharedShared)(benchmark::State & state)
 {
     struct Driver
     {
@@ -225,11 +229,12 @@ BENCHMARK_F(FiberMutexBench, ContendedSharedShared)(benchmark::State & state)
     stop.store(true, std::memory_order_relaxed);
     contender.wait();
 }
+BENCHMARK_REGISTER_F(FiberMutexBench, ContendedSharedShared)->UseRealTime();
 
 // Reader vs. writer contention: driver takes shared, contender takes exclusive.
 // Each iteration exercises a true block-and-wake on whichever side currently
 // holds the lock.
-BENCHMARK_F(FiberMutexBench, ContendedSharedExclusive)(benchmark::State & state)
+BENCHMARK_DEFINE_F(FiberMutexBench, ContendedSharedExclusive)(benchmark::State & state)
 {
     struct Driver
     {
@@ -276,5 +281,6 @@ BENCHMARK_F(FiberMutexBench, ContendedSharedExclusive)(benchmark::State & state)
     stop.store(true, std::memory_order_relaxed);
     contender.wait();
 }
+BENCHMARK_REGISTER_F(FiberMutexBench, ContendedSharedExclusive)->UseRealTime();
 
 } // namespace silk

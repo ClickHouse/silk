@@ -17,7 +17,7 @@ class FiberSequencerBench : public benchmark::Fixture
 };
 
 // Measures the uncontended fast path: increment() with no waiters registered.
-BENCHMARK_F(FiberSequencerBench, IncrementUncontended)(benchmark::State & state)
+BENCHMARK_DEFINE_F(FiberSequencerBench, IncrementUncontended)(benchmark::State & state)
 {
     struct Params
     {
@@ -38,11 +38,12 @@ BENCHMARK_F(FiberSequencerBench, IncrementUncontended)(benchmark::State & state)
     int r = FiberScheduler::run(Params::fiberMain, {&state, &sequencer});
     SILK_ASSERT(!r);
 }
+BENCHMARK_REGISTER_F(FiberSequencerBench, IncrementUncontended)->UseRealTime();
 
 // Measures the fiber-to-fiber round-trip cost: a driver fiber increments and
 // waits for a reply; a responder fiber waits and increments back. Each
 // iteration = two increments + two fiber suspensions.
-BENCHMARK_F(FiberSequencerBench, RoundTrip)(benchmark::State & state)
+BENCHMARK_DEFINE_F(FiberSequencerBench, RoundTrip)(benchmark::State & state)
 {
     struct Responder
     {
@@ -98,6 +99,7 @@ BENCHMARK_F(FiberSequencerBench, RoundTrip)(benchmark::State & state)
     request.increment();
     responder.wait();
 }
+BENCHMARK_REGISTER_F(FiberSequencerBench, RoundTrip)->UseRealTime();
 
 // Fan-in: register N futures at tokens base+1..base+N while the counter sits at base (all push to the request
 // queue and stay pending - no parking), then one advance(base+N) reaches them all in a single drain. Every
@@ -135,6 +137,6 @@ BENCHMARK_DEFINE_F(FiberSequencerBench, FanIn)(benchmark::State & state)
     int r = FiberScheduler::run(Params::fiberMain, {&state, count});
     SILK_ASSERT(!r);
 }
-BENCHMARK_REGISTER_F(FiberSequencerBench, FanIn)->Arg(8)->Arg(64)->Arg(512);
+BENCHMARK_REGISTER_F(FiberSequencerBench, FanIn)->Arg(8)->Arg(64)->Arg(512)->UseRealTime();
 
 } // namespace silk

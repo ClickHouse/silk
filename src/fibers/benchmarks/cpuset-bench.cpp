@@ -140,7 +140,7 @@ BENCHMARK_DEFINE_F(CpuSetBench, InjectFromActiveCpu)(benchmark::State & state)
     pinToCpu(activeCpus.front());
     injectFromCurrentCpu(state, static_cast<uint64_t>(state.range(0)));
 }
-BENCHMARK_REGISTER_F(CpuSetBench, InjectFromActiveCpu)->Arg(1)->Arg(16)->Arg(64);
+BENCHMARK_REGISTER_F(CpuSetBench, InjectFromActiveCpu)->Arg(1)->Arg(16)->Arg(64)->UseRealTime();
 
 // Injection from the reserved core: the caller owns a core silk schedules nothing
 // on, and homeProcessor routes the work to an active processor's ring on another
@@ -156,7 +156,7 @@ BENCHMARK_DEFINE_F(CpuSetBench, InjectFromReservedCpu)(benchmark::State & state)
     pinToCpu(excludedCpu);
     injectFromCurrentCpu(state, static_cast<uint64_t>(state.range(0)));
 }
-BENCHMARK_REGISTER_F(CpuSetBench, InjectFromReservedCpu)->Arg(1)->Arg(16)->Arg(64);
+BENCHMARK_REGISTER_F(CpuSetBench, InjectFromReservedCpu)->Arg(1)->Arg(16)->Arg(64)->UseRealTime();
 
 } // namespace silk
 

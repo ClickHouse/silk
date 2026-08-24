@@ -18,7 +18,7 @@ class FiberFutexBench : public benchmark::Fixture
 // and waits for a reply; a responder fiber waits for the request and posts the
 // reply. Each iteration = two posts + two fiber suspensions, comparable to the
 // mutex contended handoff benchmark.
-BENCHMARK_F(FiberFutexBench, RoundTrip)(benchmark::State & state)
+BENCHMARK_DEFINE_F(FiberFutexBench, RoundTrip)(benchmark::State & state)
 {
     struct Responder
     {
@@ -82,5 +82,6 @@ BENCHMARK_F(FiberFutexBench, RoundTrip)(benchmark::State & state)
     request.post();
     responder.wait();
 }
+BENCHMARK_REGISTER_F(FiberFutexBench, RoundTrip)->UseRealTime();
 
 } // namespace silk
