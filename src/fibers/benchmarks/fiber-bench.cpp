@@ -22,7 +22,7 @@ class FiberBench : public benchmark::Fixture
 
 // Fiber creation + join: schedule a no-op fiber and block until it exits.
 // Pairs with PlatformBench/ThreadCreateJoin to compare against std::thread.
-BENCHMARK_F(FiberBench, RunJoin)(benchmark::State & state)
+BENCHMARK_DEFINE_F(FiberBench, RunJoin)(benchmark::State & state)
 {
     struct Params
     {
@@ -35,11 +35,12 @@ BENCHMARK_F(FiberBench, RunJoin)(benchmark::State & state)
         SILK_ASSERT(!r);
     }
 }
+BENCHMARK_REGISTER_F(FiberBench, RunJoin)->UseRealTime();
 
 // Measures the round-trip cost of a fiber context switch: fiber yields to the
 // scheduler, which re-enqueues it and runs it again.  Each iteration = one yield
 // = two context switches (fiber => scheduler and scheduler => fiber).
-BENCHMARK_F(FiberBench, ContextSwitch)(benchmark::State & state)
+BENCHMARK_DEFINE_F(FiberBench, ContextSwitch)(benchmark::State & state)
 {
     struct Params
     {
@@ -58,10 +59,11 @@ BENCHMARK_F(FiberBench, ContextSwitch)(benchmark::State & state)
     int r = FiberScheduler::run(Params::fiberMain, {&state});
     SILK_ASSERT(!r);
 }
+BENCHMARK_REGISTER_F(FiberBench, ContextSwitch)->UseRealTime();
 
 // Pipe round-trip using blocking io_uring read/write.
 // Each iteration = one thread => fiber => thread round trip.
-BENCHMARK_F(FiberBench, PipeRoundTripBlocking)(benchmark::State & state)
+BENCHMARK_DEFINE_F(FiberBench, PipeRoundTripBlocking)(benchmark::State & state)
 {
     // reqFds: thread writes, fiber reads.
     // respFds: fiber writes, thread reads.
@@ -115,10 +117,11 @@ BENCHMARK_F(FiberBench, PipeRoundTripBlocking)(benchmark::State & state)
     ::close(respFds[0]);
     ::close(respFds[1]);
 }
+BENCHMARK_REGISTER_F(FiberBench, PipeRoundTripBlocking)->UseRealTime();
 
 // Pipe round-trip using non-blocking syscalls with poll() fallback.
 // Each iteration = one thread => fiber => thread round trip.
-BENCHMARK_F(FiberBench, PipeRoundTripNonBlocking)(benchmark::State & state)
+BENCHMARK_DEFINE_F(FiberBench, PipeRoundTripNonBlocking)(benchmark::State & state)
 {
     int reqFds[2];
     int respFds[2];
@@ -182,12 +185,13 @@ BENCHMARK_F(FiberBench, PipeRoundTripNonBlocking)(benchmark::State & state)
     ::close(respFds[0]);
     ::close(respFds[1]);
 }
+BENCHMARK_REGISTER_F(FiberBench, PipeRoundTripNonBlocking)->UseRealTime();
 
 // io_uring fiber ping-pong: two fibers exchange bytes through a pipe, both
 // using io_uring for reads. Each iteration = one full round-trip = two genuine
 // fiber suspensions on io_uring read CQEs, with no OS thread scheduling in
 // the hot path. Measures: SQE submit -> fiber suspend -> CQE -> fiber resume.
-BENCHMARK_F(FiberBench, IoUringFiberPingPong)(benchmark::State & state)
+BENCHMARK_DEFINE_F(FiberBench, IoUringFiberPingPong)(benchmark::State & state)
 {
     int pingFds[2];
     int pongFds[2];
@@ -256,11 +260,12 @@ BENCHMARK_F(FiberBench, IoUringFiberPingPong)(benchmark::State & state)
     ::close(pongFds[0]);
     ::close(pongFds[1]);
 }
+BENCHMARK_REGISTER_F(FiberBench, IoUringFiberPingPong)->UseRealTime();
 
 // Sleep round-trip: submit a 0ns async sleep and wait for it to expire.
 // Each iteration exercises sleep submission, handleSleepQueue expiry, and
 // fiber wakeup without any real wall-clock delay.
-BENCHMARK_F(FiberBench, Sleep)(benchmark::State & state)
+BENCHMARK_DEFINE_F(FiberBench, Sleep)(benchmark::State & state)
 {
     struct Params
     {
@@ -279,6 +284,7 @@ BENCHMARK_F(FiberBench, Sleep)(benchmark::State & state)
     int r = FiberScheduler::run(Params::fiberMain, {&state});
     SILK_ASSERT(!r);
 }
+BENCHMARK_REGISTER_F(FiberBench, Sleep)->UseRealTime();
 
 // Sleep wakeup latency: measures real elapsed time per 100us sleep. Reports actual
 // elapsed time via manual timing; overhead above 100us is the wakeup latency.
@@ -310,7 +316,7 @@ BENCHMARK_REGISTER_F(FiberBench, SleepWakeup)->UseManualTime();
 
 // Sleep cancel: submit a 60s async sleep and immediately cancel it (cancel-
 // before-insert path).  Measures cancel + handleSleepQueue ECANCELED delivery.
-BENCHMARK_F(FiberBench, SleepCancel)(benchmark::State & state)
+BENCHMARK_DEFINE_F(FiberBench, SleepCancel)(benchmark::State & state)
 {
     static constexpr uint64_t SLEEP_NS = 60'000'000'000; // 60s
 
@@ -334,6 +340,7 @@ BENCHMARK_F(FiberBench, SleepCancel)(benchmark::State & state)
     int r = FiberScheduler::run(Params::fiberMain, {&state});
     SILK_ASSERT(!r);
 }
+BENCHMARK_REGISTER_F(FiberBench, SleepCancel)->UseRealTime();
 
 // Work-stealing throughput: main thread schedules fibers that land on its CPU;
 // idle scheduler threads steal and execute them. Maintains a ring of N in-flight
@@ -373,7 +380,7 @@ BENCHMARK_DEFINE_F(FiberBench, WorkStealingThreadProducer)(benchmark::State & st
 
     state.SetItemsProcessed(state.iterations());
 }
-BENCHMARK_REGISTER_F(FiberBench, WorkStealingThreadProducer)->Arg(1)->Arg(4)->Arg(16)->Arg(64)->Arg(256);
+BENCHMARK_REGISTER_F(FiberBench, WorkStealingThreadProducer)->Arg(1)->Arg(4)->Arg(16)->Arg(64)->Arg(256)->UseRealTime();
 
 // Same ring benchmark but the loop runs inside a driver fiber so child
 // completion is delivered via FiberFuture rather than a POSIX semaphore.
@@ -445,6 +452,7 @@ BENCHMARK_REGISTER_F(FiberBench, WorkStealingFiberProducer)
     ->Args({1, 1000})
     ->Args({16, 1000})
     ->Args({1, 10000})
-    ->Args({16, 10000});
+    ->Args({16, 10000})
+    ->UseRealTime();
 
 } // namespace silk

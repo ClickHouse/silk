@@ -17,7 +17,7 @@ class FiberCondVarBench : public benchmark::Fixture
 
 // Measures the uncontended fast path of notify_one(): acquire the spinlock,
 // observe the waiter list empty, release. No waiter is ever registered.
-BENCHMARK_F(FiberCondVarBench, NotifyOneUncontended)(benchmark::State & state)
+BENCHMARK_DEFINE_F(FiberCondVarBench, NotifyOneUncontended)(benchmark::State & state)
 {
     struct Params
     {
@@ -38,10 +38,11 @@ BENCHMARK_F(FiberCondVarBench, NotifyOneUncontended)(benchmark::State & state)
     int r = FiberScheduler::run(Params::fiberMain, {&state, &cv});
     SILK_ASSERT(!r);
 }
+BENCHMARK_REGISTER_F(FiberCondVarBench, NotifyOneUncontended)->UseRealTime();
 
 // Same as above for notify_all(): acquire the spinlock, splice an empty
 // waiter list into a local snapshot, release.
-BENCHMARK_F(FiberCondVarBench, NotifyAllUncontended)(benchmark::State & state)
+BENCHMARK_DEFINE_F(FiberCondVarBench, NotifyAllUncontended)(benchmark::State & state)
 {
     struct Params
     {
@@ -62,6 +63,7 @@ BENCHMARK_F(FiberCondVarBench, NotifyAllUncontended)(benchmark::State & state)
     int r = FiberScheduler::run(Params::fiberMain, {&state, &cv});
     SILK_ASSERT(!r);
 }
+BENCHMARK_REGISTER_F(FiberCondVarBench, NotifyAllUncontended)->UseRealTime();
 
 // Producer/consumer ping-pong: a driver fiber publishes an item under the
 // mutex and notifies; a responder fiber waits, consumes the item, and signals
@@ -70,7 +72,7 @@ BENCHMARK_F(FiberCondVarBench, NotifyAllUncontended)(benchmark::State & state)
 // the driver already suspended (waking it) or find the list empty (in which
 // case the driver re-checks items, sees 0, and exits the wait loop without
 // suspending).
-BENCHMARK_F(FiberCondVarBench, RoundTrip)(benchmark::State & state)
+BENCHMARK_DEFINE_F(FiberCondVarBench, RoundTrip)(benchmark::State & state)
 {
     struct Shared
     {
@@ -148,12 +150,13 @@ BENCHMARK_F(FiberCondVarBench, RoundTrip)(benchmark::State & state)
     shared.produced.notify_one();
     responder.wait();
 }
+BENCHMARK_REGISTER_F(FiberCondVarBench, RoundTrip)->UseRealTime();
 
 // Broadcast wake-up cost: N waiter fibers suspend on cv.wait(); the driver
 // fires notify_all() and waits for every waiter to retire, then the cycle
 // repeats. Each iteration = N waiters suspending + one notify_all that wakes
 // them all + the driver re-checking the count.
-BENCHMARK_F(FiberCondVarBench, NotifyAllWakesN)(benchmark::State & state)
+BENCHMARK_DEFINE_F(FiberCondVarBench, NotifyAllWakesN)(benchmark::State & state)
 {
     static constexpr int N = 8;
 
@@ -244,5 +247,6 @@ BENCHMARK_F(FiberCondVarBench, NotifyAllWakesN)(benchmark::State & state)
         waiters[i].wait();
     }
 }
+BENCHMARK_REGISTER_F(FiberCondVarBench, NotifyAllWakesN)->UseRealTime();
 
 } // namespace silk

@@ -94,7 +94,7 @@ BENCHMARK_DEFINE_F(FiberFutureBench, SetAllWake)(benchmark::State & state)
         done[i].wait();
     }
 }
-BENCHMARK_REGISTER_F(FiberFutureBench, SetAllWake)->Arg(8)->Arg(64)->Arg(512);
+BENCHMARK_REGISTER_F(FiberFutureBench, SetAllWake)->Arg(8)->Arg(64)->Arg(512)->UseRealTime();
 
 // One-in-flight ping-pong: the caller sets ping and waits pong, the echo fiber waits ping and sets pong,
 // so each iteration is one round trip - two single-fiber wakes. The variants place the pair's home
