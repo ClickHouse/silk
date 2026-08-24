@@ -1199,13 +1199,18 @@ FiberScheduler::ProcessorState * FiberScheduler::enqueueReady(ProcessorState * p
 
                 bool targetAwake = target->prefixIndex < prefixCount && !target->sleeping.load(std::memory_order_relaxed);
                 bool producerAwake = processor->prefixIndex < prefixCount && !processor->sleeping.load(std::memory_order_relaxed);
+                bool producerQueueEmpty = processor->readyQueue.empty();
 
                 // The home keeps the fiber while it can run it right away. A home outside
                 // the prefix must not hold work and always migrates; a parked home
-                // migrates below full width when an awake prefix producer can run the
-                // fiber with its data still warm - at full width there is no capacity
+                // migrates below full width when an awake prefix producer with an empty
+                // ready queue can run the fiber with its data still warm - a producer
+                // holding queued work stops attracting, else wakes recentralize on the
+                // loaded member and undo every steal. At full width there is no capacity
                 // to shed and the parked home keeps its fiber.
-                if (!targetAwake && (target->prefixIndex >= prefixCount || (producerAwake && prefixCount != scheduler->prefixTotal)))
+                if (!targetAwake
+                    && (target->prefixIndex >= prefixCount
+                        || (producerAwake && producerQueueEmpty && prefixCount != scheduler->prefixTotal)))
                 {
                     target = nullptr;
                 }
