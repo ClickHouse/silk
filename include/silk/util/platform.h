@@ -199,14 +199,23 @@ static constexpr uint64_t intHash(uint64_t key) noexcept
     return key;
 }
 
+/** @{ Overloads dispatching on the actual return type of ::strerror_r: the GNU variant
+ * returns char *, the POSIX one returns int. Selecting by feature-test macros misfires
+ * on libcs that accept _GNU_SOURCE but only ship the POSIX variant. */
+[[maybe_unused]] static inline const char * strerrorResult(int r, char * buf) noexcept
+{
+    return r == 0 ? buf : nullptr;
+}
+[[maybe_unused]] static inline const char * strerrorResult(const char * r, char *) noexcept
+{
+    return r;
+}
+/** @} */
+
 /** Thread-safe strerror_r into a caller-provided buffer; may return nullptr for an unknown code. */
 static inline const char * strerror(int code, char * buf, size_t size) noexcept
 {
-#if defined(_GNU_SOURCE)
-    return ::strerror_r(code, buf, size);
-#else
-    return ::strerror_r(code, buf, size) == 0 ? buf : nullptr;
-#endif
+    return strerrorResult(::strerror_r(code, buf, size), buf);
 }
 
 } // namespace silk
