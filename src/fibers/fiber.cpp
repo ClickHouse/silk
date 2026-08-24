@@ -811,7 +811,7 @@ void FiberScheduler::initialize(const Options * userOptions) noexcept
     options.spinThresholdCycles = Tsc::nanosecondsToCycles(options.spinThresholdNs);
 
     scheduler = new SchedulerState();
-    scheduler->cpuController.initialize(options.backlogAgeCycles, Tsc::getCycles());
+    scheduler->cpuController.initialize(options.backlogAgeCycles);
 
     scheduler->waiterTable = std::make_unique<WaitStack[]>(options.waiterTableSize);
     scheduler->waiterTableMask = options.waiterTableSize - 1;
@@ -1907,10 +1907,13 @@ bool FiberScheduler::sweepBacklog(ProcessorState * processor) noexcept
 
     // Cheapest-first sweep for aged backlog and unattended work. A hit restarts the
     // stamp's age - the sweeper is about to take the backlog. The aged-backlog signal
-    // respects the vote suppression - a standby re-activating into a spread that never
-    // pays is the same failed growth; the unattended rescue stays unconditional.
+    // passes the same grow gate as every door - a standby re-activating into a spread
+    // that never pays, or past a pending probe, is the same untracked growth; the
+    // unattended rescue stays unconditional.
     uint64_t nowCycles = Tsc::getCycles();
-    bool suppressed = scheduler->cpuController.isSuppressed(nowCycles);
+    uint16_t prefixCount = scheduler->prefixCount.load(std::memory_order_relaxed);
+    bool growApproved = scheduler->cpuController.approveGrow(prefixCount, scheduler->prefixTotal, nowCycles);
+
     uint16_t candidateCount = scheduler->processorCount - 1;
     for (uint16_t i = 0; i < candidateCount; ++i)
     {
@@ -1929,7 +1932,7 @@ bool FiberScheduler::sweepBacklog(ProcessorState * processor) noexcept
         // The observation also arms backlog enqueued at full width - producers only
         // stamp below it; a hit restarts the age, the sweeper is about to take the
         // backlog.
-        if (!suppressed && !neighbor->readyQueue.empty())
+        if (growApproved && !neighbor->readyQueue.empty())
         {
             if (scheduler->cpuController.observeBacklog(&neighbor->backlogSinceCycles, nowCycles))
             {
@@ -1964,6 +1967,14 @@ bool FiberScheduler::sweepBacklog(ProcessorState * processor) noexcept
 
 bool FiberScheduler::startProcessor(ProcessorState * producer, uint16_t prefixCount, uint64_t nowCycles) noexcept
 {
+    // Claim the one growth per window - every door passes here, so the pace holds and
+    // the growth stamp is monotonic; a claim burned by the width CAS losing its race
+    // costs one window of growth.
+    if (!scheduler->cpuController.claimGrow(nowCycles))
+    {
+        return false;
+    }
+
     // Appoint the next poller before the width moves - the timed observer never
     // lapses; a lost race costs one spurious doorbell.
     if (prefixCount + 1 < scheduler->prefixTotal)
@@ -1977,15 +1988,12 @@ bool FiberScheduler::startProcessor(ProcessorState * producer, uint16_t prefixCo
         return false;
     }
 
-    scheduler->cpuController.stampGrow(nowCycles);
 
     Perf::getSimpleCounter(simpleCounters[SCHEDULER_THREAD_GROW], producer->number).increment();
 
-    // Every committed growth arms the controller's probe. Ring the started processor -
-    // its steal loop finds and re-homes the work; a self-activating standby is already
-    // awake and needs no doorbell.
+    // Ring the started processor - its steal loop finds and re-homes the work; a
+    // self-activating standby is already awake and needs no doorbell.
     ProcessorState * started = &scheduler->processorState[scheduler->prefixOrder[prefixCount]];
-    scheduler->cpuController.commitGrow(started->number, prefixCount, sumEnqueued(), nowCycles);
 
     if (started != producer)
     {
@@ -1996,19 +2004,6 @@ bool FiberScheduler::startProcessor(ProcessorState * producer, uint16_t prefixCo
     }
 
     return true;
-}
-
-// The fleet's cumulative wake count - the growth probes' throughput proxy.
-uint64_t FiberScheduler::sumEnqueued() noexcept
-{
-    uint64_t enqueued = 0;
-    for (uint16_t i = 0; i < scheduler->processorCount; ++i)
-    {
-        enqueued += Perf::getSimpleCounter(simpleCounters[FIBER_ENQUEUED], i).value.load(std::memory_order_relaxed);
-        enqueued += Perf::getSimpleCounter(simpleCounters[FIBER_ENQUEUED_SHARED], i).value.load(std::memory_order_relaxed);
-    }
-
-    return enqueued;
 }
 
 void FiberScheduler::adjustPrefix(ProcessorState * processor, uint64_t nowCycles) noexcept
@@ -2037,7 +2032,7 @@ FiberScheduler::adjustPrefixSlow(ProcessorState * processor, uint64_t nowCycles,
 {
     uint64_t elapsedCycles = nowCycles - processor->windowStartCycles;
     CpuController::Decision decision = scheduler->cpuController.evaluateWindow(
-        &processor->window, processor->prefixIndex, prefixCount, scheduler->prefixTotal, sumEnqueued(), elapsedCycles, nowCycles);
+        &processor->window, processor->prefixIndex, prefixCount, scheduler->prefixTotal, elapsedCycles, nowCycles);
     processor->windowStartCycles = nowCycles;
 
     if (decision.action == CpuController::Action::GROW)
@@ -2046,14 +2041,12 @@ FiberScheduler::adjustPrefixSlow(ProcessorState * processor, uint64_t nowCycles,
         return;
     }
 
-    if (decision.action == CpuController::Action::SHED)
+    if (decision.action == CpuController::Action::SHRINK)
     {
-        uint16_t fromWidth = decision.fromWidth;
-
-        if (scheduler->prefixCount.compare_exchange_weak(fromWidth, decision.toWidth, std::memory_order_relaxed))
+        if (scheduler->prefixCount.compare_exchange_weak(prefixCount, decision.width, std::memory_order_relaxed))
         {
             Perf::getSimpleCounter(simpleCounters[SCHEDULER_THREAD_SHRINK], processor->number).increment();
-            scheduler->cpuController.commitShed(&processor->window, processor->number, nowCycles);
+            scheduler->cpuController.commitShrink(&processor->window);
         }
     }
 }

@@ -756,7 +756,6 @@ private:
     static void adjustPrefixSlow(ProcessorState * processor, uint64_t nowCycles, uint16_t prefixCount) noexcept;
     static void growPrefix(ProcessorState * producer, ProcessorState * target) noexcept;
     static void growPrefixSlow(ProcessorState * producer, ProcessorState * target, uint16_t prefixCount) noexcept;
-    static uint64_t sumEnqueued() noexcept;
     static bool handleReadyQueue(ProcessorState * processor, CpuTimer * timer) noexcept;
     static bool handleCompletionQueue(ProcessorState * processor) noexcept;
     static bool handleCompletionQueueSlow(ProcessorState * processor) noexcept;
