@@ -8,26 +8,32 @@
 #include <cstring>
 
 #include <sched.h>
+#include <stddef.h>
 #include <time.h>
 #include <unistd.h>
 
 /**
- * On older sysroots we fall back to a minimal in-tree `struct rseq` matching
- * the kernel UAPI layout (cpu_id_start at offset 0, cpu_id at offset 4) and
- * alias `__rseq_offset` to librseq's `rseq_offset`, which librseq populates.
+ * On sysroots without sys/rseq.h we fall back to a minimal in-tree struct rseq
+ * matching the kernel UAPI layout (cpu_id_start at offset 0, cpu_id at offset 4).
  */
 #if __has_include(<sys/rseq.h>)
 #    include <sys/rseq.h>
 #else
-#    include <stddef.h>
 struct rseq
 {
     uint32_t cpu_id_start;
     uint32_t cpu_id;
 };
-extern "C" ptrdiff_t rseq_offset;
-#    define __rseq_offset rseq_offset
 #endif
+
+/**
+ * @{ librseq's copies of the libc rseq ABI values, populated by rseq_init.
+ * Reading them instead of the libc __rseq_offset/__rseq_size symbols keeps the
+ * behavior tied to the runtime libc rather than the build-time sysroot headers.
+ */
+extern "C" ptrdiff_t rseq_offset;
+extern "C" unsigned int rseq_size;
+/** @} */
 
 /** Suppress unused-variable warnings. */
 #define SILK_UNUSED(x) (void)(x)
@@ -147,11 +153,26 @@ static inline uint16_t getCurrentProcessor() noexcept
 #    error Unsupported platform
 #endif
 
-    // glibc's sched_getcpu fast path is THREAD_GETMEM_VOLATILE(THREAD_SELF, rseq_area.cpu_id),
-    // which is the same rseq read we do here. We skip the function call and the cpu_id >= 0
-    // fallback to vDSO/syscall -- safe on Linux 4.18+ / glibc 2.35+ where rseq is always registered.
-    struct rseq * rseq = reinterpret_cast<struct rseq *>(threadPointer + __rseq_offset);
-    return static_cast<uint16_t>(rseq->cpu_id);
+    // The rseq read matches glibc's sched_getcpu fast path. rseq_offset is meaningful only
+    // after rseq_init copied the libc ABI values into librseq's globals: rseq_size starts
+    // at -1U, becomes 0 when the libc registration failed, and is positive on success - the
+    // signed cast rejects the first two. cpu_id is negative on a thread whose rseq area is
+    // not registered (kernel sentinels for unregistered and registration-failed threads).
+    if (static_cast<int32_t>(rseq_size) > 0)
+    {
+        struct rseq * rseq = reinterpret_cast<struct rseq *>(threadPointer + rseq_offset);
+        int32_t rseqCpu = static_cast<int32_t>(rseq->cpu_id);
+
+        if (rseqCpu >= 0)
+        {
+            return static_cast<uint16_t>(rseqCpu);
+        }
+    }
+
+    // sched_getcpu is vDSO-backed on common libcs, so the fallback stays cheap. The CPU id
+    // is a sharding hint - clamping a failure to shard 0 is functionally correct.
+    int cpu = ::sched_getcpu();
+    return cpu >= 0 ? static_cast<uint16_t>(cpu) : 0;
 }
 
 /** Yield the calling thread's remaining timeslice to the OS scheduler. */
