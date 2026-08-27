@@ -53,7 +53,7 @@ void ShardedStackBase::push(StackEntry * entry) noexcept
         if (count < batchSize)
         {
             // Prepare the link before the critical section.
-            // Release ordering publishes all writes to entry's content (e.g. deinitialisation)
+            // Release ordering publishes all writes to entry's content (e.g. deinitialization)
             // before the entry becomes visible to a concurrent pop.
             // The matching acquire is in pop after the rseq commit.
             StackEntry * oldHead = state->head.load(std::memory_order_relaxed);
