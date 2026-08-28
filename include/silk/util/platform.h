@@ -188,6 +188,14 @@ static inline uint64_t getTimeNanoseconds() noexcept
     return static_cast<uint64_t>(ts.tv_sec) * 1'000'000'000 + static_cast<uint64_t>(ts.tv_nsec);
 }
 
+/** Return the current wall-clock time as nanoseconds since the Unix epoch (CLOCK_REALTIME). */
+static inline uint64_t getRealTimeNanoseconds() noexcept
+{
+    struct timespec ts;
+    ::clock_gettime(CLOCK_REALTIME, &ts);
+    return static_cast<uint64_t>(ts.tv_sec) * 1'000'000'000 + static_cast<uint64_t>(ts.tv_nsec);
+}
+
 /** 64-bit integer hash (Murmur3 fmix64 finalizer). */
 static constexpr uint64_t intHash(uint64_t key) noexcept
 {
