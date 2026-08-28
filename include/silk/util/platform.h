@@ -112,11 +112,15 @@ static T * containerOf(M * member, M T::* memberPtr) noexcept
     return reinterpret_cast<T *>(reinterpret_cast<uint8_t *>(member) - memberOffset(memberPtr));
 }
 
-/** Return the number of configured processors - covers offline-but-present CPUs, so a raw CPU id indexes per-CPU state in bounds. */
-static inline uint16_t getProcessorCount() noexcept
-{
-    return static_cast<uint16_t>(sysconf(_SC_NPROCESSORS_CONF));
-}
+/**
+ * Return the number of possible processors - the highest possible CPU id plus one,
+ * covering offline-but-present CPUs, so a raw CPU id indexes per-CPU state in bounds.
+ * Read from the kernel's possible-cpu list rather than sysconf(_SC_NPROCESSORS_CONF):
+ * musl derives that sysconf value from the calling thread's affinity mask, so a
+ * pinned thread would report one processor while raw CPU ids still range over the
+ * whole machine.
+ */
+uint16_t getProcessorCount() noexcept;
 
 /** Return the number of processors available to the calling process (respects taskset/cgroup affinity). */
 static inline uint16_t getAvailableProcessorCount() noexcept
