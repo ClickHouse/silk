@@ -5,6 +5,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <iterator>
 #include <memory>
 
 #define DECLARE_COUNTER_ID(id, name) id,
