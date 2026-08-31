@@ -531,6 +531,19 @@ def _print_counters(data: dict[str, Any]) -> None:
                     f"  p999: {_fmt_ns(r['p999_ns']):>10}"
                 )
 
+    pmc = data.get("pmc")
+    if pmc:
+        scaled = " (scaled)" if pmc.get("scaled") else ""
+        print()
+        print(f"  pmc{scaled}")
+        print(f"    cycles               {pmc['cycles']:>18,}")
+        print(f"    instructions         {pmc['instructions']:>18,}")
+        print(f"    context_switches     {pmc['context_switches']:>18,}")
+        print(f"    window_ios           {pmc['window_ios']:>18,}")
+        print(f"    ipc                  {pmc['ipc']:>18.4f}")
+        print(f"    cycles_per_io        {pmc['cycles_per_io']:>18,.1f}")
+        print(f"    instructions_per_io  {pmc['instructions_per_io']:>18,.1f}")
+
     counters = data.get("counters", {})
     if not counters:
         return

@@ -44,6 +44,24 @@ void printCounters() noexcept
     printf("  }\n");
 }
 
+void printPmc(const Pmc::Counts & counts, uint64_t windowIos) noexcept
+{
+    double ipc = counts.cycles ? static_cast<double>(counts.instructions) / static_cast<double>(counts.cycles) : 0.0;
+    double cyclesPerIo = windowIos ? static_cast<double>(counts.cycles) / static_cast<double>(windowIos) : 0.0;
+    double instructionsPerIo = windowIos ? static_cast<double>(counts.instructions) / static_cast<double>(windowIos) : 0.0;
+
+    printf("  \"pmc\": {\n");
+    printf("    \"scaled\": %s,\n", counts.scaled ? "true" : "false");
+    printf("    \"cycles\": %lu,\n", counts.cycles);
+    printf("    \"instructions\": %lu,\n", counts.instructions);
+    printf("    \"context_switches\": %lu,\n", counts.contextSwitches);
+    printf("    \"window_ios\": %lu,\n", windowIos);
+    printf("    \"ipc\": %.4f,\n", ipc);
+    printf("    \"cycles_per_io\": %.1f,\n", cyclesPerIo);
+    printf("    \"instructions_per_io\": %.1f\n", instructionsPerIo);
+    printf("  }\n");
+}
+
 void printSchedulerLatency() noexcept
 {
     printf("  \"scheduler_latency\": {\n");

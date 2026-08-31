@@ -225,6 +225,8 @@ Per-CPU profiler (opted in via `--print-counters`) emits log2 histograms for sev
 | `ready_wait` | `enqueueReady` -> dispatch (ready-queue dwell) |
 | `fiber_run` | `switchToFiberContext` -> return (on-CPU time per slice) |
 
+The same flag brackets the file-perf measurement window with per-CPU PMC groups -- cycles, instructions, and context switches on every CPU in the process affinity mask -- reported in the `pmc` JSON section with IPC and per-IO ratios; the per-CPU scope counts kernel and io_uring offload (io-wq, sqpoll) work that a per-thread counter on the submitting thread would miss.
+
 ### Per-IO breakdown (net-perf, 1000 connections, 60 s, 10 s warmup, 1882k RPS)
 
 Reproduced with `./bb -b release net-perf --connections 1000 --duration 60s --warmup 10s --print-counters`.
