@@ -20,7 +20,7 @@ namespace silk
  *
  * Each CPU holds a single linked list. When the list empties on pop, or fills on
  * push, a single 128-bit CAS transfers a batch to/from the global
- * fullFreeLists/emptyFreeLists pool, amortising its cost over batchSize operations.
+ * fullFreeLists/emptyFreeLists pool, amortizing its cost over batchSize operations.
  *
  * Objects are intrusive: each element must embed a StackEntry. Use the typed
  * wrapper ShardedStack instead of this class directly.

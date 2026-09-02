@@ -87,7 +87,7 @@ while (list) {
 
 ## ShardedStack (`sharded-stack.h`)
 
-Per-CPU intrusive LIFO stack backed by restartable sequences (rseq). The fast path (push/pop when the per-CPU list is non-empty/non-full) executes zero atomic instructions. The kernel aborts and restarts the rseq critical section on preemption or migration, so plain loads/stores suffice for per-CPU state. The slow path transfers a full batch to/from a global pool via a single 128-bit CAS, amortising its cost over `batchSize` operations.
+Per-CPU intrusive LIFO stack backed by restartable sequences (rseq). The fast path (push/pop when the per-CPU list is non-empty/non-full) executes zero atomic instructions. The kernel aborts and restarts the rseq critical section on preemption or migration, so plain loads/stores suffice for per-CPU state. The slow path transfers a full batch to/from a global pool via a single 128-bit CAS, amortizing its cost over `batchSize` operations.
 
 Objects must embed a `StackEntry` member; the typed wrapper `ShardedStack` takes a member pointer as a template argument.
 
