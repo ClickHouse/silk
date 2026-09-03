@@ -95,10 +95,12 @@ def _report_conflict(sha):
 
 def rebuild():
     sha = Info().sha
+    shallow = Shell.get_output("git rev-parse --is-shallow-repository") == "true"
+    unshallow = "--unshallow " if shallow else ""
     if not Shell.check(
         'git config user.name "clickhouse-robot-gh"'
         ' && git config user.email "clickhouse-robot-gh@users.noreply.github.com"'
-        f" && git fetch origin main {BRANCH}"
+        f" && git fetch {unshallow}origin main {BRANCH}"
         f" && git checkout -B {BRANCH} origin/{BRANCH}~1",
         verbose=True,
     ):
