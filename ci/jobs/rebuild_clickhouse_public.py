@@ -6,8 +6,6 @@ from praktika.result import Result
 from praktika.utils import Shell
 
 BRANCH = "clickhouse-public"
-CXXOPTS_TAG = "cxxopts-revert"
-FCONTEXT_TAG = "fcontext-revert"
 REPOSITORY = "ClickHouse/silk"
 BOT_LOGINS = ("clickhouse-gh", "robot-clickhouse", "clickhouse-robot-gh")
 
@@ -20,24 +18,23 @@ REMOVE_SUBMODULES = (
 )
 
 CONFLICT_COMMENT = """\
-`{branch}` could not be rebuilt on `{sha}`: replaying `{cxxopts}` and `{fcontext}` \
-onto this commit conflicts.
+`{branch}` could not be rebuilt on `{sha}`: rebasing its reverts onto this commit \
+conflicts.
 
 ClickHouse pins a commit of `{branch}` as `contrib/silk`, so it stays on the previous \
 commit until this is resolved by hand:
 
 ```
-git fetch --force origin main "refs/tags/{cxxopts}:refs/tags/{cxxopts}" "refs/tags/{fcontext}:refs/tags/{fcontext}"
-git checkout -B {branch} origin/main
-git cherry-pick {cxxopts} {fcontext}
+git fetch origin main {branch}
+git checkout -B {branch} origin/{branch}~1
+git rebase origin/main
 # keep this branch's boost::context and unbundled cxxopts, take main's change around them
-git cherry-pick --continue
-git tag -f {cxxopts} HEAD~1 && git tag -f {fcontext} HEAD
+git rebase --continue
 {remove_submodules}
-git push -f origin {branch} {cxxopts} {fcontext}
+git push -f origin {branch}
 ```
 
-Moving the tags is what keeps the next rebuild conflict-free, so do not skip it.
+The next rebuild starts from whatever this branch holds, so nothing else needs updating.
 {mentions}"""
 
 
@@ -87,8 +84,6 @@ def _report_conflict(sha):
     body = CONFLICT_COMMENT.format(
         branch=BRANCH,
         sha=sha[:12],
-        cxxopts=CXXOPTS_TAG,
-        fcontext=FCONTEXT_TAG,
         remove_submodules=REMOVE_SUBMODULES.replace(" && ", "\n"),
         mentions=_mentions(pull_request),
     )
@@ -103,28 +98,21 @@ def rebuild():
     if not Shell.check(
         'git config user.name "clickhouse-robot-gh"'
         ' && git config user.email "clickhouse-robot-gh@users.noreply.github.com"'
-        " && git fetch --force origin main"
-        f' "refs/tags/{CXXOPTS_TAG}:refs/tags/{CXXOPTS_TAG}"'
-        f' "refs/tags/{FCONTEXT_TAG}:refs/tags/{FCONTEXT_TAG}"'
-        f" && git checkout -B {BRANCH} origin/main",
+        f" && git fetch origin main {BRANCH}"
+        f" && git checkout -B {BRANCH} origin/{BRANCH}~1",
         verbose=True,
     ):
         return False
 
-    if not Shell.check(f"git cherry-pick {CXXOPTS_TAG} {FCONTEXT_TAG}", verbose=True):
-        Shell.check("git cherry-pick --abort")
+    if not Shell.check("git rebase origin/main", verbose=True):
+        Shell.check("git rebase --abort")
         _report_conflict(sha)
         return False
 
-    if not Shell.check(
-        f"git tag -f {CXXOPTS_TAG} HEAD~1"
-        f" && git tag -f {FCONTEXT_TAG} HEAD"
-        f" && {REMOVE_SUBMODULES}",
-        verbose=True,
-    ):
+    if not Shell.check(REMOVE_SUBMODULES, verbose=True):
         return False
 
-    return _authenticated_push(f"{BRANCH} {CXXOPTS_TAG} {FCONTEXT_TAG}")
+    return _authenticated_push(BRANCH)
 
 
 if __name__ == "__main__":
