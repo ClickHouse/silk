@@ -1,25 +1,40 @@
 #include "parse.h"
 
+#include <limits>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 
 uint64_t parseSize(const std::string & str)
 {
-    uint64_t n = std::stoull(str);
-    char suffix = str.empty() ? '\0' : str.back();
-    if (suffix == 'k' || suffix == 'K')
+    size_t pos;
+    uint64_t n = std::stoull(str, &pos);
+    std::string_view suffix = std::string_view(str).substr(pos);
+    uint64_t multiplier = 1;
+
+    if (suffix == "k" || suffix == "K")
     {
-        return n * 1024ULL;
+        multiplier = 1024ULL;
     }
-    if (suffix == 'm' || suffix == 'M')
+    else if (suffix == "m" || suffix == "M")
     {
-        return n * 1024ULL * 1024;
+        multiplier = 1024ULL * 1024;
     }
-    if (suffix == 'g' || suffix == 'G')
+    else if (suffix == "g" || suffix == "G")
     {
-        return n * 1024ULL * 1024 * 1024;
+        multiplier = 1024ULL * 1024 * 1024;
     }
-    return n;
+    else if (!suffix.empty())
+    {
+        throw std::invalid_argument("unknown size suffix: " + std::string(suffix));
+    }
+
+    if (n > std::numeric_limits<uint64_t>::max() / multiplier)
+    {
+        throw std::out_of_range("size is too large: " + str);
+    }
+
+    return n * multiplier;
 }
 
 uint64_t parseDuration(const std::string & str)

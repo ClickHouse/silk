@@ -6,6 +6,8 @@
 /**
  * Parse a size string with optional k/m/g suffix (case-insensitive) into bytes.
  * Examples: "4k" -> 4096, "1g" -> 1073741824, "512" -> 512.
+ * Throws std::invalid_argument on a malformed number or an unknown suffix and
+ * std::out_of_range when the result does not fit in uint64_t.
  */
 uint64_t parseSize(const std::string & str);
 
