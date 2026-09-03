@@ -19,6 +19,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <exception>
 #include <iostream>
 #include <memory>
 #include <string>
@@ -463,16 +464,39 @@ int main(int argc, char ** argv)
         return 1;
     }
 
+    if (cfg.iodepth == 0)
+    {
+        std::cerr << "error: --iodepth must be greater than zero\n";
+        return 1;
+    }
+
     if (!parseMode(rwStr, &cfg.mode))
     {
         std::cerr << "error: unknown --rw mode: " << rwStr << " (expected randread | seqread | randwrite)\n";
         return 1;
     }
 
-    cfg.blockSize = static_cast<uint32_t>(parseSize(bsStr));
-    cfg.fileSize = parseSize(sizeStr);
-    cfg.durationNs = parseDuration(runtimeStr);
-    cfg.warmupNs = parseDuration(warmupStr);
+    uint64_t blockSize;
+    try
+    {
+        blockSize = parseSize(bsStr);
+        cfg.fileSize = parseSize(sizeStr);
+        cfg.durationNs = parseDuration(runtimeStr);
+        cfg.warmupNs = parseDuration(warmupStr);
+    }
+    catch (const std::exception & ex)
+    {
+        std::cerr << "error: " << ex.what() << "\n";
+        return 1;
+    }
+
+    if (blockSize == 0 || blockSize > UINT32_MAX)
+    {
+        std::cerr << "error: --bs must be between 1 and " << UINT32_MAX << " bytes\n";
+        return 1;
+    }
+
+    cfg.blockSize = static_cast<uint32_t>(blockSize);
     SILK_ASSERT(cfg.fileSize >= cfg.blockSize);
     SILK_ASSERT(cfg.fileSize / cfg.blockSize >= cfg.numJobs);
 
