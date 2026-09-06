@@ -1,10 +1,22 @@
 #include "stall.h"
 
+#include <perf/util/parse.h>
 #include <silk/util/platform.h>
 #include <silk/util/tsc.h>
 
 #include <cstring>
 #include <random>
+#include <stdexcept>
+
+uint32_t parseStallDuration(const std::string & str)
+{
+    uint64_t ns = parseDuration(str);
+    if (ns > UINT32_MAX)
+    {
+        throw std::out_of_range("stall duration is too large: " + str);
+    }
+    return static_cast<uint32_t>(ns);
+}
 
 uint32_t StallScheduler::next() noexcept
 {

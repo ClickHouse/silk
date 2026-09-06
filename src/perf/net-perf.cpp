@@ -20,6 +20,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <exception>
 #include <iostream>
 #include <memory>
 #include <string>
@@ -527,7 +528,7 @@ struct ClientConfig
     // The first 4 bytes of each message are the stall duration in nanoseconds;
     // server busy-loops for that long before echoing.
     double stallRateHz = 0.0;
-    uint64_t stallNs = 0;
+    uint32_t stallNs = 0;
     bool printCounters = false;
 };
 
@@ -806,13 +807,13 @@ static void runClient(int argc, char ** argv)
         }
         cfg.durationNs = parseDuration(durationStr);
         cfg.warmupNs = parseDuration(warmupStr);
-        cfg.stallNs = parseDuration(stallDurationStr);
+        cfg.stallNs = parseStallDuration(stallDurationStr);
         if (verbose)
         {
             silk::Logger::setLevel(silk::LogLevel::DEBUG);
         }
     }
-    catch (const cxxopts::exceptions::exception & ex)
+    catch (const std::exception & ex)
     {
         std::cerr << "error: " << ex.what() << "\n" << cli.help() << "\n";
         exit(1);
