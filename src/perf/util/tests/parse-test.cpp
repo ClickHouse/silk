@@ -59,7 +59,21 @@ TEST(ParseTest, DurationSuffixes)
 
 TEST(ParseTest, DurationRejectsOverflow)
 {
+    ASSERT_EQ(parseDuration("18446744073709551615ns"), 18'446'744'073'709'551'615ULL);
+    ASSERT_THROW(parseDuration("18446744073709551616ns"), std::out_of_range);
+
+    ASSERT_EQ(parseDuration("18446744073709551us"), 18'446'744'073'709'551'000ULL);
+    ASSERT_THROW(parseDuration("18446744073709552us"), std::out_of_range);
+
+    ASSERT_EQ(parseDuration("18446744073709ms"), 18'446'744'073'709'000'000ULL);
+    ASSERT_THROW(parseDuration("18446744073710ms"), std::out_of_range);
+
+    ASSERT_EQ(parseDuration("18446744073"), 18'446'744'073'000'000'000ULL);
+    ASSERT_THROW(parseDuration("18446744074"), std::out_of_range);
+
     ASSERT_EQ(parseDuration("18446744073s"), 18'446'744'073'000'000'000ULL);
     ASSERT_THROW(parseDuration("18446744074s"), std::out_of_range);
+
+    ASSERT_EQ(parseDuration("307445734m"), 18'446'744'040'000'000'000ULL);
     ASSERT_THROW(parseDuration("307445735m"), std::out_of_range);
 }
