@@ -30,7 +30,7 @@
 #include <utility>
 
 #include <cxxabi.h>
-#include <fcontext.h>
+#include <boost/context/detail/fcontext.hpp>
 #include <liburing.h>
 #include <poll.h>
 #include <pthread.h>
@@ -170,7 +170,7 @@ bool Fiber::initialize(
 
     fiberMain = fiberMain_;
     parametersDtor = parametersDtor_;
-    fiberContext = make_fcontext(static_cast<uint8_t *>(stack) + getPageSize() + fiberStackSize, fiberStackSize, fiberContextMain);
+    fiberContext = boost::context::detail::make_fcontext(static_cast<uint8_t *>(stack) + getPageSize() + fiberStackSize, fiberStackSize, fiberContextMain);
 
     return true;
 }
@@ -208,7 +208,7 @@ void Fiber::switchToFiberContext() noexcept
     CxaEhGlobals schedulerEh = loadExceptionState();
     storeExceptionState(cxaEhGlobals);
 
-    auto transfer = jump_fcontext(fiberContext, this);
+    auto transfer = boost::context::detail::jump_fcontext(fiberContext, this);
     // transfer is populated by the uninstrumented jump_fcontext assembly; MSan cannot see those
     // writes, so mark it initialized (as fiberContextMain does on first entry).
     MSAN_UNPOISON(&transfer, sizeof(transfer));
@@ -238,7 +238,7 @@ void Fiber::switchToThreadContext(bool final) noexcept
     // before this fiber next resumes.
     cxaEhGlobals = loadExceptionState();
 
-    auto transfer = jump_fcontext(threadContext, nullptr);
+    auto transfer = boost::context::detail::jump_fcontext(threadContext, nullptr);
     // transfer is populated by the uninstrumented jump_fcontext assembly; MSan cannot see those
     // writes, so mark it initialized (as fiberContextMain does on first entry).
     MSAN_UNPOISON(&transfer, sizeof(transfer));
@@ -251,7 +251,7 @@ void Fiber::switchToThreadContext(bool final) noexcept
 #endif
 }
 
-void Fiber::fiberContextMain(transfer_t transfer) noexcept
+void Fiber::fiberContextMain(boost::context::detail::transfer_t transfer) noexcept
 {
     // transfer is populated by uninstrumented assembly code (jump_fcontext).
     // MSan cannot see those writes, so mark the struct as initialized here.
