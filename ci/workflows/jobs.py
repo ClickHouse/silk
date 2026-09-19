@@ -12,7 +12,7 @@ FMT_JOB = Job.Config(
     runs_on=[RunnerLabels.SMALL_ARM],
     command="python3 ./ci/jobs/fmt_job.py",
     digest_config=Job.CacheDigestConfig(
-        include_paths=["src", "include"],
+        include_paths=["src", "include", "bb", "ci"],
     ),
 )
 
@@ -28,14 +28,22 @@ CODE_REVIEW_JOB = Job.Config(
     enable_gh_auth=True,
 )
 
+# The vendored code and CMake wrappers under contrib enter the digest by path; the
+# submodules themselves enter through their pinned SHAs, and .gitmodules decides how
+# each one is checked out - a change to it builds different tests without touching a
+# source path.
 TEST_DIGEST = Job.CacheDigestConfig(
     include_paths=[
         "src",
         "include",
         "CMakeLists.txt",
         "CMakePresets.json",
+        "contrib",
+        ".gitmodules",
         "bb",
+        "ci/commands",
         "ci/jobs/init_submodules.py",
+        "ci/jobs/test_job.py",
     ],
     with_git_submodules=True,
 )
