@@ -4,6 +4,7 @@
 [submodule "contrib/aws-sdk-cpp"]
 	path = contrib/aws-sdk-cpp
 	url = https://github.com/aws/aws-sdk-cpp
+	update = none
 [submodule "contrib/FlameGraph"]
 	path = contrib/FlameGraph
 	url = https://github.com/brendangregg/FlameGraph
@@ -22,6 +23,7 @@
 [submodule "contrib/llvm-project"]
 	path = contrib/llvm-project
 	url = https://github.com/llvm/llvm-project.git
+	update = none
 [submodule "contrib/liburing"]
 	path = contrib/liburing
 	url = https://github.com/axboe/liburing.git

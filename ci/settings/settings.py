@@ -3,7 +3,6 @@ class RunnerLabels:
     SMALL_AMD = "amd-small"
     MEDIUM_ARM = "arm-medium"
     MEDIUM_AMD = "amd-medium"
-    LARGE_ARM = "arm-large"
     SMALL_ARM_BEDROCK = "arm-small-bedrock"
 
 
@@ -29,4 +28,3 @@ USE_CUSTOM_GH_AUTH = True
 GH_AUTH_LAMBDA_NAME = f"{PROJECT_SLUG}-gh-token"
 GH_AUTH_LAMBDA_REGION = AWS_REGION
 PRAKTIKA_BASE_VENV = "praktika-runtime-0.1.2"
-

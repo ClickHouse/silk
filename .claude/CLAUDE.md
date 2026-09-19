@@ -12,6 +12,8 @@ The design docs under `docs/` are the source of truth for the architecture (`sch
 
 `./bb` is the standard build tool — always use it instead of invoking `cmake`, `ninja`, or `ctest` directly. See `README.md` for the full command reference.
 
+`bb` itself is a stub that runs `ci/commands/main.py`; the commands live one module per concern under `ci/commands/` (`process.py` runs children, `cmake.py` configures / builds / tests, one `<name>_perf.py` per perf tool, `main.py` builds the argparse tree from the params dataclasses and dispatches). After editing them, `./bb fmt` (black) and `./bb lint` (mypy --strict) must pass — CI runs both.
+
 **Always build debug unless running benchmarks or sanitizer runs.**
 
 Build presets: `debug`, `release`, `debug-{sanitizer}`, `release-{sanitizer}`. Build directories live under `build/<preset>/`.

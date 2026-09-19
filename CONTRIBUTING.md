@@ -36,12 +36,17 @@ To build optional components, initialize their submodules too:
 git submodule update --init --depth=1 contrib/poco
 
 # s3-perf (requires AWS SDK and its nested submodule)
-git submodule update --init --depth=1 contrib/aws-sdk-cpp
-git submodule update --init --depth=1 --recursive contrib/aws-sdk-cpp
+git submodule update --init --checkout --depth=1 contrib/aws-sdk-cpp
+git submodule update --init --checkout --depth=1 --recursive contrib/aws-sdk-cpp
 
 # jemalloc (used by http-perf and s3-perf for improved allocator performance)
 git submodule update --init --depth=1 contrib/jemalloc
+
+# MemorySanitizer builds (libc++ instrumented from source)
+git submodule update --init --checkout --depth=1 contrib/llvm-project
 ```
+
+`contrib/aws-sdk-cpp` and `contrib/llvm-project` are pinned `update = none` in `.gitmodules` so that CI's submodule cache skips them; `--checkout` overrides that pin for a local checkout.
 
 Then pass the relevant flags to `configure`:
 
@@ -69,16 +74,17 @@ To run a specific test by name pattern:
 
 ## Formatting
 
-All source files must pass `clang-format-21`. Format in place with:
+All C++ sources must pass `clang-format-21` and all Python sources (`bb`, `ci/`) must pass black. Format in place with:
 
 ```
 ./bb fmt
 ```
 
-Check without modifying (as CI does):
+Check without modifying (as CI does), and type-check the Python sources with mypy in strict mode:
 
 ```
 ./bb fmt --check
+./bb lint
 ```
 
 ## Pull requests

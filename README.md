@@ -61,11 +61,19 @@ Configure (or reconfigure) the CMake build directory. Optional flags enable comp
 
 #### `fmt [--check]`
 
-Format all source files with clang-format-21. Pass `--check` to verify formatting without modifying files (exits non-zero if any file would be changed).
+Format the C++ sources with clang-format-21 and the Python sources (`bb`, `ci/`) with black. Pass `--check` to verify formatting without modifying files (exits non-zero if any file would be changed).
 
 ```
 ./bb fmt
 ./bb fmt --check
+```
+
+#### `lint`
+
+Type-check the Python sources (`bb`, `ci/commands/`) with mypy in strict mode.
+
+```
+./bb lint
 ```
 
 #### `clean`
@@ -129,7 +137,7 @@ Build and run benchmarks.
 
 ## Performance commands
 
-Each perf command builds the relevant binary and runs the benchmark, printing results as a Markdown table. Duration, warmup, and delay options accept a unit suffix (`ns`, `us`, `ms`, `s`, `m`); a bare number is interpreted as seconds. All perf commands accept `--timeout SECONDS` (per-run timeout; default: 180, 0=none).
+Each perf command builds the relevant binary and runs the benchmark, printing results as a Markdown table. Duration, warmup, and delay options accept a unit suffix (`ns`, `us`, `ms`, `s`, `m`); a bare number is interpreted as seconds. All perf commands accept `--timeout SECONDS` (per-run timeout; default: 180, 0=none), and `--help` on any of them lists every option with its default.
 
 #### `file-perf`
 

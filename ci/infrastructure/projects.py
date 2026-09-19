@@ -4,7 +4,9 @@ from praktika.infrastructure.cloud import CloudInfrastructure
 
 
 # until published in pip
-_PRAKTIKA_PACKAGE_BASE_URL = "https://praktika-artifacts-eu-north-1.s3.amazonaws.com/packages"
+_PRAKTIKA_PACKAGE_BASE_URL = (
+    "https://praktika-artifacts-eu-north-1.s3.amazonaws.com/packages"
+)
 _PRAKTIKA_COMPAT_VERSION = "0.1"
 _PRAKTIKA_WHL = (
     f"{_PRAKTIKA_PACKAGE_BASE_URL}/{_PRAKTIKA_COMPAT_VERSION}/"
@@ -44,8 +46,8 @@ def _silk_ci_dependencies_component():
                 "> /etc/apt/trusted.gpg.d/apt.llvm.org.asc"
             ),
             (
-                ". /etc/os-release && echo \"deb http://apt.llvm.org/"
-                "${VERSION_CODENAME}/ llvm-toolchain-${VERSION_CODENAME}-21 main\" "
+                '. /etc/os-release && echo "deb http://apt.llvm.org/'
+                '${VERSION_CODENAME}/ llvm-toolchain-${VERSION_CODENAME}-21 main" '
                 "> /etc/apt/sources.list.d/llvm-21.list"
             ),
             (
@@ -53,8 +55,8 @@ def _silk_ci_dependencies_component():
                 "kitware-archive-latest.asc > /etc/apt/trusted.gpg.d/kitware.asc"
             ),
             (
-                ". /etc/os-release && echo \"deb https://apt.kitware.com/ubuntu/ "
-                "${VERSION_CODENAME} main\" > /etc/apt/sources.list.d/kitware.list"
+                '. /etc/os-release && echo "deb https://apt.kitware.com/ubuntu/ '
+                '${VERSION_CODENAME} main" > /etc/apt/sources.list.d/kitware.list'
             ),
             (
                 "DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=60 "
@@ -64,7 +66,7 @@ def _silk_ci_dependencies_component():
             "apt-get -o DPkg::Lock::Timeout=60 update -q",
             (
                 "DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=60 "
-                "install -y clang-21 clang-format-21 llvm-21 cmake "
+                "install -y clang-21 clang-format-21 black mypy llvm-21 cmake "
                 "libstdc++-13-dev ninja-build ccache gdb libboost-dev "
                 "libdouble-conversion-dev libelf-dev zlib1g-dev"
             ),
@@ -81,12 +83,16 @@ def _silk_ci_image_test_component():
             "test -w /opt/praktika/work",
             "test -x /usr/bin/clang-21",
             "test -x /usr/bin/clang-format-21",
+            "test -x /usr/bin/black",
+            "test -x /usr/bin/mypy",
             "test -x /usr/bin/cmake",
             "test -x /usr/bin/ninja",
             "test -x /usr/bin/ccache",
             "test -x /usr/bin/gdb",
             "clang-21 --version",
             "clang-format-21 --version",
+            "black --version",
+            "mypy --version",
             "cmake --version",
             "ninja --version",
             "ccache --version",
@@ -109,25 +115,22 @@ def _praktika_controller_image_test_component():
         name="silk-praktika-controller-image-test",
         description="Validate Praktika controller runtime and boot wiring",
         commands=[
-            f"controller={controller}; command -v \"$controller\"",
-            (
-                f"controller={controller}; "
-                "python3.12 -m pip show \"$controller\""
-            ),
+            f'controller={controller}; command -v "$controller"',
+            (f"controller={controller}; " 'python3.12 -m pip show "$controller"'),
             f"controller={controller}; test -x {start_script}",
             f"controller={controller}; bash -n {start_script}",
             f"controller={controller}; test -f {service_unit}",
             (
                 f"controller={controller}; "
-                f"grep -qx \"ExecStart={start_script}\" {service_unit}"
+                f'grep -qx "ExecStart={start_script}" {service_unit}'
             ),
             (
                 f"controller={controller}; "
-                f"grep -qx \"StandardOutput=append:/var/log/${{controller}}.log\" {service_unit}"
+                f'grep -qx "StandardOutput=append:/var/log/${{controller}}.log" {service_unit}'
             ),
             (
                 f"controller={controller}; "
-                f"grep -qx \"StandardError=append:/var/log/${{controller}}.log\" {service_unit}"
+                f'grep -qx "StandardError=append:/var/log/${{controller}}.log" {service_unit}'
             ),
             (
                 "test -x /usr/local/bin/praktika-configure-cloudwatch-agent "
@@ -167,7 +170,7 @@ def _praktika_launch_user_data():
 
 
 def _image_builders():
-    image_recipe_version = "1.0.13"
+    image_recipe_version = "1.0.14"
     prebuilt_venvs = [
         ImageBuilder.PrebuiltVenv(
             name=PRAKTIKA_BASE_VENV,
@@ -239,6 +242,7 @@ _CODE_REVIEW_BEDROCK_IAM_STATEMENT = {
 PROJECTS = [
     CloudInfrastructure.Config(
         name=PROJECT_NAME,
+        min_praktika_version="0.1.9",
         vpcs=[
             VPC.Config(
                 subnets=[
