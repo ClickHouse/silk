@@ -1855,9 +1855,10 @@ bool FiberScheduler::parkProcessor(ProcessorState * processor, uint64_t waitNs, 
         }
     }
 
-    // Double-check: work may have arrived between the last drain and here.
-    // If so, skip the park entirely so that work is not delayed by waitNs.
-    bool parking = !processor->hasWork();
+    // Double-check behind the fence: work may have arrived between the last drain and here, and a stop arrives
+    // as no work at all - destroy rings only a processor it already sees sleeping, so the stop is re-read here
+    // for the same reason the fence exists. Either this load sees it, or destroy's paired load sees the park.
+    bool parking = !processor->hasWork() && !scheduler->stopping.load(std::memory_order_relaxed);
 
     if (parking && (indefinitePark || standby))
     {
