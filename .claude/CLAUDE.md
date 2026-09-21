@@ -1,6 +1,7 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+## Communication style
+- Follow ASD-STE100.
 
 ## Project
 
@@ -18,19 +19,9 @@ The design docs under `docs/` are the source of truth for the architecture (`sch
 
 Build presets: `debug`, `release`, `debug-{sanitizer}`, `release-{sanitizer}`. Build directories live under `build/<preset>/`.
 
-When capturing command output to a file (e.g. tee-ing build or test output for later grepping), write to `build/tmp/` — never to the system `/tmp`. Create the directory with `mkdir -p build/tmp` if needed.
+When capturing command output to a file (e.g. tee-ing build or test output for later grepping), write to `build/tmp/` — never to the system `/tmp`. Create the directory with `mkdir -p build/tmp` if needed. Capture with `tee`, then grep the file — never pipe a run straight into `grep` or `tail`.
 
-## Profiling and Flamegraphs
-
-Generate a flamegraph by appending `--flamegraph` to a perf-target run, e.g. `bb -b release net-perf --flamegraph`. Always profile a `release` build. Output lands at `build/release/<target>.flamegraph.svg` and the raw folded stacks at `build/release/<target>.flamegraph.folded`.
-
-The profiler is **silk's own BPF profiler** (`bin/profiler --on-cpu --off-cpu --kernel-stacks`), NOT `perf`. It walks stacks via frame pointers, so there is no `perf record --call-graph dwarf` option, and frames can be dropped (FP omission in small release functions, and at syscall boundaries).
-
-**The folded file is a COMBINED on-CPU + off-CPU profile — each line carries TWO trailing numbers, not one:** `<semicolon;stack> <on_cpu_samples> <off_cpu_ns>`. Frame names themselves contain spaces (demangled templates), so parse the last two whitespace tokens, never `$NF` alone. On-CPU lines have `off_cpu_ns == 0`; off-CPU lines have `on_cpu_samples == 0` and end in the `schedule;__schedule;__bpf_trace_sched_switch` tail. On-CPU samples are the real CPU cost; off-CPU is blocked/wait time and is usually dominated (~99%) by idle scheduler-thread park in `parkThread;io_uring_enter2`. `bb` itself sums the two columns when rendering the SVG.
-
-**Frame-loss caveat:** a leaf frame's self-time over-credits the deepest *surviving* frame. The clearest case: `silk::SpinLock::lockSlow` calls `sched_yield` as backoff, but the `lockSlow` frame does not survive the syscall — so its time shows mis-parented as `<caller>;sched_yield`. Attribute `sched_yield` under a lock caller back to `lockSlow`, and treat per-leaf self-time as approximate near syscalls and hot spin loops.
-
-For aggregate rates and latencies without the frame-loss problem, append `--print-counters` instead. It prints the run config, a throughput summary, latency histograms with p50/p90/p99/p999 for the silk scheduling phases (`ready_wait`, `fiber_run`, `suspend_wait`, `cq_wait`), and the named scheduler counters (`FiberSuspended`, `FiberStolen`, `SchedulerThreadParked`/`Waked`, `SchedulerUserTime`/`SystemTime`/`IdleTime`, etc.). Use it to confirm ratios the flamegraph cannot give cleanly — e.g. park/wake balance or suspend-wait latency.
+The `profile` and `debug` skills under `.claude/skills/` hold the profiling, flake-reproduction, crash-dump and coverage recipes.
 
 ## Layout and namespaces
 
@@ -52,7 +43,8 @@ Public headers live under `include/silk/<component>/` and are included as `<silk
 - Variable names must be fully descriptive — no single-letter abbreviations (`future` not `f`, `params` not `p`, `state` not `s`)
 - Member variables use plain camelCase — no trailing underscores (`foo`, not `foo_`)
 - Return-code variable is `int r` — never `rc`, `ret`, or `err`
-- Reuse the codebase's exact identifier for a concept everywhere — don't coin synonyms or metaphors; if tempted to invent a term, ask first
+- Reuse the codebase's exact identifier for a concept everywhere — boring names composed from existing nouns, no synonyms or metaphors, no AI-slop qualifiers ("load-bearing", "key insight"); wire-to-struct is always "decode"; bare "fan" is banned, "fanout" is fine; if tempted to invent a term, ask first
+- Function names contain a verb — `getX` accessors, `isX` predicates; never a bare noun (`sealed`, `entrySize`)
 - The only allowed single-letter names are `r` (return code), `b` (bool), `i` (index), `it` (iterator), `n` (count, though `count` is preferred); two-arg comparators use `left` / `right`, never `a` / `b`
 
 ## Code style and formatting
@@ -66,17 +58,27 @@ Public headers live under `include/silk/<component>/` and are included as `<silk
 - Less code, fewer comments — cut redundant messages, comments, variables, and braces
 - No inline complex expressions — lift atomic ops and aggregate-inits into named locals
 - Use `std::exchange` to collapse a temp-swap-return
-- Explicit types over `auto *` — the type documents the layout
+- Explicit types over `auto *` — the type documents the layout; iterator locals (`auto it = map.find(key)`) are the exception
 - Types before functions before data inside a class
 - Group third-party headers (boost / liburing / gtest / benchmark) into one include block
 - Strict scope: touch only what the task names — no opportunistic refactor of adjacent code
 - Prefer named functions over lambdas for anything beyond a trivial inline predicate; never write recursive `auto & self` lambdas
+- No function bodies in a class declaration — only one-line `getX` / `isX` accessors and a pure-forward `xxxFiberMain` stay inline; constructors, `start` / `stop`, helpers and fixture `SetUp` / `TearDown` are defined out-of-line
+- Class member order: `// Constants.`, `// Data structures.`, `// Fiber main functions.` (params structs and `xxxFiberMain` trampolines only), topical helper groups (each `runXxx` in its topic), then `// State.`
+- `emplace_back(args...)`, never `push_back({...})`; `push_back(std::move(x))` of an existing object stays
+- Fixed-width types with their limit macros (`uint32_t` + `UINT32_MAX`) — `std::numeric_limits` never appears in library code
+- Integer narrowing is implicit (no `-Wconversion`) — `static_cast` only for pointer downcasts, `void *`, and enum-to-varargs
+- `sizeof(Type)`, never `sizeof(object)`; arrays exempt
+- Structured bindings for pair loops (`[step, count]`), not `.first` / `.second`
+- Set a flag with an explicit `if`, not a bool-expression assignment
+- `silk::intHash` from `platform.h` — never a hand-rolled hash constant
+- Generic helpers go into the existing `include/silk/util/` header for their topic — never a file-local copy
 
 ## Functions and APIs
 
 - Output and borrowed params are pointers (`T *`); inputs are `const T &` — never a non-const `T &`
 - Async-capable calls take a trailing `silk::FiberFuture * future = nullptr` (or `IoFuture *`); result params get semantic names, not generic ones
-- Don't initialize out-param locals — the callee writes them on success
+- Don't initialize out-param locals — the callee writes them on success; no exceptions: no failure-path `INVALID_*` fills, no union-arm activation
 - No `/*name=*/` param comments — the IDE shows hints
 - Use `SILK_UNUSED(x)` (from `<silk/util/platform.h>`, `(void)(x)`) to suppress unused-parameter warnings — never omit parameter names
 - Interface overrides are declared in the class, defined out-of-line
@@ -90,6 +92,11 @@ Public headers live under `include/silk/<component>/` and are included as `<silk
 - `silk::memberOffset` over `offsetof` — type-safe, and works through an anonymous union
 - No hidden release in helpers — the caller owns a borrowed resource; cleanup is visible at the call site
 - `mutable` mutex members, not `const_cast`
+- Every input pointer / view of a future-form call stays valid until the future completes — the callee never copies an input to outlive the call
+- A `void start` does nothing fallible — no `SILK_ERROR`-and-continue
+- An `xxxFiberMain` is a pure forward to `runXxx`, which takes the real params, never the params box; state one fiber owns is a local on its stack
+- No parallel arrays — one struct per entity, mirroring the sibling side's struct
+- No hidden field writes — no seal-style byte-offset mutators; pure compute plus a named-field assignment at the call site
 
 ## Error handling
 
@@ -101,8 +108,10 @@ Public headers live under `include/silk/<component>/` and are included as `<silk
 - `silk::strerror` for errno strings (thread-safe; omit on nullptr)
 - Don't inline cold-path helpers — `Error::push*` stays out-of-line
 - Replace a `// TBD` by writing the comment — don't delete it
-- No calls inside `ASSERT_*` / `EXPECT_*`, `SILK_CHECK_ERROR` / `SILK_CHECK_BOOL` — call, store in a temp, then test
+- No effectful calls inside `ASSERT_*` / `EXPECT_*`, `SILK_CHECK_ERROR` / `SILK_CHECK_BOOL` — call, store in a temp, then test; a trivial side-effect-free read (`size` / `empty`, atomic `load`, a plain getter, a pure computation) may stay inline
 - Each layer validates only its own invariants — don't pre-check in the caller what the callee already enforces
+- Allocation failure is an errno path — never `SILK_ASSERT` an allocation; a fiber spawn in a test or a one-time initialization may assert
+- No error path for a race the stated invariant excludes — read the invariant at the state's writers first
 - Error / log messages name the operation that failed ("could not arm the doorbell"), not "Class::method failed"
 - `SILK_ASSERT` takes a printf-style message; use `SILK_FAIL(msg, ...)` for an unconditional abort — never `SILK_ERROR` paired with `SILK_ASSERT(false)`
 
@@ -117,8 +126,11 @@ Public headers live under `include/silk/<component>/` and are included as `<silk
 - No backticks in C++ comments — bare identifiers
 - Single dash ` - ` in comments, never ` -- `
 - Delete noise comments that only paraphrase the code
-- Use `/** */` block doc comments on every class / struct member, field, and nested type, and on the type itself; reserve `//` for inside function bodies
+- Use `/** */` block doc comments on every class / struct member, field, and nested type, and on the type itself — the type's own doc never catalogues its fields; reserve `//` for inside function bodies
 - Comments must read cold — no chat shorthand ("variant 1"), no "previously" / "as discussed", no "see above / below"; name the actual code element
+- No ownership annotations ("borrowed" / "owned") — keep only validity windows and conditional ownership
+- A public `/** */` states the caller-visible contract only — never the mechanism (fibers, queues, flags); a class doc says why the class exists and its concurrency model, not a member list
+- "Put a TODO" means a `// TODO:` at the call site; a tracker entry never replaces it
 
 ## Concurrency
 
@@ -128,37 +140,46 @@ Public headers live under `include/silk/<component>/` and are included as `<silk
 - Use existing util primitives (`platform.h` / util), not raw syscalls
 - The rseq / lock-free fast paths (`sharded-stack`, `memory-pool`, the queues) are delicate — never modify them beyond the task's explicit scope; propose first
 - `SILK_ASSERT` is release-active; `SILK_ASSERT_DEBUG` is debug-only
+- A `silk::FiberFuture` is a single-owner completion token — one setter, one waiter; reset only under one owner with no concurrent observer; anything several fibers set, wait or observe is a `silk::FiberEvent`, never a shared future
+- `stop` is cancel-and-join — no checkpoint, drain or grace; queued work completes `ECANCELED`; a graceful wait in `stop` carries its own deadline
+- Teardown is block / acquire / drain / wait on per-object futures set as the completing context's last statement — no spin loops, no invented counters, flags or bits
+- A future param on a serialized state machine means a pooled request, one queue and one worker fiber — never a mutex or a fiber per request; a pure IO passthrough is op + `IoFuture` + subscribe, never a worker fiber
+- Cache-line regions are anonymous `struct alignas(silk::kCacheLineSize)` blocks, one per usage pattern (writer and rate), every member of a hot class inside one, the boundary stated in the region doc; verify with `-fdump-record-layouts`
+- The fences in `FiberSequencer`, the mutex and the stacks record paid-for bugs — when mirroring one of these protocols, carry every fence and its pairing comment, or write out the store-buffer interleaving that proves the omission safe; TSan cannot see a missing fence
+- Sanitizer detection and annotations come from `silk/util/sanitizers.h` — never hand-roll `__has_feature`
+- Every `FiberScheduler` API (sleep, wait, run) is safe from a plain thread through proxy fibers — the main thread may sleep and wait directly
 
 ## Testing
 
 - `ASSERT_*`, not `EXPECT_*` — every check is a blocker
-- Run `./bb test` after non-trivial changes; add a TSan run when touching atomics / concurrency
-- Filter tests with `./bb test -R '<regex>'` — `bb` forwards ctest flags, so any ctest option works, but when `bb` has a built-in option for something (e.g. `--timeout`, `--coverage`), use it instead of the raw ctest flag; `--gtest_filter` never works (that is the test binary's flag, and binaries are never run directly)
-- Read coverage from the Cobertura `coverage.xml` that `bb test --coverage` writes under the build dir (per-file `line-rate` / `branch-rate`, per-line `hits`, per-branch `condition-coverage`) — never hand-parse `coverage.lcov`
-- `bb test --coverage` overwrites `coverage.xml` each run, so measure a component in isolation with `-R '^Suite\.'` and snapshot the XML before the next run
+- Test helpers and stress harnesses use `SILK_ASSERT`, C arrays for compile-time-sized collections, and thread the `silk::Error *` through
+- Run `./bb test` after non-trivial changes; add a TSan run when touching atomics / concurrency — a single-threaded unit test cannot expose a race; the benchmarks under TSan (`bb -s thread bench`) reach concurrency the unit tests do not — propose that run rather than launching it
+- While a test loop or matrix runs, no builds, `bb fmt`, or source edits — a relink invalidates the run
+- Filter tests with `./bb test -R '<regex>'` — `bb` forwards ctest flags, so any ctest option works, but when `bb` has a built-in option for something (e.g. `--timeout`, `--coverage`), use it instead of the raw ctest flag; `--gtest_filter` never works — that is the test binary's flag
 - Reproduce CI / timing-dependent failures only from a build matching CI's exact preset — debug timing hides races
 
 ## Performance and benchmarking
 
-- Use `silk::Tsc::getCycles()` / `silk::Tsc::cyclesToNanoseconds()` for timing
+- Use `silk::Tsc::getCycles` / `silk::Tsc::cyclesToNanoseconds` for timing
 - Throughput and latency numbers must come from a `release` build
 - Run each benchmark once and update `docs/perf.md` — don't re-run just to reconfirm
-- Run every benchmark target nightly — never skip one
+- A `docs/perf.md` refresh covers every benchmark target — never skip one
 - The `bb` "Time" suffix is reserved for true durations (e.g. ns to ms), not counts
 
 ## Build and workflow
 
-- Default build is debug; release only for benchmarks / sanitizers
-- `bb -b <preset>`, not `--preset`
+- `bb -b <build> -s <sanitizer>` as separate flags — never a fused preset name, never `--preset`
 - Subcommands build automatically — no manual `./bb build` first
-- Build / test / bench need no confirmation — standing permission, never ask
+- Build and `./bb test` need no confirmation — standing permission, never ask; bench, the perf targets and the simulator run only when asked — an unrequested run disturbs measurements in flight on this box
 - Never commit or push unless explicitly asked — "apply fixes" means working-tree edits only; a previous commit request is not standing permission for the next change
 - Never run a compiled binary directly (not even a smoke test) — go through `./bb` (`./bb test -R <name>`, `./bb -b release net-perf`); if `bb` lacks a flag, extend `bb` rather than bypass it
 - Propose the robust explicit-lifetime design, not a clever one whose correctness rests on an implicit invariant policed only by a runtime assert
 - Validate an install with `<cmd> --version` (bare command name, no full path)
 - Never revert someone's work without asking first
-- Commit messages are a title plus one paragraph — facts only: what changed and why; no background, no discussion, no narrative
-- No `Co-Authored-By` / Claude trailer in commit messages
+- Commit messages are a title plus one paragraph — facts only: what changed and why; no background, no discussion, no narrative; the body wraps at 72 columns
+- No `Co-Authored-By` / Claude trailer in commit messages, and no Claude attribution in PR bodies or anywhere else
+- Commit granularity is semantic — a feature and its removal are one commit, a fix to uncommitted work folds into the commit it fixes; a doc or proposal never rides a code commit
+- CMake stays plain — no generated `-P` scripts; optional tooling sits behind a CMake `option`; checkers are registered as ctest tests
 - Self-review every changed line against these rules before submitting
 
 ## Design docs
@@ -167,14 +188,6 @@ Public headers live under `include/silk/<component>/` and are included as `<silk
 - Prefer narrative prose with bold lead-ins and descriptive citations
 - State the current fact, not the change — no temporal language ("previously" / "now" / "changed")
 - One physical line per paragraph or bullet — no hard wrapping in markdown
-
-## Dependencies
-
-- **Boost.Context (fcontext)**: fiber context switching (`contrib/fcontext`)
-- **liburing**: io_uring
-- **librseq**: restartable sequences
-- **libbacktrace**: symbolized stack traces
-- **GTest/GMock**: unit tests
-- **Google Benchmark**: microbenchmarks
-- **cxxopts**: CLI parsing for perf tools
-- **Poco / AWS SDK / jemalloc**: optional, perf tools only (`BUILD_POCO` / `BUILD_AWS` / `BUILD_JEMALLOC`)
+- Fenced tables and diagrams may run to 100 columns — never squeeze them narrower at the cost of readability
+- Name concepts by their C++ identifiers (`prefixCount`, `waitNs`) — never hyphenated or snake_case prose forms
+- No commit SHAs in docs or PR descriptions — state the fact, name the option or the test
