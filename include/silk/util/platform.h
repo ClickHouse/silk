@@ -161,7 +161,7 @@ static inline void schedYield() noexcept
 }
 
 /**
- * Emit a CPU pause hint to reduce power and improve pipeline behaviour in spin loops.
+ * Emit a CPU pause hint to reduce power and improve pipeline behavior in spin loops.
  *
  * On aarch64 we use ISB rather than YIELD. YIELD is a NOP on non-SMT cores
  * (which includes all Graviton generations), so it provides no backoff at all.
