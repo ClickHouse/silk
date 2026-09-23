@@ -1039,12 +1039,6 @@ void FiberScheduler::destroy() noexcept
         scheduler->schedulerThreads[i].join();
     }
 
-    for (uint16_t cpu = 0; cpu < scheduler->processorCount; ++cpu)
-    {
-        ProcessorState * processor = &scheduler->processorState[cpu];
-        processor->destroy();
-    }
-
     for (uint16_t i = 0; i < scheduler->workerThreadCount; ++i)
     {
         scheduler->wakeThread();
@@ -1053,6 +1047,18 @@ void FiberScheduler::destroy() noexcept
     for (uint16_t i = 0; i < scheduler->workerThreadCount; ++i)
     {
         scheduler->workerThreads[i].join();
+    }
+
+    // Processors are destroyed only after every scheduler and worker thread
+    // has been joined. A worker's runFiber epilogue touches the dispatched
+    // fiber's home processor (submitIo, postWakeup) and can be preempted
+    // there long after the fiber itself terminated and was joined by the
+    // application - destroying the rings before the join turns that stall
+    // into a use-after-free on the io_uring ring.
+    for (uint16_t cpu = 0; cpu < scheduler->processorCount; ++cpu)
+    {
+        ProcessorState * processor = &scheduler->processorState[cpu];
+        processor->destroy();
     }
 
     // A fiber still linked here suspended (or stayed scheduled) and never ran
