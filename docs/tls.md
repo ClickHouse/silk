@@ -81,7 +81,7 @@ These are exactly the shapes that occur in hot fiber code, which is why the haza
 ## How silk makes its own context accessors safe
 
 - `getCurrentProcessor` (`include/silk/util/platform.h`) reads the thread pointer through volatile asm (`movq %fs:0` on x86-64, `mrs ..., tpidr_el0` on aarch64) rather than `__builtin_thread_pointer`. Volatile asm cannot be hoisted out of a loop or CSE'd across a call, so the rseq CPU index is always read against the current thread.
-- `getCurrentFiber` and `getCurrentFiberId` (`src/fibers/fiber.cpp`) are `__attribute__((noinline))`. Their `threadFiber` and `proxyFiber` reads happen in a fresh call activation on whichever thread is currently running the fiber, regardless of how aggressively the caller is inlined, including under unity builds and LTO. The `noinline` is load-bearing, not a hint.
+- `getCurrentFiber` and `getCurrentFiberId` (`src/fibers/fiber.cpp`) are `__attribute__((noinline))`. Their `threadFiber` and `proxyFiberSlot` reads happen in a fresh call activation on whichever thread is currently running the fiber, regardless of how aggressively the caller is inlined, including under unity builds and LTO. The `noinline` is load-bearing, not a hint.
 - `runFiber`'s `threadFiber = fiber` and `threadFiber = nullptr` writes are deliberately left as direct accesses: `runFiber` executes on a single scheduler thread that does not migrate, and `switchToFiberContext` returns on that same thread. The fiber migrates, the scheduler thread does not.
 
 If you add a `thread_local` to silk that fiber code reads across a suspension, apply the same treatment: read its address only through a `noinline` accessor, or read the thread pointer through `getCurrentProcessor`'s volatile-asm pattern.

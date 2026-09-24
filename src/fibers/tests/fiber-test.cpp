@@ -10,6 +10,7 @@
 #include <atomic>
 #include <memory>
 #include <set>
+#include <thread>
 
 #include <sched.h>
 
@@ -106,6 +107,26 @@ TEST(Fiber, poolReuse)
     {
         FiberScheduler::run(Params::fiberMain, {});
     }
+}
+
+static void storeCurrentFiber(Fiber ** fiber) noexcept
+{
+    *fiber = FiberScheduler::getCurrentFiber();
+}
+
+// A proxy fiber outlives its thread: the mutex spin heuristic may read a stale owner pointer
+// after the owning thread has exited, so the proxy is recycled to the next new thread instead of
+// freed at thread exit.
+TEST(Fiber, proxyFiberOutlivesThread)
+{
+    Fiber * firstProxy;
+    std::thread(storeCurrentFiber, &firstProxy).join();
+    ASSERT_TRUE(firstProxy);
+    ASSERT_FALSE(FiberScheduler::isFiberRunning(firstProxy));
+
+    Fiber * secondProxy;
+    std::thread(storeCurrentFiber, &secondProxy).join();
+    ASSERT_EQ(secondProxy, firstProxy);
 }
 
 TEST(Fiber, getCurrent)
