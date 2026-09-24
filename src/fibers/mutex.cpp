@@ -34,6 +34,12 @@ void FiberMutex::lockSlow(State currentState, uint64_t * waitCycles) noexcept
         // running on another CPU and no waiter is yet queued. Shared holders have no recorded
         // identity, so we cannot verify they are running and skip the spin in that case -
         // exclusive acquirers waiting on shared traffic go straight to suspend.
+        //
+        // The owner pointer comes from a stale snapshot of state, so by the time isFiberRunning
+        // runs the owner may have unlocked and been recycled by the fiber pool or reused by another
+        // thread's proxy. Fiber memory, pooled or proxy, is never freed while the scheduler is
+        // initialized, so the load of owner->state is always safe; the worst case is a spurious
+        // 500 ns spin against the wrong fiber's state, after which lockHelper takes the slow path.
         if (!currentState.hasExclusiveWaiters && !currentState.hasSharedWaiters)
         {
             Fiber * owner = reinterpret_cast<Fiber *>(currentState.value);
