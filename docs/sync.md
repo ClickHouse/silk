@@ -102,7 +102,7 @@ mutex.lock_shared();   /* shared */       mutex.unlock_shared();
 
 **Fast path** -- `try_lock()` does a single CAS from 0 to `{value=currentFiber, exclusive=1}`. `try_lock_shared()` CASes `{value, exclusive=0}` to `{value+1, exclusive=0}` only if `hasExclusiveWaiters` is clear.
 
-**Spin phase** -- `lock()` and `lock_shared()` spin 16 PAUSEs (~500 ns) only when the blocker is an identifiable exclusive owner currently `RUNNING` on another CPU and no waiter is yet queued. Shared holders have no recorded identity, so exclusive acquirers waiting on shared traffic skip the spin and go straight to suspend.
+**Spin phase** -- `lock()` and `lock_shared()` spin 16 PAUSEs (~500 ns) only when the blocker is an identifiable exclusive owner currently `RUNNING` on another CPU and no waiter is yet queued. Shared holders have no recorded identity, so exclusive acquirers waiting on shared traffic skip the spin and go straight to suspend. The owner pointer is a stale snapshot: by the time `isFiberRunning` reads it, the owner may have released the lock and been recycled by `fiberPool` or reused as another thread's proxy. Fiber memory, pooled or proxy, is never freed while the scheduler is initialized, so the read is always safe; the worst case is a spurious spin against the wrong fiber's state.
 
 **Slow path** -- `lockHelper()` arms `hasExclusiveWaiters`; `lockSharedHelper()` arms `hasSharedWaiters`. In each case `suspendCallback` then enqueues the fiber into the waiter table. `unlock()` CASes state to 0 and calls `releaseWaiters` if either waiter bit was set. `unlock_shared()` decrements `value`; when the count reaches 0 it clears both waiter bits atomically and calls `releaseWaiters` if either was set.
 
