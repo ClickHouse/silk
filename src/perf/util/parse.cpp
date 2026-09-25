@@ -41,32 +41,40 @@ uint64_t parseDuration(const std::string & str)
 {
     size_t pos;
     uint64_t n = std::stoull(str, &pos);
-    std::string suffix = str.substr(pos);
-    if (suffix == "ns")
+    std::string_view suffix = std::string_view(str).substr(pos);
+    uint64_t multiplier = 1;
+
+    if (suffix.empty() || suffix == "s")
     {
-        return n;
+        multiplier = 1'000'000'000ULL;
     }
-    if (suffix.empty())
+    else if (suffix == "ns")
     {
-        return n * 1'000'000'000ULL;
+        multiplier = 1;
     }
-    if (suffix == "us")
+    else if (suffix == "us")
     {
-        return n * 1'000ULL;
+        multiplier = 1'000ULL;
     }
-    if (suffix == "ms")
+    else if (suffix == "ms")
     {
-        return n * 1'000'000ULL;
+        multiplier = 1'000'000ULL;
     }
-    if (suffix == "s")
+    else if (suffix == "m")
     {
-        return n * 1'000'000'000ULL;
+        multiplier = 60'000'000'000ULL;
     }
-    if (suffix == "m")
+    else
     {
-        return n * 60'000'000'000ULL;
+        throw std::invalid_argument("unknown duration suffix: " + std::string(suffix));
     }
-    throw std::invalid_argument("unknown duration suffix: " + suffix);
+
+    if (n > std::numeric_limits<uint64_t>::max() / multiplier)
+    {
+        throw std::out_of_range("duration is too large: " + str);
+    }
+
+    return n * multiplier;
 }
 
 std::string formatDuration(uint64_t ns)

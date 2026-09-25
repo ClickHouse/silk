@@ -15,6 +15,8 @@ uint64_t parseSize(const std::string & str);
  * Parse a duration string with an optional unit suffix into nanoseconds.
  * Supported units: ns, us, ms, s, m. No suffix is treated as seconds.
  * Examples: "10" -> 10000000000, "100us" -> 100000, "1ms" -> 1000000.
+ * Throws std::invalid_argument on a malformed number or an unknown suffix and
+ * std::out_of_range when the result does not fit in uint64_t.
  */
 uint64_t parseDuration(const std::string & str);
 
