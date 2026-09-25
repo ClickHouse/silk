@@ -110,7 +110,7 @@ Public headers live under `include/silk/<component>/` and are included as `<silk
 - Replace a `// TBD` by writing the comment — don't delete it
 - No effectful calls inside `ASSERT_*` / `EXPECT_*`, `SILK_CHECK_ERROR` / `SILK_CHECK_BOOL` — call, store in a temp, then test; a trivial side-effect-free read (`size` / `empty`, atomic `load`, a plain getter, a pure computation) may stay inline
 - Each layer validates only its own invariants — don't pre-check in the caller what the callee already enforces
-- Allocation failure is an errno path — never `SILK_ASSERT` an allocation; a fiber spawn in a test or a one-time initialization may assert
+- Allocation failure is an errno path: a runtime allocation is `new (std::nothrow)` with an explicit failure path (null or ENOMEM); a throwing `new` / `std::make_unique` is a `std::terminate` in `noexcept` code and belongs only in one-time initialization (`initialize` and the constructors it runs). Only a fiber spawn in a test, a one-time initialization, or a first-use allocation on a path with no failure return may assert
 - No error path for a race the stated invariant excludes — read the invariant at the state's writers first
 - Error / log messages name the operation that failed ("could not arm the doorbell"), not "Class::method failed"
 - `SILK_ASSERT` takes a printf-style message; use `SILK_FAIL(msg, ...)` for an unconditional abort — never `SILK_ERROR` paired with `SILK_ASSERT(false)`
@@ -143,6 +143,7 @@ Public headers live under `include/silk/<component>/` and are included as `<silk
 - A `silk::FiberFuture` is a single-owner completion token — one setter, one waiter; reset only under one owner with no concurrent observer; anything several fibers set, wait or observe is a `silk::FiberEvent`, never a shared future
 - `stop` is cancel-and-join — no checkpoint, drain or grace; queued work completes `ECANCELED`; a graceful wait in `stop` carries its own deadline
 - Teardown is block / acquire / drain / wait on per-object futures set as the completing context's last statement — no spin loops, no invented counters, flags or bits
+- Every pool and every static that owns heap memory pairs `initialize` / `destroy` — scheduler state hangs off `SchedulerState` and is freed in `destroy`, `QueueBase::pool` and `Perf` have their own `destroy`. Nothing is intentionally leaked: consumers run leak and memory-accounting checks stricter than LSan
 - A future param on a serialized state machine means a pooled request, one queue and one worker fiber — never a mutex or a fiber per request; a pure IO passthrough is op + `IoFuture` + subscribe, never a worker fiber
 - Cache-line regions are anonymous `struct alignas(silk::kCacheLineSize)` blocks, one per usage pattern (writer and rate), every member of a hot class inside one, the boundary stated in the region doc; verify with `-fdump-record-layouts`
 - The fences in `FiberSequencer`, the mutex and the stacks record paid-for bugs — when mirroring one of these protocols, carry every fence and its pairing comment, or write out the store-buffer interleaving that proves the omission safe; TSan cannot see a missing fence
@@ -180,7 +181,7 @@ Public headers live under `include/silk/<component>/` and are included as `<silk
 - No `Co-Authored-By` / Claude trailer in commit messages, and no Claude attribution in PR bodies or anywhere else
 - Commit granularity is semantic — a feature and its removal are one commit, a fix to uncommitted work folds into the commit it fixes; a doc or proposal never rides a code commit
 - CMake stays plain — no generated `-P` scripts; optional tooling sits behind a CMake `option`; checkers are registered as ctest tests
-- Self-review every changed line against these rules before submitting
+- Self-review every changed line against these rules before submitting and record it in the PR description: for each new allocation or acquire its failure path and its release site, for each new construct (allocation, static or thread-local state, a pool) the precedent `file:line` it follows
 
 ## Design docs
 
