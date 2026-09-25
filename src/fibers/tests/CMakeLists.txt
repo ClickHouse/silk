@@ -2,9 +2,11 @@ file(GLOB_RECURSE TEST_SOURCES CONFIGURE_DEPENDS *.cpp)
 
 # fiber-cpuset-test and fiber-steal-test are their own executables: each needs a main
 # that restricts the scheduler to a CPU subset before running, so they cannot share
-# fibers-test's global init.
+# fibers-test's global init. fiber-destroy-test initializes and destroys the scheduler
+# once per child process it spawns, so it has no global init at all.
 list(REMOVE_ITEM TEST_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/fiber-cpuset-test.cpp)
 list(REMOVE_ITEM TEST_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/fiber-steal-test.cpp)
+list(REMOVE_ITEM TEST_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/fiber-destroy-test.cpp)
 
 add_executable(fibers-test ${TEST_SOURCES})
 target_link_libraries(fibers-test PRIVATE silk-fibers GTest::gtest)
@@ -27,4 +29,11 @@ gtest_discover_tests(fibers-cpuset-test
 add_executable(fibers-steal-test fiber-steal-test.cpp)
 target_link_libraries(fibers-steal-test PRIVATE silk-fibers GTest::gtest)
 gtest_discover_tests(fibers-steal-test
+    PROPERTIES RUN_SERIAL TRUE RESOURCE_LOCK iouring TIMEOUT_SIGNAL_NAME SIGQUIT TIMEOUT_SIGNAL_GRACE_PERIOD 60)
+
+# fiber-destroy-test packs several short-lived children onto two CPUs to provoke preemption,
+# so it runs alone: a concurrent test would both dilute that load and be distorted by it.
+add_executable(fibers-destroy-test fiber-destroy-test.cpp)
+target_link_libraries(fibers-destroy-test PRIVATE silk-fibers GTest::gtest)
+gtest_discover_tests(fibers-destroy-test
     PROPERTIES RUN_SERIAL TRUE RESOURCE_LOCK iouring TIMEOUT_SIGNAL_NAME SIGQUIT TIMEOUT_SIGNAL_GRACE_PERIOD 60)
