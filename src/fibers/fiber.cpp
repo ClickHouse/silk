@@ -26,6 +26,7 @@
 #include <cstdlib>
 #include <memory>
 #include <mutex>
+#include <new>
 #include <thread>
 #include <utility>
 
@@ -78,8 +79,8 @@ static void storeExceptionState(const CxaEhGlobals & state) noexcept
 // on every thread to list RUNNING fibers.
 thread_local Fiber * threadFiber = nullptr;
 
-// Proxy fiber for the current non-fiber thread; destroyed at thread exit.
-static thread_local std::unique_ptr<Fiber> proxyFiber;
+// Proxy fiber slot of the current non-fiber thread.
+thread_local FiberScheduler::ProxyFiberSlot FiberScheduler::proxyFiberSlot;
 
 // Set for the lifetime of a scheduler thread. A scheduler thread must never block
 // on the proxy path - a blocked scheduler thread stops draining its ring and wedges
@@ -746,6 +747,13 @@ FiberScheduler::SchedulerState::~SchedulerState() noexcept
     // processors must go before fiberPool frees the fiber memory.
     processorState.reset();
 
+    // Proxies of exited threads. A thread still alive deletes its own proxy at
+    // exit, since scheduler is null by then.
+    while (Fiber * fiber = proxyFiberPool.pop())
+    {
+        delete fiber;
+    }
+
     int r = ::sem_destroy(&threadSemaphore);
     SILK_ASSERT(!r);
 }
@@ -1079,10 +1087,11 @@ void FiberScheduler::destroy() noexcept
         }
     }
 
-    delete scheduler;
+    // Null the pointer: a thread that outlives the scheduler deletes its own proxy at exit.
+    delete std::exchange(scheduler, nullptr);
 }
 
-// noinline is load-bearing, not a hint. These accessors read the threadFiber/proxyFiber
+// noinline is load-bearing, not a hint. These accessors read the threadFiber/proxyFiberSlot
 // thread-locals. A fiber may suspend on one OS thread and resume on another, so a caller
 // that brackets a suspension point must observe the resuming thread's value.
 // If the accessor were inlined, the compiler could materialize the thread pointer once
@@ -1104,13 +1113,48 @@ __attribute__((noinline)) Fiber * FiberScheduler::getCurrentFiber() noexcept
     {
         return threadFiber;
     }
-    if (!proxyFiber) [[unlikely]]
+    if (!proxyFiberSlot.fiber) [[unlikely]]
     {
-        // Lazily create a proxy fiber so a non-fiber thread can still participate
-        // in fiber-aware APIs (e.g. FiberMutex::lock, FiberScheduler::run-and-wait).
-        proxyFiber = std::make_unique<Fiber>(true);
+        // Lazily acquire a proxy fiber - recycled from an exited thread or new - so a non-fiber
+        // thread can still participate in fiber-aware APIs (e.g. FiberMutex::lock,
+        // FiberScheduler::run-and-wait).
+        Fiber * fiber = scheduler ? scheduler->proxyFiberPool.pop() : nullptr;
+
+        if (fiber)
+        {
+            fiber->changeState(FiberState::STOPPED, FiberState::RUNNING);
+        }
+        else
+        {
+            // getCurrentFiber has no failure return, so an allocation failure aborts here.
+            fiber = new (std::nothrow) Fiber(true);
+            SILK_ASSERT(fiber, "could not allocate a proxy fiber");
+        }
+        proxyFiberSlot.fiber = fiber;
     }
-    return proxyFiber.get();
+    return proxyFiberSlot.fiber;
+}
+
+FiberScheduler::ProxyFiberSlot::~ProxyFiberSlot() noexcept
+{
+    if (fiber)
+    {
+        int semaphoreValue;
+        int r = ::sem_getvalue(&fiber->threadSemaphore, &semaphoreValue);
+        SILK_ASSERT_DEBUG(!r);
+        SILK_ASSERT_DEBUG(!semaphoreValue, "a proxy fiber left its thread with a pending wakeup: value=%d", semaphoreValue);
+
+        if (scheduler)
+        {
+            fiber->changeState(FiberState::RUNNING, FiberState::STOPPED);
+            scheduler->proxyFiberPool.push(std::exchange(fiber, nullptr));
+        }
+        else
+        {
+            // No scheduler, so no fiber can hold a stale pointer to this proxy.
+            delete std::exchange(fiber, nullptr);
+        }
+    }
 }
 
 bool FiberScheduler::isFiberRunning(Fiber * fiber) noexcept

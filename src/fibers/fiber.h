@@ -106,6 +106,9 @@ enum class FiberState : uint8_t
 /**
  * Fiber state: owns a stack and provides services to switch between thread/fiber context.
  * Proxy fibers represent non-fiber threads and block/unblock via a semaphore instead of context switching.
+ * A Fiber is never deleted while the scheduler is initialized - pooled fibers stay in fiberPool and
+ * proxy fibers return to proxyFiberPool at thread exit - so a raw Fiber pointer that a sync primitive
+ * keeps in its state stays readable after the fiber has finished or its thread has exited.
  */
 class Fiber
 {
@@ -242,6 +245,22 @@ static_assert(offsetof(Fiber, parameters) == FIBER_PARAMETERS_OFFSET);
 
 using WaitStack = LockFreeStack<Fiber, &Fiber::stackEntry>;
 using SuspendedList = List<Fiber, &Fiber::suspendedEntry>;
+
+/**
+ * Slot for the current non-fiber thread's proxy fiber. Sync primitives keep raw Fiber pointers in
+ * their state and may read a stale owner after its thread has exited, so while the scheduler is
+ * initialized a proxy is never deleted: at thread exit the slot returns it to proxyFiberPool, the
+ * next new thread reuses it, and destroy frees the pool. With no scheduler no fiber can hold a stale
+ * pointer, so the slot deletes the proxy itself.
+ */
+struct FiberScheduler::ProxyFiberSlot
+{
+    /** Release the proxy; the thread exits outside any suspension, so the proxy is RUNNING. */
+    ~ProxyFiberSlot() noexcept;
+
+    /** Proxy fiber of this thread; null until the first getCurrentFiber call. */
+    Fiber * fiber = nullptr;
+};
 
 /**
  * Partitions scheduler thread CPU time into named buckets without gaps or
@@ -506,10 +525,12 @@ struct FiberScheduler::SchedulerState
     };
 
     // Fiber pool region: allocation and release traffic from every CPU, kept off
-    // the lines above.
+    // the lines above. proxyFiberPool holds the proxy fibers of exited threads and
+    // sees only thread creation and exit.
     struct alignas(kCacheLineSize)
     {
         MemoryPool<Fiber, &Fiber::stackEntry> fiberPool;
+        LockFreeStack<Fiber, &Fiber::stackEntry> proxyFiberPool;
     };
 
     // Cold configuration: read-only after initialize, touched only at startup,

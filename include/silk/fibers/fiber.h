@@ -208,7 +208,8 @@ public:
 
     /**
      * Stop all scheduler threads and release all resources.
-     * No fibers may be running or scheduled when this is called.
+     * No fibers may be running or scheduled when this is called, and no thread that has used a
+     * fiber-aware API may call one or exit concurrently with it.
      */
     static void destroy() noexcept;
 
@@ -695,6 +696,7 @@ public:
 private:
     struct SchedulerState;
     struct ProcessorState;
+    struct ProxyFiberSlot;
     struct CpuTimer;
 
     struct CompareDeadline
@@ -774,6 +776,7 @@ private:
 
     static Options options;
     static SchedulerState * scheduler;
+    static thread_local ProxyFiberSlot proxyFiberSlot;
 };
 
 } // namespace silk
