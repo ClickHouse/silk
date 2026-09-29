@@ -166,17 +166,25 @@ def _atomic_load(val):
     """Return the stored value of a std::atomic<T> gdb.Value.
 
     For lock-free atomics, T is stored at offset 0 of the atomic object.
-    Falls back to raw memory when the internal field (which may live in a
-    base class such as __atomic_base<T>) is not directly accessible via GDB.
+    Field paths cover libstdc++ (_M_i and friends) and libc++
+    (__a_.__a_value); falls back to raw memory when no path is accessible
+    via GDB.
     """
-    for field in ("_M_i", "__val_", "_M_b._M_i"):
+    for path in (("_M_i",), ("__a_", "__a_value"), ("__val_",), ("_M_b", "_M_i")):
         try:
-            return val[field]
+            v = val
+            for field in path:
+                v = v[field]
+            return v
         except gdb.error:
             pass
-    # Fallback: read the first 8 bytes at the atomic's address.
-    # Correct for all lock-free scalar and pointer atomics.
-    return gdb.Value(_u64(int(val.address)))
+    # Fallback: read the atomic object's own bytes - its size equals
+    # sizeof(T) for lock-free scalar and pointer atomics. A fixed 8-byte
+    # read would fold the neighbouring fields into a small atomic (e.g. the
+    # 1-byte fiber state).
+    size = min(val.type.sizeof, 8)
+    raw = gdb.selected_inferior().read_memory(int(val.address), size)
+    return gdb.Value(int.from_bytes(bytes(raw), "little"))
 
 
 # ── Fiber helpers ─────────────────────────────────────────────────────────────
