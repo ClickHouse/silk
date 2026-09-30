@@ -146,8 +146,8 @@ public:
         // These use semaphores rather than context switching in suspend/schedule.
         bool isProxyFiber = false;
 
-        // True while the fiber is running on the thread worker pool.
-        bool inThreadMode = false;
+        // Nesting depth of enterThreadMode; the fiber runs on the thread worker pool while non-zero.
+        uint8_t threadModeDepth = 0;
 
         // CPU this fiber is assigned to.
         uint16_t processorNumber = kInvalidProcessorNumber;

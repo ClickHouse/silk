@@ -177,6 +177,36 @@ TEST(FiberThreadMode, multipleCycles)
     ASSERT_EQ(r, 0);
 }
 
+// Nested scopes: only the outermost one migrates. The inner scope keeps the fiber on the
+// worker thread it already runs on, and leaving it does not return the fiber to the
+// scheduler before the outer scope ends.
+TEST(FiberThreadMode, nested)
+{
+    struct Params
+    {
+        static int fiberMain(Params *) noexcept
+        {
+            pid_t schedulerThread = ::gettid();
+            pid_t workerThread;
+            {
+                FiberScheduler::ThreadModeScope outer;
+                workerThread = ::gettid();
+                EXPECT_NE(workerThread, schedulerThread);
+                {
+                    FiberScheduler::ThreadModeScope inner;
+                    EXPECT_EQ(::gettid(), workerThread);
+                }
+                EXPECT_EQ(::gettid(), workerThread);
+            }
+            EXPECT_NE(::gettid(), workerThread);
+            return 0;
+        }
+    };
+
+    int r = FiberScheduler::run(Params::fiberMain, {});
+    ASSERT_EQ(r, 0);
+}
+
 // Many fibers in thread mode concurrently: all must complete correctly.
 TEST(FiberThreadMode, concurrent)
 {
