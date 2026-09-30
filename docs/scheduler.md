@@ -85,14 +85,14 @@ There are two ready queues:
 - **Per-CPU ready queue** (`ProcessorState::readyQueue`) - bounded MPMC queue drained by the CPU's scheduler thread. Normal cooperative fibers live here.
 - **Shared ready queue** (`SchedulerState::readyQueue`) - unbounded MPMC queue drained by the worker thread pool (one worker thread per active CPU, sized `workerThreadCount == schedulerThreadCount`, pinned to the active set, running `runThreadWorker`). Thread-mode fibers live here, and normal fibers overflow here when a CPU ready queue is full.
 
-`enterThreadMode()` sets `fiber->inThreadMode` and calls `schedule()`, which routes the fiber to the shared ready queue. A worker thread dequeues it and runs it via `runFiber(nullptr, fiber)`, where it may block freely. When the fiber suspends inside thread mode (e.g. waiting on a future), `schedule()` re-enqueues it to the shared ready queue when it is woken - any free worker picks it up.
+`enterThreadMode()` increments `fiber->threadModeDepth` and, when it becomes non-zero, calls `schedule()`, which routes the fiber to the shared ready queue. A worker thread dequeues it and runs it via `runFiber(nullptr, fiber)`, where it may block freely. When the fiber suspends inside thread mode (e.g. waiting on a future), `schedule()` re-enqueues it to the shared ready queue when it is woken - any free worker picks it up.
 
-`exitThreadMode()` clears `fiber->inThreadMode` and calls `schedule()`, which routes the fiber back to its CPU's per-CPU ready queue. After this point the fiber runs cooperatively again.
+`exitThreadMode()` decrements `fiber->threadModeDepth` and, when it drops to zero, calls `schedule()`, which routes the fiber back to its CPU's per-CPU ready queue. After this point the fiber runs cooperatively again. Nested `ThreadModeScope`s therefore cost one migration out and one back, on the outermost scope only.
 
 `schedule()` routing summary:
-- `inThreadMode = true` => shared ready queue
-- `inThreadMode = false`, CPU ready queue not full => CPU ready queue
-- `inThreadMode = false`, CPU ready queue full => shared ready queue (overflow)
+- `threadModeDepth > 0` => shared ready queue
+- `threadModeDepth == 0`, CPU ready queue not full => CPU ready queue
+- `threadModeDepth == 0`, CPU ready queue full => shared ready queue (overflow)
 
 ---
 
