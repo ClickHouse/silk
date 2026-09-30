@@ -124,7 +124,7 @@ bool Fiber::initialize(
 {
     state.store(FiberState::SUSPENDED, std::memory_order_relaxed);
 
-    inThreadMode = false;
+    threadModeDepth = 0;
     processorNumber = kInvalidProcessorNumber;
     suspendedProcessorNumber = kInvalidProcessorNumber;
     suspendCallback = nullptr;
@@ -1191,7 +1191,7 @@ FiberScheduler::ProcessorState * FiberScheduler::enqueueReady(ProcessorState * p
             fiber->submitTimestamp = Tsc::getCycles();
         }
 
-        if (!fiber->inThreadMode)
+        if (fiber->threadModeDepth == 0)
         {
             uint16_t prefixCount = scheduler->prefixCount.load(std::memory_order_relaxed);
             ProcessorState * target = nullptr;
@@ -1328,31 +1328,35 @@ void FiberScheduler::yieldSuspendCallback(Fiber * fiber, void * context) noexcep
 
 void FiberScheduler::enterThreadMode() noexcept
 {
-    suspend(enterThreadModeSuspendCallback, nullptr);
+    Fiber * fiber = getCurrentFiber();
+    SILK_ASSERT(fiber->threadModeDepth < UINT16_MAX);
+    ++fiber->threadModeDepth;
+    if (fiber->threadModeDepth == 1)
+    {
+        suspend(enterThreadModeSuspendCallback, nullptr);
+    }
 }
 
 void FiberScheduler::enterThreadModeSuspendCallback(Fiber * fiber, void * context) noexcept
 {
     SILK_UNUSED(context);
-
-    SILK_ASSERT(!fiber->inThreadMode);
-    fiber->inThreadMode = true;
-
     schedule(fiber);
 }
 
 void FiberScheduler::exitThreadMode() noexcept
 {
-    suspend(exitThreadModeSuspendCallback, nullptr);
+    Fiber * fiber = getCurrentFiber();
+    SILK_ASSERT(fiber->threadModeDepth > 0);
+    --fiber->threadModeDepth;
+    if (fiber->threadModeDepth == 0)
+    {
+        suspend(exitThreadModeSuspendCallback, nullptr);
+    }
 }
 
 void FiberScheduler::exitThreadModeSuspendCallback(Fiber * fiber, void * context) noexcept
 {
     SILK_UNUSED(context);
-
-    SILK_ASSERT(fiber->inThreadMode);
-    fiber->inThreadMode = false;
-
     schedule(fiber);
 }
 
