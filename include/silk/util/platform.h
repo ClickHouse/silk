@@ -51,6 +51,18 @@ static inline uint64_t getPageSize() noexcept
 #endif
 }
 
+/** Memory mapping callback. Called when mapping or unmapping memory. */
+using MemoryMapCallback = void(void * ptr, size_t size) noexcept;
+
+/** Register the process-wide memory mapping hooks; call once before the first mapping. Either may be null. */
+void setMemoryMapCallbacks(MemoryMapCallback * mapped, MemoryMapCallback * unmapped) noexcept;
+
+/** Report via the registered hook that @p size bytes at @p ptr were mapped. */
+void accountMemoryMapped(void * ptr, size_t size) noexcept;
+
+/** Report via the registered hook that @p size bytes at @p ptr were unmapped. */
+void accountMemoryUnmapped(void * ptr, size_t size) noexcept;
+
 /** Cache line size in bytes. */
 #if defined(CACHE_LINESIZE)
 static constexpr uint64_t kCacheLineSize = CACHE_LINESIZE;
