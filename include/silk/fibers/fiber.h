@@ -314,7 +314,7 @@ public:
     /**
      * RAII guard that moves the current fiber out of the cooperative scheduler
      * for its lifetime, allowing blocking calls, then returns it on destruction.
-     * Must be used from a fiber context (not already in thread mode).
+     * Scopes nest: only the outermost one migrates the fiber.
      */
     class [[nodiscard]] ThreadModeScope
     {
@@ -329,7 +329,8 @@ public:
     /**
      * Move the current fiber out of the cooperative scheduler so it may make
      * blocking calls or perform heavy CPU work without delaying other fibers.
-     * Must be paired with exitThreadMode().
+     * Must be paired with exitThreadMode(). Calls nest: the fiber migrates on
+     * the first call and returns on the matching exitThreadMode().
      */
     static void enterThreadMode() noexcept;
 
