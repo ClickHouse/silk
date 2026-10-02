@@ -4,9 +4,13 @@ from praktika.infrastructure.cloud import CloudInfrastructure
 
 
 # until published in pip
-_PRAKTIKA_PACKAGE_BASE_URL = "https://praktika-artifacts-eu-north-1.s3.amazonaws.com/packages"
+_PRAKTIKA_PACKAGE_BASE_URL = (
+    "https://praktika-artifacts-eu-north-1.s3.amazonaws.com/packages"
+)
 _PRAKTIKA_WHL = f"{_PRAKTIKA_PACKAGE_BASE_URL}/praktika-0.1.15-py3-none-any.whl"
-_PRAKTIKA_CONTROLLER_WHL = f"{_PRAKTIKA_PACKAGE_BASE_URL}/praktika_controller-0.1.9-py3-none-any.whl"
+_PRAKTIKA_CONTROLLER_WHL = (
+    f"{_PRAKTIKA_PACKAGE_BASE_URL}/praktika_controller-0.1.9-py3-none-any.whl"
+)
 
 
 def _silk_ci_dependencies_component():
@@ -245,7 +249,7 @@ PROJECTS = [
         image_builders=_IMAGE_BUILDERS,
         github_token_minters=[_GH_TOKEN_MINTER],
         orchestrator_pool=Components.OrchestratorPool(
-            instance_type="t4g.small",
+            instance_type="t4g.xlarge",
             scaling=Components.OrchestratorPool.Scaling.Auto,
             size=0,
             max_size=50,
