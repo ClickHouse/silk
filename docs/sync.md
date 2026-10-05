@@ -179,7 +179,11 @@ future.cancel();           // cancel a pending wait (sets future with ECANCELED)
 // producer
 seq.increment();           // counter++, wakes all newly satisfied futures
 seq.advance(value);        // CAS counter to value if value > current
+seq.cancelWaiters();       // wake every unreached waiter with ECANCELED, keep running
+seq.stop();                // wake them and refuse every later unreached wait
 ```
+
+**`cancelWaiters` versus `stop`** -- `stop` is terminal: every unreached wait after it completes with `ECANCELED` without suspending, and like `increment` it hands its wake to a running combiner, so its waiters may still be parked when it returns. `cancelWaiters` wakes the unreached waiters registered before the call, returns only once they are woken, and leaves the sequencer running, so later waits register and complete as usual. It pushes a `Future` marked `CANCEL_WAITERS` from its stack onto `requestQueue`, calls `drain`, and waits on that future. The pass that classifies the marked future flushes, and the combiner wakes the flushed waiters before it sets the marked future. A waiter that another call - a cancel, an `increment`, `stop` or another `cancelWaiters` - completes first completes through that call, possibly after `cancelWaiters` returns. A waiter that registers during the call is either flushed or waits as usual. A caller that needs it to give up keeps its own flag: the caller stores the flag, issues a `seq_cst` fence and calls `cancelWaiters`; the waiter registers its `Future`, issues a `seq_cst` fence, re-checks the flag and cancels the future when it is set. The two fences make a store-load handshake - the waiter's push precedes the marked future's in `requestQueue`, so the flushing pass or an earlier one pops it, or the re-check sees the flag.
 
 `Future` inherits `FiberFuture`, so it can be passed to `FiberFuture::waitForMultiple` and `waitWithTimeout`.
 
@@ -193,12 +197,12 @@ seq.advance(value);        // CAS counter to value if value > current
 
 Inside the combiner:
 1. Drain `cancelQueue`: remove each future from the tree, add to cancel list.
-2. Drain `requestQueue`: classify each future -- if `CANCELLED` raced ahead, add to cancel list; otherwise insert into the tree.
+2. Drain `requestQueue`: classify each future -- a `CANCEL_WAITERS` future makes the pass flush, as `stop` does; if `CANCELLED` raced ahead, add to cancel list; otherwise insert into the tree.
 3. Walk the tree from the minimum: wake all futures whose `token <= counter`.
 
-Wakes and cancels are deferred until after the combiner is released, so `future.set()` can itself call `drain()` without deadlocking.
+Wakes and cancels are deferred until after the combiner is released, so `future.set()` can itself call `drain()` without deadlocking. Cancels go first, so a `CANCEL_WAITERS` future is set once the waiters its pass flushed are woken.
 
-**Cancellation state** -- `Future::state` has two bits: `IN_TABLE` (set by the combiner when inserting into the tree) and `CANCELLED` (set by `cancel()`). The `IN_TABLE` bit ensures `cancelQueue` holds the future only while it is in the tree, mirroring the sleep cancellation pattern in the scheduler.
+**Cancellation state** -- `Future::state` has three bits: `IN_TABLE` (set by the combiner when inserting into the tree), `CANCELLED` (set by `cancel()`) and `CANCEL_WAITERS` (set by `cancelWaiters` on its own future, which never enters the tree). The `IN_TABLE` bit ensures `cancelQueue` holds the future only while it is in the tree, mirroring the sleep cancellation pattern in the scheduler.
 
 ---
 
