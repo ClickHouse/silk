@@ -45,6 +45,7 @@ public:
 
         static constexpr uint32_t IN_TABLE = 1 << 0;
         static constexpr uint32_t CANCELLED = 1 << 1;
+        static constexpr uint32_t CANCEL_WAITERS = 1 << 2;
 
         StackEntry stackEntry;
         TreeEntry treeEntry;
@@ -129,7 +130,7 @@ public:
     /**
      * Rebase the counter to @p value, up or down. The stopped state is preserved. The caller guarantees
      * quiescence: no registered waiter - neither tree-resident nor still in the request queue - and no
-     * concurrent increment / advance / wait / stop.
+     * concurrent increment / advance / wait / stop / cancelWaiters.
      */
     void reset(uint64_t value) noexcept;
 
@@ -149,6 +150,13 @@ public:
 
     /** Returns true if stop has been called. */
     bool stopped() const noexcept { return stopFlag.load(std::memory_order_acquire); }
+
+    /**
+     * Wake every unreached waiter registered before the call with ECANCELED and return once they are woken; later waits
+     * register as usual. A waiter that a concurrent cancel, increment, advance, stop or cancelWaiters completes instead can
+     * complete after the return. A waiter that registers during the call is either woken here or waits as usual.
+     */
+    void cancelWaiters() noexcept;
 
 private:
     //

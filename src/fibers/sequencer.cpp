@@ -57,7 +57,21 @@ void FiberSequencer::cancelWait(Future * future) noexcept
     {
         cancelQueue.push(future);
     }
+
     drain();
+}
+
+void FiberSequencer::cancelWaiters() noexcept
+{
+    Future future;
+    future.state.store(Future::CANCEL_WAITERS, std::memory_order_relaxed);
+
+    requestQueue.push(&future);
+    drain();
+
+    // Set once the waiters this future flushed are woken: by this thread if drain made it the combiner, else by the
+    // running combiner once its loop ends.
+    future.wait();
 }
 
 void FiberSequencer::drain() noexcept
@@ -79,7 +93,9 @@ void FiberSequencer::drain() noexcept
     for (;;)
     {
         uint64_t current = counter.load(std::memory_order_acquire);
-        bool stopping = stopFlag.load(std::memory_order_acquire);
+
+        // A pass flushes its unreached waiters once stopped, or once it classifies a cancelWaiters future below.
+        bool flushing = stopFlag.load(std::memory_order_acquire);
 
         // Drain cancelled futures. The wake loop may have already removed (and cleared IN_TABLE on) one whose
         // token was reached first; Tree::remove is UB on a node already out of the tree, so only remove if we
@@ -110,9 +126,17 @@ void FiberSequencer::drain() noexcept
         {
             Future * next = RequestQueue::next(future);
 
-            if (future->token <= current)
+            uint32_t prev = future->state.load(std::memory_order_acquire);
+            if (prev & Future::CANCEL_WAITERS)
             {
-                uint32_t prev = future->state.load(std::memory_order_acquire);
+                // A cancelWaiters call: this pass flushes. The registrations pushed before it follow it in this list
+                // and take the flushing branch below; the ones pushed after it may enter the tree, which the tree flush
+                // below empties.
+                flushing = true;
+                wakeList.push(future);
+            }
+            else if (future->token <= current)
+            {
                 SILK_ASSERT((prev & Future::IN_TABLE) == 0);
                 if (prev & Future::CANCELLED)
                 {
@@ -123,9 +147,9 @@ void FiberSequencer::drain() noexcept
                     wakeList.push(future);
                 }
             }
-            else if (stopping)
+            else if (flushing)
             {
-                // Stopped: an unreached waiter never enters the tree - complete it with ECANCELED. IN_TABLE
+                // Flushing: an unreached waiter never enters the tree - complete it with ECANCELED. IN_TABLE
                 // stays clear, so a racing cancelWait routes through the CANCELLED flag and enqueues nothing;
                 // this list is the future's sole completer either way.
                 cancelList.push(future);
@@ -135,7 +159,6 @@ void FiberSequencer::drain() noexcept
                 // Must wait: claim a tree slot by setting IN_TABLE, unless a cancel raced ahead - then route
                 // to cancel without entering the tree. One CAS, so IN_TABLE is set only on a real insert (no
                 // fetch_or-then-undo); a cancel landing between the load and the CAS just fails it and re-checks.
-                uint32_t prev = future->state.load(std::memory_order_relaxed);
                 for (;;)
                 {
                     SILK_ASSERT((prev & Future::IN_TABLE) == 0);
@@ -177,10 +200,10 @@ void FiberSequencer::drain() noexcept
             }
         }
 
-        // Stopped: flush the remaining (unreached) tree entries with ECANCELED. A tree future cancelled while
+        // Flushing: drop the remaining (unreached) tree entries with ECANCELED. A tree future cancelled while
         // tree-resident sits in the cancelQueue (cancelWait saw IN_TABLE), which stays its sole completer -
         // clearing IN_TABLE here routes the next cancelQueue drain past the tree removal, as in the wake loop.
-        if (stopping)
+        if (flushing)
         {
             while (Future * future = waiters.min())
             {
@@ -209,8 +232,9 @@ void FiberSequencer::drain() noexcept
     }
 
     // Wake outside the combiner so a woken fiber re-entering drain cannot deadlock on the combiner.
-    setAll(&wakeList, 0);
+    // Cancel first, so a cancelWaiters future in wakeList is set once the waiters its pass flushed are woken.
     setAll(&cancelList, ECANCELED);
+    setAll(&wakeList, 0);
 }
 
 bool FiberSequencer::acquireCombiner() noexcept

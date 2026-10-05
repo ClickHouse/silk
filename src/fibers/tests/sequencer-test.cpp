@@ -2,6 +2,8 @@
 
 #include <silk/fibers/fiber.h>
 #include <silk/fibers/future.h>
+#include <silk/util/assert.h>
+#include <silk/util/platform.h>
 #include <silk/util/sanitizers.h>
 
 #include <gtest/gtest.h>
@@ -15,8 +17,9 @@
 #include <thread>
 #include <vector>
 
-#include <pthread.h>
 #include <sched.h>
+
+#include <fibers/cpu.h>
 
 namespace silk
 {
@@ -39,9 +42,9 @@ TEST(FiberSequencer, waitAlreadySatisfied)
     sequencer.wait(1, &future);
 
     // counter >= token: future must be set immediately, no suspension
-    int err;
-    EXPECT_TRUE(future.isSet(&err));
-    EXPECT_EQ(err, 0);
+    int r;
+    EXPECT_TRUE(future.isSet(&r));
+    EXPECT_EQ(r, 0);
 
     // blocking form; must return immediately
     EXPECT_EQ(sequencer.wait(1), 0);
@@ -63,13 +66,12 @@ TEST(FiberSequencer, resetRebasesBelowCounter)
     // A wait above it parks until advance reaches the token again.
     FiberSequencer::Future future;
     sequencer.wait(4, &future);
-    int err;
-    ASSERT_FALSE(future.isSet(&err));
+    ASSERT_FALSE(future.isSet(&r));
 
     advanced = sequencer.advance(4);
     ASSERT_TRUE(advanced);
-    ASSERT_TRUE(future.isSet(&err));
-    ASSERT_EQ(err, 0);
+    ASSERT_TRUE(future.isSet(&r));
+    ASSERT_EQ(r, 0);
 }
 
 TEST(FiberSequencer, stopCancelsUnreachedWaiters)
@@ -87,17 +89,17 @@ TEST(FiberSequencer, stopCancelsUnreachedWaiters)
     sequencer.stop();
     EXPECT_TRUE(sequencer.stopped());
 
-    int err;
-    ASSERT_TRUE(unreached.isSet(&err));
-    EXPECT_EQ(err, ECANCELED);
-    ASSERT_TRUE(reached.isSet(&err));
-    EXPECT_EQ(err, 0);
+    int r;
+    ASSERT_TRUE(unreached.isSet(&r));
+    EXPECT_EQ(r, ECANCELED);
+    ASSERT_TRUE(reached.isSet(&r));
+    EXPECT_EQ(r, 0);
 
     // Registered after stop: an unreached wait completes with ECANCELED without suspending, a reached one with 0.
     FiberSequencer::Future late;
     sequencer.wait(2, &late);
-    ASSERT_TRUE(late.isSet(&err));
-    EXPECT_EQ(err, ECANCELED);
+    ASSERT_TRUE(late.isSet(&r));
+    EXPECT_EQ(r, ECANCELED);
     EXPECT_EQ(sequencer.wait(2), ECANCELED);
     EXPECT_EQ(sequencer.wait(1), 0);
 
@@ -109,6 +111,38 @@ TEST(FiberSequencer, stopCancelsUnreachedWaiters)
     // Idempotent.
     sequencer.stop();
     EXPECT_TRUE(sequencer.stopped());
+}
+
+TEST(FiberSequencer, cancelWaitersCancelsUnreachedWaitersAndKeepsRunning)
+{
+    FiberSequencer sequencer;
+
+    // Registered before the call: an unreached waiter completes with ECANCELED, whether the drain in increment has
+    // moved it into the tree or it still sits in the request queue.
+    FiberSequencer::Future treeResident;
+    sequencer.wait(2, &treeResident);
+    sequencer.increment();
+    FiberSequencer::Future queued;
+    sequencer.wait(2, &queued);
+
+    sequencer.cancelWaiters();
+    ASSERT_FALSE(sequencer.stopped());
+
+    int r;
+    ASSERT_TRUE(treeResident.isSet(&r));
+    ASSERT_EQ(r, ECANCELED);
+    ASSERT_TRUE(queued.isSet(&r));
+    ASSERT_EQ(r, ECANCELED);
+
+    // Registered after the call: an unreached wait parks as usual and completes with 0 once the counter reaches it.
+    FiberSequencer::Future later;
+    sequencer.wait(2, &later);
+    ASSERT_FALSE(later.isSet(&r));
+
+    uint64_t current = sequencer.increment();
+    ASSERT_EQ(current, 2u);
+    ASSERT_TRUE(later.isSet(&r));
+    ASSERT_EQ(r, 0);
 }
 
 TEST(FiberSequencer, waitSuspends)
@@ -248,15 +282,15 @@ TEST(FiberSequencer, differentTokens)
     sequencer.increment();
     done[0].wait();
     futures[0].wait();
-    int err;
-    ASSERT_FALSE(done[1].isSet(&err));
-    ASSERT_FALSE(done[2].isSet(&err));
+    int r;
+    ASSERT_FALSE(done[1].isSet(&r));
+    ASSERT_FALSE(done[2].isSet(&r));
 
     // second increment: only token=2 waiter wakes
     sequencer.increment();
     done[1].wait();
     futures[1].wait();
-    ASSERT_FALSE(done[2].isSet(&err));
+    ASSERT_FALSE(done[2].isSet(&r));
 
     sequencer.increment();
     done[2].wait();
@@ -320,9 +354,9 @@ TEST(FiberSequencer, cancelAfterInTable)
 
             // Now cancel while IN_TABLE is set.
             p->future->wait();
-            int err;
-            EXPECT_TRUE(p->future->isSet(&err));
-            EXPECT_EQ(err, ECANCELED);
+            int r;
+            EXPECT_TRUE(p->future->isSet(&r));
+            EXPECT_EQ(r, ECANCELED);
             p->done->set(0);
             return 0;
         }
@@ -369,9 +403,9 @@ TEST(FiberSequencer, cancelAlreadySatisfied)
             p->sequencer->increment();
             p->sequencer->wait(1, p->future); // satisfied immediately
             p->future->cancel(); // no-op: already set
-            int err;
-            EXPECT_TRUE(p->future->isSet(&err));
-            EXPECT_EQ(err, 0); // set with 0, not ECANCELED
+            int r;
+            EXPECT_TRUE(p->future->isSet(&r));
+            EXPECT_EQ(r, 0); // set with 0, not ECANCELED
             p->done->set(0);
             return 0;
         }
@@ -442,9 +476,9 @@ TEST(FiberSequencer, waitForTokenZero)
     FiberSequencer sequencer;
     FiberSequencer::Future future;
     sequencer.wait(0, &future);
-    int err;
-    EXPECT_TRUE(future.isSet(&err));
-    EXPECT_EQ(err, 0);
+    int r;
+    EXPECT_TRUE(future.isSet(&r));
+    EXPECT_EQ(r, 0);
 }
 
 // advance to a value <= current counter is a no-op; returns false.
@@ -557,14 +591,54 @@ TEST(FiberSequencer, advancePastMultipleTokens)
 // with the drain fences removed the lost-wakeup count is non-zero, with them in place it is exactly zero.
 TEST(FiberSequencer, lostWakeupUnderContention)
 {
-    const unsigned cores = std::thread::hardware_concurrency();
-    if (cores < 3)
+    struct IncrementerParams
+    {
+        uint64_t iterations;
+        const uint16_t * cpus;
+        uint32_t cpuCount;
+        std::atomic<uint64_t> go{0};
+        std::atomic<uint32_t> done{0};
+        FiberSequencer * sequencer = nullptr;
+
+        static void threadMain(IncrementerParams * params, uint32_t threadIndex) noexcept
+        {
+            int r = pinThreadToCpu(params->cpus[threadIndex % params->cpuCount]);
+            SILK_ASSERT(r == 0);
+
+            for (uint64_t i = 1; i <= params->iterations; ++i)
+            {
+                while (params->go.load(std::memory_order_acquire) != i)
+                {
+                    cpuPause();
+                }
+
+                params->sequencer->increment();
+                params->done.fetch_add(1, std::memory_order_release);
+            }
+        }
+    };
+
+    cpu_set_t affinity;
+    int r = sched_getaffinity(0, sizeof(cpu_set_t), &affinity);
+    ASSERT_EQ(r, 0);
+
+    uint16_t cpus[CPU_SETSIZE];
+    uint32_t cpuCount = 0;
+    for (uint16_t cpu = 0; cpu < CPU_SETSIZE; ++cpu)
+    {
+        if (CPU_ISSET(cpu, &affinity))
+        {
+            cpus[cpuCount++] = cpu;
+        }
+    }
+
+    if (cpuCount < 3)
     {
         GTEST_SKIP() << "needs >= 3 cores to contend for the combiner";
     }
-    const uint32_t threads = std::min(8u, cores); // incrementers, and the waiter's (final) token
+    const uint32_t numThreads = std::min<uint32_t>(8, cpuCount); // incrementers, and the waiter's (final) token
 
-    uint64_t iters = 200'000;
+    uint64_t iterations = 200'000;
 #if defined(__SANITIZE_THREAD__)
     // The high count is what reproduces the StoreLoad reordering this test
     // asserts on, but TSan cannot observe that reordering: it detects data races
@@ -573,56 +647,39 @@ TEST(FiberSequencer, lostWakeupUnderContention)
     // coverage under TSan while costing about 6 ms per iteration on an 8-CPU box,
     // pushing the run past the ctest timeout. A small count still drives the same
     // paths for TSan's race detection, which saturates in far fewer iterations.
-    iters = 2'000;
+    iterations = 2'000;
 #endif
     if (const char * env = std::getenv("SILK_SEQ_LITMUS_ITERS"))
     {
-        iters = std::strtoull(env, nullptr, 10);
+        iterations = std::strtoull(env, nullptr, 10);
     }
 
-    std::atomic<uint64_t> go{0};
-    std::atomic<uint64_t> done{0};
-    std::atomic<FiberSequencer *> seqPtr{nullptr};
+    IncrementerParams params{iterations, cpus, cpuCount};
 
-    std::vector<std::thread> incrementers;
-    for (uint32_t t = 0; t < threads; ++t)
+    std::vector<std::thread> threads;
+    for (uint32_t threadIndex = 0; threadIndex < numThreads; ++threadIndex)
     {
-        incrementers.emplace_back(
-            [&, t]
-            {
-                cpu_set_t set;
-                CPU_ZERO(&set);
-                CPU_SET(int(t % cores), &set);
-                pthread_setaffinity_np(pthread_self(), sizeof(set), &set);
-
-                for (uint64_t i = 1; i <= iters; ++i)
-                {
-                    while (go.load(std::memory_order_acquire) != i)
-                    {
-                    }
-                    seqPtr.load(std::memory_order_relaxed)->increment();
-                    done.fetch_add(1, std::memory_order_release);
-                }
-            });
+        threads.emplace_back(IncrementerParams::threadMain, &params, threadIndex);
     }
 
     uint64_t lost = 0;
-    for (uint64_t i = 1; i <= iters; ++i)
+    for (uint64_t i = 1; i <= iterations; ++i)
     {
         FiberSequencer sequencer;
         FiberSequencer::Future future;
         // Token == final counter value: the waiter's wakeup rests on the last of the contended increments,
         // so a wakeup lost in that drain is never repaired by a later one.
-        sequencer.wait(threads, &future);
-        seqPtr.store(&sequencer, std::memory_order_relaxed);
-        done.store(0, std::memory_order_relaxed);
-        go.store(i, std::memory_order_release); // release publishes the fresh sequencer to the incrementers
-        while (done.load(std::memory_order_acquire) != threads)
+        sequencer.wait(numThreads, &future);
+        params.sequencer = &sequencer;
+        params.done.store(0, std::memory_order_relaxed);
+        params.go.store(i, std::memory_order_release); // release publishes the fresh sequencer to the incrementers
+        while (params.done.load(std::memory_order_acquire) != numThreads)
         {
+            cpuPause();
         }
 
-        int err;
-        if (!future.isSet(&err))
+        int r;
+        if (!future.isSet(&r))
         {
             ++lost; // counter reached the token but the waiter was never woken
             // The lost future is still linked in the sequencer's tree/queue; unlink it (all incrementers are
@@ -632,15 +689,277 @@ TEST(FiberSequencer, lostWakeupUnderContention)
         // sequencer and future are destroyed here; all incrementers are parked on go for the next iteration.
     }
 
-    for (std::thread & thread : incrementers)
+    for (std::thread & thread : threads)
     {
         thread.join();
     }
 
-    RecordProperty("iterations", std::to_string(iters));
-    RecordProperty("threads", std::to_string(threads));
+    RecordProperty("iterations", std::to_string(iterations));
+    RecordProperty("threads", std::to_string(numThreads));
     RecordProperty("lost_wakeups", std::to_string(lost));
-    ASSERT_EQ(lost, 0u) << lost << " permanent lost wakeups over " << iters << " iterations with " << threads << " contending incrementers";
+    ASSERT_EQ(lost, 0u) << lost << " permanent lost wakeups over " << iterations << " iterations with " << numThreads
+                        << " contending incrementers";
+}
+
+// cancelWaiters returns only once its flush is done, even while a burst of increments on other threads keeps a combiner
+// running: every unreached future registered before the call is set by the time it returns, never left to a pass the
+// call merely signalled. A future at a reachable token that an increment completes first completes through that
+// increment, possibly after the return, and never stays pending. The burst is finite, so every combiner loop ends.
+TEST(FiberSequencer, cancelWaitersFlushesBeforeItReturns)
+{
+    static constexpr uint32_t INCREMENT_BURST = 64;
+
+    struct IncrementerParams
+    {
+        FiberSequencer * sequencer;
+        uint64_t iterations;
+        const uint16_t * cpus;
+        uint32_t cpuCount;
+        std::atomic<uint64_t> go{0};
+        std::atomic<uint32_t> done{0};
+
+        static void threadMain(IncrementerParams * params, uint32_t threadIndex) noexcept
+        {
+            int r = pinThreadToCpu(params->cpus[(threadIndex + 1) % params->cpuCount]);
+            SILK_ASSERT(r == 0);
+
+            for (uint64_t i = 1; i <= params->iterations; ++i)
+            {
+                while (params->go.load(std::memory_order_acquire) != i)
+                {
+                    cpuPause();
+                }
+
+                for (uint32_t increment = 0; increment < INCREMENT_BURST; ++increment)
+                {
+                    params->sequencer->increment();
+                }
+
+                params->done.fetch_add(1, std::memory_order_release);
+            }
+        }
+    };
+
+    cpu_set_t affinity;
+    int r = sched_getaffinity(0, sizeof(cpu_set_t), &affinity);
+    ASSERT_EQ(r, 0);
+
+    uint16_t cpus[CPU_SETSIZE];
+    uint32_t cpuCount = 0;
+    for (uint16_t cpu = 0; cpu < CPU_SETSIZE; ++cpu)
+    {
+        if (CPU_ISSET(cpu, &affinity))
+        {
+            cpus[cpuCount++] = cpu;
+        }
+    }
+
+    if (cpuCount < 3)
+    {
+        GTEST_SKIP() << "needs >= 3 cores to keep a combiner running on another core";
+    }
+    const uint32_t numThreads = std::min<uint32_t>(4, cpuCount - 1);
+
+    uint64_t iterations = 20'000;
+#if defined(__SANITIZE_THREAD__)
+    iterations = 1'000;
+#endif
+
+    FiberSequencer sequencer;
+    IncrementerParams params{&sequencer, iterations, cpus, cpuCount};
+
+    std::vector<std::thread> threads;
+    for (uint32_t threadIndex = 0; threadIndex < numThreads; ++threadIndex)
+    {
+        threads.emplace_back(IncrementerParams::threadMain, &params, threadIndex);
+    }
+
+    uint64_t late = 0;
+    for (uint64_t i = 1; i <= iterations; ++i)
+    {
+        FiberSequencer::Future unreachable[4];
+        FiberSequencer::Future reachable[4];
+        uint64_t token = sequencer.get() + 1;
+        for (uint32_t index = 0; index < 4; ++index)
+        {
+            sequencer.wait(UINT64_MAX, &unreachable[index]);
+            sequencer.wait(token + index, &reachable[index]);
+        }
+
+        params.done.store(0, std::memory_order_relaxed);
+        params.go.store(i, std::memory_order_release);
+
+        // Call once the burst runs, so another thread is usually the combiner.
+        while (sequencer.get() < token)
+        {
+            cpuPause();
+        }
+
+        sequencer.cancelWaiters();
+
+        for (FiberSequencer::Future & future : unreachable)
+        {
+            int r;
+            if (!future.isSet(&r))
+            {
+                ++late;
+                future.cancel();
+                future.wait();
+            }
+        }
+
+        for (FiberSequencer::Future & future : reachable)
+        {
+            int r = future.wait();
+            SILK_ASSERT(r == 0 || r == ECANCELED, "r=%d", r);
+        }
+
+        while (params.done.load(std::memory_order_acquire) != numThreads)
+        {
+            cpuPause();
+        }
+    }
+
+    for (std::thread & thread : threads)
+    {
+        thread.join();
+    }
+
+    RecordProperty("iterations", std::to_string(iterations));
+    RecordProperty("late_flushes", std::to_string(late));
+    ASSERT_EQ(late, 0u) << late << " futures still pending when cancelWaiters returned over " << iterations << " iterations";
+}
+
+// A registration racing cancelWaiters: the canceller stores a flag and issues a seq_cst fence, then calls cancelWaiters,
+// and each registrar issues a seq_cst fence after its registration, re-checks the flag and cancels its own future when
+// set. Every future must complete - woken by the call or cancelled by its registrar - and none stays pending because
+// both missed. The canceller waits for a varying number of registrations first, so some land before the call and some
+// after; raw OS threads pinned across cores make the rest genuinely race the call's drain. On x86 the locked
+// instructions of the queue push and pop already order the flag, so this test cannot see a missing fence there.
+TEST(FiberSequencer, cancelWaitersRacesRegistration)
+{
+    struct RegistrarParams
+    {
+        uint64_t iterations;
+        const uint16_t * cpus;
+        uint32_t cpuCount;
+        std::atomic<uint64_t> go{0};
+        std::atomic<uint32_t> registered{0};
+        std::atomic<uint32_t> done{0};
+        FiberSequencer * sequencer = nullptr;
+        std::atomic<bool> * flag = nullptr;
+        FiberSequencer::Future * futures = nullptr;
+
+        static void threadMain(RegistrarParams * params, uint32_t threadIndex) noexcept
+        {
+            int r = pinThreadToCpu(params->cpus[(threadIndex + 1) % params->cpuCount]);
+            SILK_ASSERT(r == 0);
+
+            for (uint64_t i = 1; i <= params->iterations; ++i)
+            {
+                while (params->go.load(std::memory_order_acquire) != i)
+                {
+                    cpuPause();
+                }
+
+                FiberSequencer::Future * future = &params->futures[threadIndex];
+                params->sequencer->wait(UINT64_MAX, future);
+                params->registered.fetch_add(1, std::memory_order_release);
+
+                std::atomic_thread_fence(std::memory_order_seq_cst);
+                if (params->flag->load(std::memory_order_relaxed))
+                {
+                    future->cancel();
+                }
+
+                params->done.fetch_add(1, std::memory_order_release);
+            }
+        }
+    };
+
+    cpu_set_t affinity;
+    int r = sched_getaffinity(0, sizeof(cpu_set_t), &affinity);
+    ASSERT_EQ(r, 0);
+
+    uint16_t cpus[CPU_SETSIZE];
+    uint32_t cpuCount = 0;
+    for (uint16_t cpu = 0; cpu < CPU_SETSIZE; ++cpu)
+    {
+        if (CPU_ISSET(cpu, &affinity))
+        {
+            cpus[cpuCount++] = cpu;
+        }
+    }
+
+    if (cpuCount < 3)
+    {
+        GTEST_SKIP() << "needs >= 3 cores to race registrations against the call";
+    }
+    const uint32_t numThreads = std::min<uint32_t>(8, cpuCount) - 1;
+
+    uint64_t iterations = 20'000;
+#if defined(__SANITIZE_THREAD__)
+    // TSan cannot observe a missing StoreLoad fence, so a small count drives the same paths for race detection.
+    iterations = 1'000;
+#endif
+
+    RegistrarParams params{iterations, cpus, cpuCount};
+
+    std::vector<std::thread> threads;
+    for (uint32_t threadIndex = 0; threadIndex < numThreads; ++threadIndex)
+    {
+        threads.emplace_back(RegistrarParams::threadMain, &params, threadIndex);
+    }
+
+    uint64_t lost = 0;
+    for (uint64_t i = 1; i <= iterations; ++i)
+    {
+        FiberSequencer sequencer;
+        std::atomic<bool> flag{false};
+        FiberSequencer::Future futures[8];
+
+        params.sequencer = &sequencer;
+        params.flag = &flag;
+        params.futures = futures;
+        params.registered.store(0, std::memory_order_relaxed);
+        params.done.store(0, std::memory_order_relaxed);
+        params.go.store(i, std::memory_order_release); // release publishes the fresh sequencer, flag and futures
+
+        uint32_t registeredBefore = i % (numThreads + 1);
+        while (params.registered.load(std::memory_order_acquire) < registeredBefore)
+        {
+            cpuPause();
+        }
+
+        flag.store(true, std::memory_order_relaxed);
+        std::atomic_thread_fence(std::memory_order_seq_cst);
+        sequencer.cancelWaiters();
+
+        while (params.done.load(std::memory_order_acquire) != numThreads)
+        {
+            cpuPause();
+        }
+
+        for (uint32_t threadIndex = 0; threadIndex < numThreads; ++threadIndex)
+        {
+            int r;
+            if (!futures[threadIndex].isSet(&r))
+            {
+                ++lost;
+                futures[threadIndex].cancel();
+            }
+        }
+    }
+
+    for (std::thread & thread : threads)
+    {
+        thread.join();
+    }
+
+    RecordProperty("iterations", std::to_string(iterations));
+    RecordProperty("threads", std::to_string(numThreads));
+    RecordProperty("lost_cancels", std::to_string(lost));
+    ASSERT_EQ(lost, 0u) << lost << " futures left pending over " << iterations << " iterations with " << numThreads << " registrar threads";
 }
 
 } // namespace silk
