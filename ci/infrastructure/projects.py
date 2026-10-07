@@ -7,14 +7,9 @@ from praktika.infrastructure.cloud import CloudInfrastructure
 _PRAKTIKA_PACKAGE_BASE_URL = (
     "https://praktika-artifacts-eu-north-1.s3.amazonaws.com/packages"
 )
-_PRAKTIKA_COMPAT_VERSION = "0.1"
-_PRAKTIKA_WHL = (
-    f"{_PRAKTIKA_PACKAGE_BASE_URL}/{_PRAKTIKA_COMPAT_VERSION}/"
-    "praktika-0.0.0-py3-none-any.whl"
-)
+_PRAKTIKA_WHL = f"{_PRAKTIKA_PACKAGE_BASE_URL}/praktika-0.1.15-py3-none-any.whl"
 _PRAKTIKA_CONTROLLER_WHL = (
-    f"{_PRAKTIKA_PACKAGE_BASE_URL}/{_PRAKTIKA_COMPAT_VERSION}/"
-    "praktika_controller-0.0.0-py3-none-any.whl"
+    f"{_PRAKTIKA_PACKAGE_BASE_URL}/praktika_controller-0.1.9-py3-none-any.whl"
 )
 
 
@@ -154,15 +149,8 @@ def _praktika_launch_user_data():
         [
             "#!/usr/bin/env bash",
             "set -xeuo pipefail",
-            "",
-            "# Refresh Praktika controller and runtime from the compat channel on launch.",
-            f"python3.12 -m pip install --ignore-installed {_PRAKTIKA_CONTROLLER_WHL} --break-system-packages",
             "/usr/local/bin/praktika-configure-cloudwatch-agent",
             "/opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl -a fetch-config -m ec2 -c file:/etc/praktika/amazon-cloudwatch-agent.json -s",
-            (
-                f"/opt/praktika/base-venvs/{PRAKTIKA_BASE_VENV}/bin/python "
-                f"-m pip install --force-reinstall {_PRAKTIKA_WHL}"
-            ),
             "systemctl enable --now praktika-controller",
             "",
         ]
@@ -170,7 +158,7 @@ def _praktika_launch_user_data():
 
 
 def _image_builders():
-    image_recipe_version = "1.0.14"
+    image_recipe_version = "1.0.17"
     prebuilt_venvs = [
         ImageBuilder.PrebuiltVenv(
             name=PRAKTIKA_BASE_VENV,
@@ -195,7 +183,7 @@ def _image_builders():
             version=image_recipe_version,
             controller_package=_PRAKTIKA_CONTROLLER_WHL,
             prebuilt_venvs=prebuilt_venvs,
-            instance_types=["t4g.small"],
+            instance_types=["t4g.2xlarge"],
             components=_silk_ci_image_components(),
         ),
         Components.create_ubuntu_image_builder_config(
@@ -203,7 +191,7 @@ def _image_builders():
             version=image_recipe_version,
             controller_package=_PRAKTIKA_CONTROLLER_WHL,
             prebuilt_venvs=prebuilt_venvs,
-            instance_types=["t3.small"],
+            instance_types=["t3.2xlarge"],
             components=_silk_ci_image_components(),
         ),
     ]
@@ -261,7 +249,7 @@ PROJECTS = [
         image_builders=_IMAGE_BUILDERS,
         github_token_minters=[_GH_TOKEN_MINTER],
         orchestrator_pool=Components.OrchestratorPool(
-            instance_type="t4g.small",
+            instance_type="t4g.xlarge",
             scaling=Components.OrchestratorPool.Scaling.Auto,
             size=0,
             max_size=50,
