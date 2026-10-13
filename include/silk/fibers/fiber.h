@@ -259,6 +259,12 @@ public:
     static FiberId getCurrentFiberId() noexcept;
 
     /**
+     * Return true on a scheduler-owned thread's native stack, including switch hooks and before its first fiber.
+     * False inside a fiber and on ordinary threads using a proxy fiber.
+     */
+    static bool isOnSchedulerStack() noexcept;
+
+    /**
      * Return the Fiber handle for the calling context.
      * Valid from any context, including non-fiber threads.
      */

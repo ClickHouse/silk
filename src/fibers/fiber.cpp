@@ -285,6 +285,7 @@ using SuspendedList = List<Fiber, &Fiber::suspendedEntry>;
 // address of an external symbol through the ELF symbol table - fiber.py reads this variable
 // on every thread to list RUNNING fibers.
 thread_local Fiber * threadFiber = nullptr;
+static thread_local bool onSchedulerStack = false;
 
 // Proxy fiber for the current non-fiber thread; destroyed at thread exit.
 static thread_local std::unique_ptr<Fiber> proxyFiber;
@@ -411,7 +412,9 @@ void Fiber::switchToFiberContext() noexcept
     CxaEhGlobals schedulerEh = loadExceptionState();
     storeExceptionState(cxaEhGlobals);
 
+    onSchedulerStack = false;
     auto transfer = boost::context::detail::jump_fcontext(fiberContext, this);
+    onSchedulerStack = true;
     // transfer is populated by the uninstrumented jump_fcontext assembly; MSan cannot see those
     // writes, so mark it initialized (as fiberContextMain does on first entry).
     MSAN_UNPOISON(&transfer, sizeof(transfer));
@@ -1409,7 +1412,7 @@ void FiberScheduler::destroy() noexcept
     delete scheduler;
 }
 
-// noinline is load-bearing, not a hint. These accessors read the threadFiber/proxyFiber
+// noinline is load-bearing, not a hint. These accessors read the threadFiber/proxyFiber/onSchedulerStack
 // thread-locals. A fiber may suspend on one OS thread and resume on another, so a caller
 // that brackets a suspension point must observe the resuming thread's value.
 // If the accessor were inlined, the compiler could materialize the thread pointer once
@@ -1421,6 +1424,11 @@ void FiberScheduler::destroy() noexcept
 __attribute__((noinline)) FiberId FiberScheduler::getCurrentFiberId() noexcept
 {
     return threadFiber ? threadFiber->fiberId : FiberId{};
+}
+
+__attribute__((noinline)) bool FiberScheduler::isOnSchedulerStack() noexcept
+{
+    return onSchedulerStack;
 }
 
 __attribute__((noinline)) Fiber * FiberScheduler::getCurrentFiber() noexcept
@@ -1916,6 +1924,7 @@ LatencyReport FiberScheduler::reportLatency(ProfileEventKind kind, uint8_t categ
 
 void FiberScheduler::runScheduler(ProcessorState * processor) noexcept
 {
+    onSchedulerStack = true;
     int r = pinThreadToCpu(processor->number);
     SILK_ASSERT(!r, "could not pin the scheduler thread to its cpu: r=%d", r);
 
@@ -2512,6 +2521,7 @@ void FiberScheduler::runFiber(Fiber * fiber, CpuTimer * timer) noexcept
 
 void FiberScheduler::runThreadWorker() noexcept
 {
+    onSchedulerStack = true;
     // Confine the overflow pool to the active CPUs so silk never runs a fiber on
     // a reserved core, and so a worker never injects from an inactive CPU.
     int r = pinThreadToCpus(scheduler->activeMask);
