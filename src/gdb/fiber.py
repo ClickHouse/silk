@@ -359,7 +359,8 @@ def _walk_bounded_queue(val):
     A slot at ring position pos is ready for dequeue when sequence == pos + 1.
     """
     mask = int(val["mask"])
-    enqueue_pos = int(_atomic_load(val["enqueuePos"]))
+    # Bit 63 of enqueuePos is the close bit; the rest counts the reserved positions.
+    enqueue_pos = int(_atomic_load(val["enqueuePos"])) & ((1 << 63) - 1)
     dequeue_pos = int(_atomic_load(val["dequeuePos"]))
     slots_base = _unique_ptr(val["slots"])
 

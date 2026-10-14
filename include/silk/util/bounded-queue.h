@@ -56,7 +56,7 @@ public:
     }
 
     /**
-     * Append a value to the tail of the queue. Returns false if the queue is full or
+     * Append a value to the tail of the queue. Returns false if the queue is full, closed, or
      * a concurrent dequeue is in progress on the target slot (see class caveat).
      */
     [[nodiscard]] bool enqueue(T value) noexcept
@@ -64,6 +64,12 @@ public:
         uint64_t pos = enqueuePos.load(std::memory_order_relaxed);
         for (;;)
         {
+            // A closed queue refuses the reservation: the CAS below can no longer match the word close changed.
+            if (pos & CLOSED)
+            {
+                return false;
+            }
+
             Slot & slot = slots[pos & mask];
             uint64_t seq = slot.sequence.load(std::memory_order_acquire);
             int64_t diff = static_cast<int64_t>(seq) - static_cast<int64_t>(pos);
@@ -119,6 +125,21 @@ public:
         }
     }
 
+    /** Refuse every later enqueue, returning once every slot an enqueue reserved before the close carries its value. */
+    void close() noexcept
+    {
+        uint64_t end = enqueuePos.fetch_or(CLOSED, std::memory_order_acq_rel) & ~CLOSED;
+        for (uint64_t pos = dequeuePos.load(std::memory_order_acquire); pos < end; ++pos)
+        {
+            // A reserved slot keeps its free sequence only between its enqueue's CAS and the publish.
+            Slot & slot = slots[pos & mask];
+            while (slot.sequence.load(std::memory_order_acquire) == pos)
+            {
+                cpuPause();
+            }
+        }
+    }
+
     /**
      * Returns true if the queue appears empty. This is a relaxed check; it may transiently
      * return true while a concurrent enqueue is in progress.
@@ -131,6 +152,9 @@ public:
     }
 
 private:
+    /** The close bit of enqueuePos; the remaining bits count the reserved positions. */
+    static constexpr uint64_t CLOSED = uint64_t(1) << 63;
+
     struct alignas(kCacheLineSize) Slot
     {
         std::atomic<uint64_t> sequence;

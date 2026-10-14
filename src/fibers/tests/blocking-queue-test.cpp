@@ -446,4 +446,83 @@ TEST(FiberBlockingQueue, concurrentMPMC)
     ASSERT_EQ(total.load(), N * ITER);
 }
 
+// An enqueue racing teardown either fails or lands before dequeue reports closed: the consumer drains every success.
+TEST(FiberBlockingQueue, teardownDrainsEveryRacingEnqueue)
+{
+    static constexpr uint32_t ROUNDS = 200;
+    static constexpr uint32_t PRODUCERS = 8;
+
+    struct Producer
+    {
+        FiberBlockingQueue<int> * queue;
+        std::atomic<uint64_t> * accepted;
+
+        static int fiberMain(Producer * params) noexcept
+        {
+            for (;;)
+            {
+                int r = params->queue->enqueue(1);
+                if (r)
+                {
+                    return 0;
+                }
+
+                params->accepted->fetch_add(1, std::memory_order_relaxed);
+            }
+        }
+    };
+
+    struct Consumer
+    {
+        FiberBlockingQueue<int> * queue;
+        uint64_t * drained;
+
+        static int fiberMain(Consumer * params) noexcept
+        {
+            for (;;)
+            {
+                int value = 0;
+                int r = params->queue->dequeue(&value);
+                if (r)
+                {
+                    return 0;
+                }
+
+                ++*params->drained;
+            }
+        }
+    };
+
+    for (uint32_t round = 0; round < ROUNDS; ++round)
+    {
+        FiberBlockingQueue<int> queue(64);
+        std::atomic<uint64_t> accepted{};
+        uint64_t drained = 0;
+
+        FiberFuture consumer;
+        int r = FiberScheduler::run(Consumer::fiberMain, {&queue, &drained}, &consumer);
+        ASSERT_FALSE(r);
+
+        FiberFuture producers[PRODUCERS];
+        for (uint32_t i = 0; i < PRODUCERS; ++i)
+        {
+            r = FiberScheduler::run(Producer::fiberMain, {&queue, &accepted}, &producers[i]);
+            ASSERT_FALSE(r);
+        }
+
+        FiberScheduler::sleep(100'000);
+        queue.teardown();
+
+        for (uint32_t i = 0; i < PRODUCERS; ++i)
+        {
+            r = producers[i].wait();
+            ASSERT_FALSE(r);
+        }
+
+        r = consumer.wait();
+        ASSERT_FALSE(r);
+        ASSERT_EQ(drained, accepted.load());
+    }
+}
+
 } // namespace silk

@@ -145,6 +145,8 @@ bool ok = readyQueue.dequeue(&fiber); // false if empty
 
 Slots are cache-line aligned to prevent false sharing between the enqueue and dequeue positions. Used for the per-CPU ready queue in the fiber scheduler.
 
+`close` refuses every later enqueue in the reservation word itself, so an enqueue either reserves its slot before the close or fails, and it returns once every slot reserved before it carries its value. `FiberBlockingQueue::teardown` closes before it stops, so every enqueue that succeeded drains before `dequeue` reports the queue closed.
+
 ---
 
 ## Tree (`tree.h`)
