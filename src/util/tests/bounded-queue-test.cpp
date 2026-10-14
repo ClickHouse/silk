@@ -208,4 +208,30 @@ TEST(BoundedQueue, ConcurrentEnqueueDequeue)
     EXPECT_TRUE(queue.empty());
 }
 
+// close refuses every later enqueue; the values reserved before it stay published and drain in order.
+TEST(BoundedQueue, CloseRefusesLaterEnqueues)
+{
+    BoundedQueue<int> queue(4);
+    bool enqueued = queue.enqueue(1);
+    ASSERT_TRUE(enqueued);
+    enqueued = queue.enqueue(2);
+    ASSERT_TRUE(enqueued);
+
+    queue.close();
+    enqueued = queue.enqueue(3);
+    ASSERT_FALSE(enqueued);
+
+    int value = 0;
+    bool dequeued = queue.dequeue(&value);
+    ASSERT_TRUE(dequeued);
+    ASSERT_EQ(value, 1);
+
+    dequeued = queue.dequeue(&value);
+    ASSERT_TRUE(dequeued);
+    ASSERT_EQ(value, 2);
+
+    dequeued = queue.dequeue(&value);
+    ASSERT_FALSE(dequeued);
+}
+
 } // namespace silk

@@ -107,6 +107,8 @@ public:
     /** Stop new enqueues and unblock waiters: enqueue returns ECANCELED; dequeue drains the rest, then ECANCELED. */
     void teardown() noexcept
     {
+        // Every enqueue that reserved before the close has published when it returns, so dequeue drains it.
+        queue.close();
         spaceAvailable.stop();
         itemAvailable.stop();
     }
