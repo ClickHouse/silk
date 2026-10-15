@@ -109,11 +109,7 @@ Fiber::~Fiber() noexcept
         int r = ::munmap(stack, FiberScheduler::getOptions().fiberStackSize + 2 * getPageSize());
         SILK_ASSERT(!r);
 
-        if (FiberScheduler::getOptions().accountMemoryUnmapped)
-        {
-            FiberScheduler::getOptions().accountMemoryUnmapped(
-                static_cast<uint8_t *>(stack) + getPageSize(), FiberScheduler::getOptions().fiberStackSize);
-        }
+        accountMemoryUnmapped(static_cast<uint8_t *>(stack) + getPageSize(), FiberScheduler::getOptions().fiberStackSize);
     }
 }
 
@@ -150,10 +146,7 @@ bool Fiber::initialize(
         r = ::mprotect(static_cast<uint8_t *>(stack) + getPageSize() + fiberStackSize, getPageSize(), PROT_NONE);
         SILK_ASSERT(!r);
 
-        if (FiberScheduler::getOptions().accountMemoryMapped)
-        {
-            FiberScheduler::getOptions().accountMemoryMapped(static_cast<uint8_t *>(stack) + getPageSize(), fiberStackSize);
-        }
+        accountMemoryMapped(static_cast<uint8_t *>(stack) + getPageSize(), fiberStackSize);
     }
 
 #if defined(__SANITIZE_ADDRESS__)
@@ -362,11 +355,6 @@ void Fiber::parkThread() noexcept
 
 static void accountRingMemoryMappings(const io_uring & ring, MemoryMapCallback * callback) noexcept
 {
-    if (!callback)
-    {
-        return;
-    }
-
     callback(ring.sq.sqes, ring.sq.sqes_sz);
     callback(ring.sq.ring_ptr, ring.sq.ring_sz);
 
@@ -405,7 +393,7 @@ void FiberScheduler::ProcessorState::initialize(uint16_t cpu) noexcept
         parkEnterFlags |= IORING_ENTER_NO_IOWAIT;
     }
 
-    accountRingMemoryMappings(ring, options.accountMemoryMapped);
+    accountRingMemoryMappings(ring, &accountMemoryMapped);
 
     // Arm the wakeup doorbell. The kernel can end the multishot poll on CQ overflow,
     // so handleCompletionQueueSlow re-arms it through the same path on F_MORE loss.
@@ -426,7 +414,7 @@ void FiberScheduler::ProcessorState::destroy() noexcept
 {
     if (eventFd >= 0)
     {
-        accountRingMemoryMappings(ring, options.accountMemoryUnmapped);
+        accountRingMemoryMappings(ring, &accountMemoryUnmapped);
         ::io_uring_queue_exit(&ring);
         ::close(eventFd);
     }

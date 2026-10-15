@@ -115,4 +115,29 @@ uint16_t getProcessorCount() noexcept
     return count;
 }
 
+static MemoryMapCallback * memoryMappedCallback = nullptr;
+static MemoryMapCallback * memoryUnmappedCallback = nullptr;
+
+void setMemoryMapCallbacks(MemoryMapCallback * mapped, MemoryMapCallback * unmapped) noexcept
+{
+    memoryMappedCallback = mapped;
+    memoryUnmappedCallback = unmapped;
+}
+
+void accountMemoryMapped(void * ptr, size_t size) noexcept
+{
+    if (memoryMappedCallback)
+    {
+        memoryMappedCallback(ptr, size);
+    }
+}
+
+void accountMemoryUnmapped(void * ptr, size_t size) noexcept
+{
+    if (memoryUnmappedCallback)
+    {
+        memoryUnmappedCallback(ptr, size);
+    }
+}
+
 } // namespace silk

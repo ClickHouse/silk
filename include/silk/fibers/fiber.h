@@ -45,11 +45,6 @@ using FiberParametersDtor = void(void * parameters) noexcept;
 using FiberSwitchCallback = void(Fiber * fiber) noexcept;
 
 /**
- * Memory mapping callback.  Called when silk maps or unmaps memory outside the C++ heap.
- */
-using MemoryMapCallback = void(void * ptr, size_t size) noexcept;
-
-/**
  * Packed fiber identity: [category:8 | cpu:10 | counter:46] stored as uint64_t.
  *  category: byte passed to run; the runtime treats it as opaque.
  *  cpu:      CPU on which the fiber's id was created at allocation time.
@@ -176,11 +171,6 @@ public:
         // across the OS thread the fiber borrows. Not invoked for proxy fibers.
         FiberSwitchCallback * fiberSuspend = nullptr;
         FiberSwitchCallback * fiberResume = nullptr;
-
-        // Optional hooks for silk memory maps/unmaps outside the heap: fiber stacks (guard pages
-        // excluded) and io_uring rings.
-        MemoryMapCallback * accountMemoryMapped = nullptr;
-        MemoryMapCallback * accountMemoryUnmapped = nullptr;
 
         // Restrict scheduler and worker threads to the CPUs whose bit is set
         // here, intersected with the affinity mask of the thread calling
