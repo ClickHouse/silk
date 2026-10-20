@@ -25,7 +25,8 @@ struct rseq
     uint32_t cpu_id_start;
     uint32_t cpu_id;
 };
-extern "C" ptrdiff_t __rseq_offset;
+extern "C" ptrdiff_t rseq_offset;
+#    define __rseq_offset rseq_offset
 #endif
 
 /** Suppress unused-variable warnings. */
