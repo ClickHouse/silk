@@ -38,6 +38,24 @@ The next rebuild starts from whatever this branch holds, so nothing else needs u
 {mentions}"""
 
 
+def _authenticated_fetch():
+    shallow = Shell.get_output("git rev-parse --is-shallow-repository") == "true"
+    unshallow = "--unshallow " if shallow else ""
+    fetch = (
+        'token="$(gh auth token)" && git fetch '
+        f"{unshallow}https://x-access-token:${{token}}@github.com/{REPOSITORY}.git "
+        "+refs/heads/main:refs/remotes/origin/main "
+        f"+refs/heads/{BRANCH}:refs/remotes/origin/{BRANCH}"
+    )
+    return_code, stdout, stderr = Shell.get_res_stdout_stderr(fetch, verbose=False)
+    if return_code == 0:
+        return True
+    output = "\n".join(part for part in (stdout, stderr) if part)
+    print(f"ERROR: failed to fetch main and {BRANCH}")
+    print(TOKENIZED_GITHUB_URL.sub(r"\1***\2", output))
+    return False
+
+
 def _authenticated_push(refs):
     push = (
         'token="$(gh auth token)" && git push -f '
@@ -95,12 +113,12 @@ def _report_conflict(sha):
 
 def rebuild():
     sha = Info().sha
-    shallow = Shell.get_output("git rev-parse --is-shallow-repository") == "true"
-    unshallow = "--unshallow " if shallow else ""
+    if not _authenticated_fetch():
+        return False
+
     if not Shell.check(
         'git config user.name "clickhouse-robot-gh"'
         ' && git config user.email "clickhouse-robot-gh@users.noreply.github.com"'
-        f" && git fetch {unshallow}origin main {BRANCH}"
         f" && git checkout -B {BRANCH} origin/{BRANCH}~1",
         verbose=True,
     ):
