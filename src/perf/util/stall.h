@@ -2,6 +2,10 @@
 
 #include <cstdint>
 #include <random>
+#include <string>
+
+/** Parse a stall duration that fits in the uint32_t wire field. */
+uint32_t parseStallDuration(const std::string & str);
 
 /**
  * Per-connection Poisson scheduler for stall messages in net-perf workloads.
@@ -21,7 +25,7 @@ public:
      * constructor so the caller's first call to next() returns 0 (no stall on
      * the first message). rateHz = 0 leaves the scheduler disabled.
      */
-    StallScheduler(double rateHz_, uint64_t stallNs_, uint64_t seed) noexcept
+    StallScheduler(double rateHz_, uint32_t stallNs_, uint64_t seed) noexcept
         : rateHz(rateHz_)
         , stallNs(stallNs_)
         , rng(seed)
@@ -39,7 +43,7 @@ public:
 
 private:
     double rateHz = 0.0;
-    uint64_t stallNs = 0;
+    uint32_t stallNs = 0;
     std::mt19937_64 rng;
     uint64_t nextStallCycles = 0;
 };
