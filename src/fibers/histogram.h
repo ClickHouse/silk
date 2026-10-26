@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <cstdint>
 
 namespace silk
@@ -13,6 +14,7 @@ static constexpr uint32_t log2Floor(uint64_t n) noexcept
 
 /**
  * Log2 histogram with clamped range.
+ * The caller serializes writers; a reader on another thread sees a relaxed snapshot.
  */
 class Histogram
 {
@@ -25,7 +27,8 @@ public:
         {
             bucket = NUM_BUCKETS - 1;
         }
-        buckets[bucket]++;
+        uint64_t bucketCount = buckets[bucket].load(std::memory_order_relaxed);
+        buckets[bucket].store(bucketCount + 1, std::memory_order_relaxed);
     }
 
     /** Add another histogram's counts into this one. */
@@ -33,7 +36,9 @@ public:
     {
         for (uint32_t i = 0; i < NUM_BUCKETS; ++i)
         {
-            buckets[i] += other.buckets[i];
+            uint64_t otherCount = other.buckets[i].load(std::memory_order_relaxed);
+            uint64_t bucketCount = buckets[i].load(std::memory_order_relaxed);
+            buckets[i].store(bucketCount + otherCount, std::memory_order_relaxed);
         }
     }
 
@@ -41,9 +46,9 @@ public:
     uint64_t count() const noexcept
     {
         uint64_t total = 0;
-        for (uint64_t c : buckets)
+        for (const std::atomic<uint64_t> & bucket : buckets)
         {
-            total += c;
+            total += bucket.load(std::memory_order_relaxed);
         }
         return total;
     }
@@ -58,7 +63,7 @@ private:
     static constexpr uint64_t MAX_NS = 1'000'000'000; // 1 s
     static constexpr uint32_t NUM_BUCKETS = log2Floor(MAX_NS) + 2;
 
-    uint64_t buckets[NUM_BUCKETS] = {};
+    std::atomic<uint64_t> buckets[NUM_BUCKETS] = {};
 };
 
 } // namespace silk

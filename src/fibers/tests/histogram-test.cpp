@@ -2,10 +2,15 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cstdint>
+#include <thread>
 
 namespace silk
 {
+
+static constexpr uint64_t CONCURRENT_SAMPLE_COUNT = 100'000;
+static constexpr uint32_t CONCURRENT_MERGE_COUNT = 1'000;
 
 // Empty histogram has zero count and percentile returns 0.
 TEST(Histogram, empty)
@@ -103,6 +108,33 @@ TEST(Histogram, mergeEmpty)
 
     a.merge(empty);
     EXPECT_EQ(a.count(), 2u);
+}
+
+static void recordSamples(Histogram * histogram) noexcept
+{
+    for (uint64_t i = 0; i < CONCURRENT_SAMPLE_COUNT; ++i)
+    {
+        histogram->record(i);
+    }
+}
+
+// Another thread may merge and count a histogram while its writer records.
+TEST(Histogram, mergeWhileRecording)
+{
+    Histogram histogram;
+    std::thread writer(recordSamples, &histogram);
+
+    uint64_t maxSnapshotCount = 0;
+    for (uint32_t i = 0; i < CONCURRENT_MERGE_COUNT; ++i)
+    {
+        Histogram snapshot;
+        snapshot.merge(histogram);
+        maxSnapshotCount = std::max(maxSnapshotCount, snapshot.count());
+    }
+
+    writer.join();
+    ASSERT_LE(maxSnapshotCount, CONCURRENT_SAMPLE_COUNT);
+    ASSERT_EQ(histogram.count(), CONCURRENT_SAMPLE_COUNT);
 }
 
 } // namespace silk
