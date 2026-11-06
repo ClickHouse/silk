@@ -179,7 +179,7 @@ Public headers live under `include/silk/<component>/` and are included as `<silk
 - Never revert someone's work without asking first
 - Commit messages are a title plus one paragraph — facts only: what changed and why; no background, no discussion, no narrative; the body wraps at 72 columns
 - No `Co-Authored-By` / Claude trailer in commit messages, and no Claude attribution in PR bodies or anywhere else
-- Commit granularity is semantic — a feature and its removal are one commit, a fix to uncommitted work folds into the commit it fixes; a doc or proposal never rides a code commit
+- Commit granularity is semantic — a feature and its removal are one commit, a fix to uncommitted work folds into the commit it fixes; the design-doc update that describes a change rides that change's commit
 - CMake stays plain — no generated `-P` scripts; optional tooling sits behind a CMake `option`; checkers are registered as ctest tests
 - Self-review every changed line against these rules before submitting and record it in the PR description: for each new allocation or acquire its failure path and its release site, for each new construct (allocation, static or thread-local state, a pool) the precedent `file:line` it follows
 
