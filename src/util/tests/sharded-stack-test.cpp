@@ -1,7 +1,11 @@
 #include <silk/util/sharded-stack.h>
 
+#include <silk/util/platform.h>
+
 #include <gtest/gtest.h>
 
+#include <atomic>
+#include <chrono>
 #include <thread>
 #include <unordered_set>
 #include <vector>
@@ -278,6 +282,94 @@ TEST(ShardedStack, ConcurrentSmallBatch)
         &totalPopped);
 
     EXPECT_EQ(totalPopped.load(), N_TOTAL);
+}
+
+TEST(ShardedStack, ConcurrentMigrationNoLoss)
+{
+    constexpr int N_THREADS = 8;
+    constexpr int N_ENTRIES = 256;
+    constexpr int N_CPUS = 4;
+
+    cpu_set_t affinitySet;
+    int r = sched_getaffinity(0, sizeof(cpu_set_t), &affinitySet);
+    ASSERT_FALSE(r);
+
+    int cpus[N_CPUS];
+    int cpuCount = 0;
+    for (int cpu = 0; cpu < CPU_SETSIZE && cpuCount < N_CPUS; ++cpu)
+    {
+        if (CPU_ISSET(cpu, &affinitySet))
+        {
+            cpus[cpuCount++] = cpu;
+        }
+    }
+
+    if (cpuCount < 2)
+    {
+        GTEST_SKIP() << "the migration needs two CPUs";
+    }
+
+    // batchSize=1 sends every operation to a slow path.
+    TestStack stack{1};
+    std::vector<TestEntry> entries(N_ENTRIES);
+    for (int i = 0; i < N_ENTRIES; ++i)
+    {
+        entries[i].value = i;
+        stack.push(&entries[i]);
+    }
+
+    std::atomic<bool> stopped{false};
+    std::atomic<bool> migratorStopped{false};
+    std::atomic<pid_t> threadIds[N_THREADS] = {};
+    std::vector<std::thread> threads;
+    for (int t = 0; t < N_THREADS; ++t)
+    {
+        threads.emplace_back(
+            [&, t]
+            {
+                threadIds[t].store(gettid());
+                while (!stopped.load(std::memory_order_relaxed))
+                {
+                    if (TestEntry * entry = stack.pop())
+                    {
+                        stack.push(entry);
+                    }
+                }
+            });
+    }
+
+    // Continuously re-pin threads to random CPUs.
+    std::thread migrator(
+        [&]
+        {
+            for (uint64_t step = 0; !migratorStopped.load(std::memory_order_relaxed); ++step)
+            {
+                cpu_set_t cpuSet;
+                CPU_ZERO(&cpuSet);
+                CPU_SET(cpus[intHash(step) % cpuCount], &cpuSet);
+                if (pid_t threadId = threadIds[step % N_THREADS].load())
+                {
+                    int r = sched_setaffinity(threadId, sizeof(cpu_set_t), &cpuSet);
+                    SILK_ASSERT(!r, "could not re-pin a thread: errno=%d", errno);
+                }
+            }
+        });
+
+    std::this_thread::sleep_for(std::chrono::seconds(2));
+    migratorStopped.store(true);
+    migrator.join();
+    stopped.store(true);
+    for (auto & thread : threads)
+    {
+        thread.join();
+    }
+
+    std::unordered_set<int> recovered;
+    stack.drain(
+        [](TestEntry * entry, void * raw) noexcept
+        { EXPECT_TRUE(static_cast<std::unordered_set<int> *>(raw)->insert(entry->value).second) << "duplicate: " << entry->value; },
+        &recovered);
+    ASSERT_EQ(recovered.size(), N_ENTRIES);
 }
 
 } // namespace silk

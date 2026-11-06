@@ -92,16 +92,29 @@ void ShardedStackBase::push(StackEntry * entry) noexcept
         else
         {
             // Slow path: per-CPU list full, move it to the global pool.
-            flush(state);
+            // Relaxed is enough: head is written only by rseq sections on its own CPU and by
+            // the public flush, which runs only when no push or pop runs.
+            StackEntry * head = state->head.load(std::memory_order_relaxed);
+            TSAN_IGNORE_BEGIN();
+            int ret = rseq_load_cbne_store__ptr(
+                RSEQ_MO_RELAXED, // only supported memory order
+                RSEQ_PERCPU_CPU_ID, // identify CPU via cpu_id field
+                state->headPtr(), // per-CPU head pointer
+                reinterpret_cast<intptr_t>(head), // return 1 if head changed
+                0, // store null as new head on success
+                static_cast<int>(cpu)); // expected CPU ID
+            TSAN_IGNORE_END();
+
+            if (ret == 0)
+            {
+                flush(state, head);
+            }
         }
     }
 }
 
-void ShardedStackBase::flush(ProcessorState * state) noexcept
+void ShardedStackBase::flush(ProcessorState * state, StackEntry * head) noexcept
 {
-    // acq_rel: acquire observes any in-progress rseq commit;
-    // release publishes the null so subsequent rseq reads see an empty list.
-    StackEntry * head = state->head.exchange(nullptr, std::memory_order_acq_rel);
     state->count.store(0, std::memory_order_relaxed);
 
     if (head)
@@ -159,7 +172,7 @@ StackEntry * ShardedStackBase::pop() noexcept
         if (ret == 1)
         {
             // Slow path: per-CPU list empty, pull a batch from the global pool.
-            if (!refill(state))
+            if (!refill(state, cpu))
             {
                 return nullptr;
             }
@@ -170,7 +183,7 @@ StackEntry * ShardedStackBase::pop() noexcept
     }
 }
 
-bool ShardedStackBase::refill(ProcessorState * state) noexcept
+bool ShardedStackBase::refill(ProcessorState * state, uint32_t cpu) noexcept
 {
     // Slow path for pop: pull a batch from the global pool and install it as the
     // per-CPU list. Returns true if at least one entry is now available.
@@ -189,7 +202,7 @@ bool ShardedStackBase::refill(ProcessorState * state) noexcept
     }
 
     // Walk the chain to find the tail and actual count. Both are needed below:
-    // the tail for pushBatch on CAS failure, the count to correctly initialize
+    // the tail for pushBatch on rseq failure, the count to correctly initialize
     // ProcessorState::count (which may be less than batchSize if the FreeList
     // was partially filled by an explicit flush rather than a full overflow).
     StackEntry * tail = newHead;
@@ -200,24 +213,27 @@ bool ShardedStackBase::refill(ProcessorState * state) noexcept
         actualCount++;
     }
 
-    // Install the batch as the per-CPU list. Use CAS rather than a plain store:
+    // Install the batch as the per-CPU list. Use rseq rather than CAS or a plain store:
     // if we migrated between entering the slow path and reaching this point,
     // another thread may have pushed to this CPU's head concurrently, and a
-    // plain store would clobber that entry.
-    StackEntry * expected = state->head.load(std::memory_order_relaxed);
-    for (;;)
-    {
-        if (expected)
-        {
-            pushBatch(newHead, tail);
-            break;
-        }
+    // CAS or a plain store would clobber that entry.
+    TSAN_IGNORE_BEGIN();
+    int ret = rseq_load_cbne_store__ptr(
+        RSEQ_MO_RELAXED, // only supported memory order
+        RSEQ_PERCPU_CPU_ID, // identify CPU via cpu_id field
+        state->headPtr(), // per-CPU head pointer
+        0, // return 1 if head is not null
+        reinterpret_cast<intptr_t>(newHead), // store the batch as new head on success
+        static_cast<int>(cpu)); // expected CPU ID
+    TSAN_IGNORE_END();
 
-        if (state->head.compare_exchange_weak(expected, newHead, std::memory_order_relaxed, std::memory_order_relaxed))
-        {
-            state->count.store(actualCount, std::memory_order_relaxed);
-            break;
-        }
+    if (ret == 0)
+    {
+        state->count.store(actualCount, std::memory_order_relaxed);
+    }
+    else
+    {
+        pushBatch(newHead, tail);
     }
 
     return true;
@@ -239,7 +255,10 @@ void ShardedStackBase::flush() noexcept
 {
     for (uint32_t i = 0; i < processorCount; ++i)
     {
-        flush(&processorState[i]);
+        // acq_rel: acquire observes any in-progress rseq commit;
+        // release publishes the null so subsequent rseq reads see an empty list.
+        StackEntry * head = processorState[i].head.exchange(nullptr, std::memory_order_acq_rel);
+        flush(&processorState[i], head);
     }
 }
 

@@ -95,8 +95,8 @@ private:
     // Helpers.
     //
 
-    void flush(ProcessorState * state) noexcept;
-    bool refill(ProcessorState * state) noexcept;
+    void flush(ProcessorState * state, StackEntry * head) noexcept;
+    bool refill(ProcessorState * state, uint32_t cpu) noexcept;
     FreeList * acquireFreeList() noexcept;
     void releaseFreeList(FreeList * freeList) noexcept;
 
