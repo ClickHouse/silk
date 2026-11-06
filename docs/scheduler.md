@@ -125,7 +125,7 @@ All sleep deadlines are in TSC cycles. `Tsc::getCycles()` is `rdtsc` / `cntvct_e
 
 ## Async IO
 
-Each of `read`, `write`, and `poll` has two overloads: a blocking form that submits an io_uring SQE and suspends the fiber until completion, and an async form that submits the SQE and returns immediately with an `IoFuture*` the caller waits on separately. `handleCompletionQueue` processes CQEs, extracts the `IoFuture*` from the CQE user data, and calls `future->set()` to wake the waiting fiber.
+Each of `read`, `write`, and `poll` has two overloads: a blocking form that submits an io_uring SQE and suspends the fiber until completion, and an async form that submits the SQE and returns immediately with an `IoFuture*` the caller waits on separately. `handleCompletionQueue` processes CQEs, extracts the `IoFuture*` from the CQE user data, and calls `future->set()` to wake the waiting fiber. The SQE lands in the ring of the caller's CPU: `runFiber` submits the ring of the fiber's own processor once the fiber suspends, and an SQE in any other ring - a proxy fiber's, or one a worker thread fills in the ring of the CPU it runs on - is submitted at once, since a processor parked outside the prefix never returns to submit it.
 
 ### Registered (fixed) buffers
 

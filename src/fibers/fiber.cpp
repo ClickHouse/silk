@@ -1491,10 +1491,10 @@ void FiberScheduler::enqueueIo(IoFuture * future, Setup && setup) noexcept
         yield();
     }
 
-    // Regular fiber: runFiber calls submitIo after the fiber suspends.
-    // Proxy fiber: submit immediately since there is no runFiber flush.
+    // runFiber submits the ring of the fiber's processor once the fiber suspends; a proxy fiber has no runFiber,
+    // and a fiber a worker thread runs can fill the ring of another CPU, so either submits here.
     Fiber * fiber = getCurrentFiber();
-    if (fiber->isProxyFiber)
+    if (fiber->isProxyFiber || processor->number != fiber->processorNumber)
     {
         processor->submitIo(true);
     }
@@ -1612,8 +1612,9 @@ void FiberScheduler::cancelIo(IoFuture * future) noexcept
         yield();
     }
 
-    // If we enqueued to a remote processor's ring, force-submit.
-    if (processorNumber != getCurrentProcessor() || getCurrentFiber()->isProxyFiber)
+    // If we enqueued to a ring runFiber does not submit, force-submit.
+    Fiber * fiber = getCurrentFiber();
+    if (fiber->isProxyFiber || processorNumber != fiber->processorNumber)
     {
         processor->submitIo(true);
     }
