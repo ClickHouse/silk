@@ -61,24 +61,25 @@ public:
         for (;;)
         {
             uint64_t token = itemAvailable.get();
+
+            // Drain before honoring teardown: read the stop before the dequeue. teardown stops only after close saw
+            // every reserved slot published, so a dequeue after the stop read sees every item a successful enqueue
+            // published, and an empty result is final.
+            bool stopped = itemAvailable.stopped();
             if (queue.dequeue(value))
             {
                 spaceAvailable.post();
                 return 0;
             }
 
-            // Drain before honoring teardown: a torn-down queue still yields its remaining items and reports
-            // ECANCELED only once empty, so an owner can dequeue to clean up after teardown.
-            if (itemAvailable.stopped())
+            if (stopped)
             {
                 return ECANCELED;
             }
 
+            // A stop ends the wait with ECANCELED and drops every later post; the next pass reads the stop and drains.
             int r = itemAvailable.wait(token + 1);
-            if (r)
-            {
-                return r;
-            }
+            SILK_UNUSED(r);
         }
     }
 
