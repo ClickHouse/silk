@@ -3,6 +3,7 @@
 #include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <ctime>
 
 namespace silk
@@ -18,9 +19,16 @@ void Logger::log(LogLevel level, const char * file, int line, const char * messa
     tm t;
     ::gmtime_r(&ts.tv_sec, &t);
 
+    // A message ending in an empty error frame prints no blank line.
+    size_t length = std::strlen(message);
+    while (length && message[length - 1] == '\n')
+    {
+        length--;
+    }
+
     std::fprintf(
         stderr,
-        "%04d-%02d-%02d %02d:%02d:%02d.%03ld [%s] %s:%d: %s\n",
+        "%04d-%02d-%02d %02d:%02d:%02d.%03ld [%s] %s:%d: %.*s\n",
         t.tm_year + 1900,
         t.tm_mon + 1,
         t.tm_mday,
@@ -31,6 +39,7 @@ void Logger::log(LogLevel level, const char * file, int line, const char * messa
         LEVEL_NAMES[static_cast<int>(level)],
         file,
         line,
+        static_cast<int>(length),
         message);
 }
 
