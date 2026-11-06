@@ -2,12 +2,16 @@
 #include <silk/fibers/future.h>
 #include <silk/fibers/mutex.h>
 #include <silk/util/platform.h>
+#include <silk/util/tsc.h>
 
 #include <gtest/gtest.h>
 
 #include <atomic>
 
+#include <fcntl.h>
 #include <unistd.h>
+
+#include <sys/uio.h>
 
 // Basic enter/exit: fiber enters thread mode, does work, exits, then continues
 // as a cooperative fiber and returns a result.
@@ -260,6 +264,75 @@ TEST(FiberThreadMode, readyQueueOverflow)
         int r = futures[i].wait();
         ASSERT_EQ(r, i);
     }
+}
+
+/** Bound on a read from /dev/zero: a read the kernel received completes in microseconds. */
+static constexpr uint64_t READ_TIMEOUT_NS = 1'000'000'000;
+
+/** Read from fd and wait for the read without a bound, the way a socket writer waits for its write. */
+static int readZeroes(int fd) noexcept
+{
+    char buffer[8];
+    iovec part{buffer, sizeof(buffer)};
+    uint64_t bytesRead;
+    FiberScheduler::IoFuture future;
+    FiberScheduler::read(fd, &part, 1, 0, &bytesRead, &future);
+
+    int r = future.wait();
+    if (r)
+    {
+        return r;
+    }
+
+    return bytesRead == sizeof(buffer) ? 0 : EIO;
+}
+
+/** Poll the future from the test thread until it is set; abort when its read never reaches the kernel. */
+static void waitUntilSet(FiberFuture * future) noexcept
+{
+    // A wait through the scheduler would arm a sleep that wakes the processor holding the read, so the test
+    // thread polls instead.
+    uint64_t deadlineCycles = Tsc::getCycles() + Tsc::nanosecondsToCycles(READ_TIMEOUT_NS);
+    int r;
+    while (!future->isSet(&r))
+    {
+        SILK_ASSERT(Tsc::getCycles() < deadlineCycles, "a read did not complete within %lu ns", READ_TIMEOUT_NS);
+        ::usleep(100);
+    }
+}
+
+// A thread-mode fiber runs on a worker thread, whose CPU's ring need not be the one runFiber submits after
+// the fiber suspends: every read it issues must still reach the kernel while the idle processors park.
+TEST(FiberThreadMode, readCompletes)
+{
+    static constexpr int ITERATIONS = 256;
+
+    struct Reader
+    {
+        int fd;
+
+        static int fiberMain(Reader * params) noexcept
+        {
+            FiberScheduler::ThreadModeScope scope;
+            return readZeroes(params->fd);
+        }
+    };
+
+    int fd = ::open("/dev/zero", O_RDONLY | O_CLOEXEC);
+    ASSERT_GE(fd, 0);
+
+    for (int i = 0; i < ITERATIONS; ++i)
+    {
+        FiberFuture future;
+        int r = FiberScheduler::run(Reader::fiberMain, {fd}, &future);
+        ASSERT_FALSE(r);
+
+        waitUntilSet(&future);
+        r = future.wait();
+        ASSERT_EQ(r, 0) << "iteration " << i;
+    }
+
+    ::close(fd);
 }
 
 } // namespace silk
