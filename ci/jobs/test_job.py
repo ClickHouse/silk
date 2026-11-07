@@ -17,7 +17,7 @@ _BUILD_FLAGS = {
 # jemalloc, and the MSan build skips Poco too.
 _COMPONENTS = {
     "coverage": [],
-    "release": ["poco", "jemalloc"],
+    "release": ["poco", "jemalloc", "lto"],
     "tsan": ["poco"],
     "asan": ["poco"],
     "ubsan": ["poco"],
