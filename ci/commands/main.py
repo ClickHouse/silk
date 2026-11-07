@@ -263,6 +263,12 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="enable jemalloc library",
     )
+    configure_parser.add_argument(
+        "--build-lto",
+        dest="lto",
+        action="store_true",
+        help="build with ThinLTO",
+    )
 
     build_parser = sub.add_parser("build", help="build the project (default command)")
     build_parser.add_argument("targets", nargs="*", help="CMake targets to build")
@@ -406,7 +412,7 @@ def _run_command(args: argparse.Namespace, extra: list[str], preset: str) -> Non
         cmd_lint()
     elif args.command == "configure":
         _check_no_extra(extra)
-        cmd_configure(preset, BuildParams(args.poco, args.aws, args.jemalloc))
+        cmd_configure(preset, BuildParams(args.poco, args.aws, args.jemalloc, args.lto))
     elif args.command == "build":
         _check_no_extra(extra)
         cmd_build(preset, args.targets)

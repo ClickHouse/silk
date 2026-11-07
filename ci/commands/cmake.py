@@ -13,6 +13,7 @@ class BuildParams:
     poco: bool = False
     aws: bool = False
     jemalloc: bool = False
+    lto: bool = False
 
 
 def cmd_clean() -> None:
@@ -35,6 +36,8 @@ def cmd_configure(preset: str, params: BuildParams) -> None:
         args += ["-DBUILD_AWS=ON"]
     if params.jemalloc:
         args += ["-DBUILD_JEMALLOC=ON"]
+    if params.lto:
+        args += ["-DLTO=ON"]
     run(*args)
 
 

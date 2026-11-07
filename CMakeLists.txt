@@ -128,6 +128,12 @@ if(COVERAGE)
     add_link_options(-fprofile-instr-generate)
 endif()
 
+option(LTO "Build with ThinLTO" OFF)
+if(LTO)
+    add_compile_options(-flto=thin)
+    add_link_options(-flto=thin)
+endif()
+
 option(BUILD_BENCHMARKS "Build benchmark targets" ON)
 
 include(CTest)
