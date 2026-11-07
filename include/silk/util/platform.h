@@ -127,8 +127,8 @@ static inline uint16_t getAvailableProcessorCount() noexcept
     return static_cast<uint16_t>(CPU_COUNT(&cpuSet));
 }
 
-/** Return the index of the CPU the calling thread is currently running on. */
-static inline uint16_t getCurrentProcessor() noexcept
+/** Return the thread pointer of the calling thread, read afresh at every call. */
+static inline char * getThreadPointer() noexcept
 {
     // The thread pointer is read through volatile asm rather than __builtin_thread_pointer(). A fiber
     // may suspend on one OS thread and resume on another (work-stealing, or the SQ-ring-overflow yield
@@ -146,12 +146,17 @@ static inline uint16_t getCurrentProcessor() noexcept
 #else
 #    error Unsupported platform
 #endif
+    return threadPointer;
+}
 
+/** Return the index of the CPU the calling thread is currently running on. */
+static inline uint16_t getCurrentProcessor() noexcept
+{
     // glibc's sched_getcpu fast path is THREAD_GETMEM_VOLATILE(THREAD_SELF, rseq_area.cpu_id),
     // which is the same rseq read we do here. We skip the function call and the cpu_id >= 0
     // fallback to vDSO/syscall - safe on any libc implementing the glibc 2.35 rseq ABI, which
     // registers the area for every thread before it runs; initialize asserts this at startup.
-    struct rseq * rseq = reinterpret_cast<struct rseq *>(threadPointer + __rseq_offset);
+    struct rseq * rseq = reinterpret_cast<struct rseq *>(getThreadPointer() + __rseq_offset);
     return static_cast<uint16_t>(rseq->cpu_id);
 }
 

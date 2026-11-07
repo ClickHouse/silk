@@ -2,11 +2,13 @@
 #include <silk/fibers/future.h>
 #include <silk/fibers/mutex.h>
 #include <silk/util/platform.h>
+#include <silk/util/sharded-stack.h>
 #include <silk/util/tsc.h>
 
 #include <gtest/gtest.h>
 
 #include <atomic>
+#include <unordered_set>
 
 #include <fcntl.h>
 #include <unistd.h>
@@ -333,6 +335,74 @@ TEST(FiberThreadMode, readCompletes)
     }
 
     ::close(fd);
+}
+
+// Fibers pop on a scheduler thread and push from a worker thread in thread mode; the drain must
+// return every entry exactly once.
+TEST(FiberThreadMode, shardedStackAcrossThreadSwitch)
+{
+    struct Entry
+    {
+        StackEntry stackEntry;
+    };
+    using EntryStack = ShardedStack<Entry, &Entry::stackEntry>;
+
+    static constexpr int N_FIBERS = 1000;
+    static constexpr int N_ROUNDS = 200;
+
+    struct Params
+    {
+        EntryStack * stack;
+
+        static int fiberMain(Params * params) noexcept
+        {
+            // On ARM and with LTO enabled, the thread local storage base pointer is hoisted and used
+            // in (inlined) pop and push rseq TLS accesses. Even when we yield the fiber.
+            // The compiler is not aware that yield returns on another thread.
+            // That breaks rseq invariants: namely, we can work with one rseq area concurrently.
+            // Therefore, we need to make sure rseq re-reads the TLS base pointer internally.
+            for (int i = 0; i < N_ROUNDS; ++i)
+            {
+                // Entries cached on another CPU's list are invisible to this pop,
+                // so it can return nullptr.
+                Entry * entry = params->stack->pop();
+                if (!entry)
+                {
+                    continue;
+                }
+
+                FiberScheduler::ThreadModeScope scope;
+                params->stack->push(entry);
+            }
+            return 0;
+        }
+    };
+
+    EntryStack stack{1};
+    Entry entries[N_FIBERS];
+    for (Entry & entry : entries)
+    {
+        stack.push(&entry);
+    }
+
+    FiberFuture futures[N_FIBERS];
+    for (FiberFuture & future : futures)
+    {
+        int r = FiberScheduler::run(Params::fiberMain, {&stack}, &future);
+        ASSERT_EQ(r, 0);
+    }
+
+    for (FiberFuture & future : futures)
+    {
+        ASSERT_EQ(future.wait(), 0);
+    }
+
+    std::unordered_set<Entry *> recovered;
+    stack.drain(
+        [](Entry * entry, void * raw) noexcept
+        { EXPECT_TRUE(static_cast<std::unordered_set<Entry *> *>(raw)->insert(entry).second) << "duplicate: " << entry; },
+        &recovered);
+    ASSERT_EQ(recovered.size(), N_FIBERS);
 }
 
 } // namespace silk
