@@ -122,7 +122,7 @@ public:
 
     /**
      * Set the same result on a batch of futures and wake their waiters together. Equivalent to calling
-     * set(err) on each, but the plain-fiber waiter wakeups are coalesced into a single batched schedule.
+     * set(err) on each, but the fiber waiter wakeups are coalesced into a single batched schedule.
      * Each future must be set at most once.
      */
     static void setAll(int err, FiberFuture ** futures, uint64_t count) noexcept;

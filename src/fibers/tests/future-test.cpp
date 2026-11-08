@@ -429,6 +429,66 @@ TEST(FiberFuture, setAllWakesWaiters)
     }
 }
 
+// setAll wakes multiple-wait waiters in its batches; each woken fiber sees the set future's index and value.
+TEST(FiberFuture, setAllWakesMultipleWaiters)
+{
+    constexpr uint64_t N = 100;
+
+    struct Params
+    {
+        FiberFuture * started;
+        FiberFuture * wait;
+        FiberFuture * never;
+
+        static int fiberMain(Params * params) noexcept
+        {
+            params->started->set(0);
+
+            FiberFuture * futures[] = {params->wait, params->never};
+            uint64_t index = FiberFuture::waitForMultiple(futures, std::size(futures));
+            if (index)
+            {
+                return -1;
+            }
+
+            return params->wait->wait();
+        }
+    };
+
+    std::vector<FiberFuture> started(N);
+    std::vector<FiberFuture> wait(N);
+    std::vector<FiberFuture> never(N);
+    std::vector<FiberFuture> done(N);
+
+    for (uint64_t i = 0; i < N; ++i)
+    {
+        int r = FiberScheduler::run(Params::fiberMain, {&started[i], &wait[i], &never[i]}, &done[i]);
+        ASSERT_FALSE(r);
+    }
+
+    // Let every fiber park in waitForMultiple before the batched wake.
+    for (uint64_t i = 0; i < N; ++i)
+    {
+        started[i].wait();
+    }
+
+    FiberScheduler::sleep(10'000'000);
+
+    std::vector<FiberFuture *> futures(N);
+    for (uint64_t i = 0; i < N; ++i)
+    {
+        futures[i] = &wait[i];
+    }
+
+    FiberFuture::setAll(42, futures.data(), N);
+
+    for (uint64_t i = 0; i < N; ++i)
+    {
+        int r = done[i].wait();
+        ASSERT_EQ(r, 42);
+    }
+}
+
 // setAll on futures with no fiber waiter simply sets each; the result is observable afterwards.
 TEST(FiberFuture, setAllNoWaiter)
 {
