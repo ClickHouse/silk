@@ -53,7 +53,7 @@ Both pay a heap allocation plus an atomic refcount per future on creation and te
 
 ### waitForMultiple
 
-Blocks until at least one future in an array is set. Attaches a `MultipleWaitState` (stack-allocated) to each future in order, stopping early if one is already set. Once woken, detaches from all futures and spins on a `completionCounter` until every in-flight `signal()` has incremented it -- this ensures the `MultipleWaitState` on the stack is safe to destroy on return.
+Blocks until at least one future in an array is set. Attaches a `MultipleWaitState` (stack-allocated) to each future in order, stopping early if one is already set. Once woken, detaches from all futures and spins on a `completionCounter` until every in-flight `signal()` has incremented it -- this ensures the `MultipleWaitState` on the stack is safe to destroy on return. A set counts itself before the waiter is scheduled and hands the waiter back to its caller, so `setAll` wakes a multiple wait in the same batch as its plain waiters.
 
 ### waitWithTimeout
 

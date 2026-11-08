@@ -58,16 +58,14 @@ Fiber * FiberFuture::extractWaitingFiber() noexcept
 
         if (state.compare_exchange_weak(currentState.raw, newState.raw, std::memory_order_acq_rel, std::memory_order_relaxed))
         {
-            // Wake the waiter first, then increment the counter. waitForMultiple
-            // spins on the counter only after completionFuture.wait() returns, so
-            // this order is safe: the drain loop will not start until the wake has
-            // already been delivered.
+            // Hand back the completion's waiter for the caller to schedule, so setAll batches it; the waiter
+            // resumes only once scheduled, so the counter - the last touch of its stack - lands first.
             if (currentState.multipleWait)
             {
                 MultipleWaitState * waitState = reinterpret_cast<MultipleWaitState *>(currentState.waiter);
-                waitState->completionFuture->signal();
+                Fiber * waitingFiber = waitState->completionFuture->extractWaitingFiber();
                 waitState->completionCounter.fetch_add(1, std::memory_order_release);
-                return nullptr;
+                return waitingFiber;
             }
 
             if (currentState.hasCallback)
@@ -284,9 +282,9 @@ int FiberFuture::waitWithTimeout(FiberFuture * future, uint64_t nanoseconds, uin
 
 void FiberFuture::setAll(int err, FiberFuture ** futures, uint64_t count) noexcept
 {
-    // Collect the plain-fiber waiters of the just-set futures into a fixed stack buffer and hand each
-    // chunk to one batched schedule (one doorbell per target processor, one submit). The two rare waiter
-    // kinds - multiple-wait and callback - are completed inline, exactly as signal() does.
+    // Collect the fiber waiters of the just-set futures - a multiple wait's included - into a fixed stack buffer
+    // and hand each chunk to one batched schedule (one doorbell per target processor, one submit); a callback
+    // waiter is completed inline, exactly as signal() does.
     Fiber * wakeBatch[WAKE_BATCH];
     uint64_t batchSize = 0;
 
