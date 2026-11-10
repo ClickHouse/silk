@@ -120,9 +120,6 @@ public:
         // expiry and io_uring completions; the rest run on the next pass.
         uint32_t readyDispatchBatch = 256;
 
-        // Hash-table size for futex-style waiter lookups. Must be a power of two.
-        uint32_t waiterTableSize = 4096;
-
         // Per-CPU io_uring SQ ring capacity. Must be a power of two; the kernel
         // rounds up to the nearest supported size.
         uint32_t ioUringQueueSize = 256;
@@ -696,9 +693,11 @@ public:
     static LatencyReport reportLatency(ProfileEventKind kind, uint8_t category) noexcept;
 
 private:
+    friend class FiberFuture;
+
     struct SchedulerState;
+    struct StaticState;
     struct ProcessorState;
-    struct ProxyFiberSlot;
     struct CpuTimer;
 
     struct CompareDeadline
@@ -742,6 +741,23 @@ private:
     static Fiber *
     allocateFiber(FiberMain * fiberMain, FiberParametersDtor * parametersDtor, uint8_t category, FiberFuture * future) noexcept;
     static void freeFiber(Fiber * fiber) noexcept;
+    static void releaseProxyFiber(void * proxy) noexcept;
+    using TimeoutCallback = bool(Fiber * fiber, void * context) noexcept;
+    /**
+     * Suspend the current proxy fiber, for at most nanoseconds.
+     * Returns 0 if woken by schedule(), ETIMEDOUT if timed out.
+     *
+     * @param suspendCallback  Registers the fiber with its wakeup source.
+     * @param context          Passed to both callbacks.
+     * @param nanoseconds      Maximum time to stay suspended.
+     * @param timeoutCallback  Called on timeout.
+     *                         Returns:
+     *                         1. True if it removed the fiber from the wakeup source (so nothing will schedule() the fiber).
+     *                         2. False if it did not (i.e. the source already claimed it), in which case the thread waits
+     *                            for that schedule() and the call returns true.
+     */
+    static int suspendThreadWithTimeout(
+        SuspendCallback * suspendCallback, void * context, uint64_t nanoseconds, TimeoutCallback * timeoutCallback) noexcept;
     static ProcessorState * enqueueReady(ProcessorState * processor, Fiber * fiber) noexcept;
     static void yieldSuspendCallback(Fiber * fiber, void * context) noexcept;
     static void enterThreadModeSuspendCallback(Fiber * fiber, void * context) noexcept;
@@ -778,6 +794,7 @@ private:
 
     static Options options;
     static SchedulerState * scheduler;
+    static StaticState staticState;
 };
 
 } // namespace silk

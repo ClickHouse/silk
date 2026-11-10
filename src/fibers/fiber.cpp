@@ -48,6 +48,7 @@ namespace silk
 
 FiberScheduler::Options FiberScheduler::options;
 FiberScheduler::SchedulerState * FiberScheduler::scheduler;
+constinit FiberScheduler::StaticState FiberScheduler::staticState;
 
 Perf::CounterGroup simpleCounters;
 
@@ -83,6 +84,8 @@ thread_local Fiber * threadFiber = nullptr;
 // on the proxy path - a blocked scheduler thread stops draining its ring and wedges
 // the processor - so the proxy park fails loud when this is set.
 static thread_local bool schedulerThread = false;
+
+static constinit thread_local Fiber * proxyFiberSlot = nullptr;
 
 Fiber::Fiber(bool isProxyFiber) noexcept
     : state(isProxyFiber ? FiberState::RUNNING : FiberState::SUSPENDED)
@@ -331,8 +334,6 @@ bool Fiber::tryChangeStateToReady() noexcept
 
 void Fiber::wakeThread() noexcept
 {
-    Perf::getSimpleCounter(simpleCounters[PROXY_FIBER_WAKED]).increment();
-
     int r = ::sem_post(&threadSemaphore);
     SILK_ASSERT(!r);
 }
@@ -345,8 +346,6 @@ void Fiber::parkThread() noexcept
     // ring until someone else completes the wait.
     SILK_ASSERT(!schedulerThread, "a completion callback blocked the scheduler thread");
 
-    Perf::getSimpleCounter(simpleCounters[PROXY_FIBER_PARKED]).increment();
-
     for (;;)
     {
         int r = ::sem_wait(&threadSemaphore);
@@ -357,6 +356,46 @@ void Fiber::parkThread() noexcept
             continue;
         }
         break;
+    }
+}
+
+int Fiber::parkThreadWithTimeout(uint64_t nanoseconds) noexcept
+{
+    SILK_ASSERT(!schedulerThread, "a completion callback blocked the scheduler thread");
+
+    uint64_t deadline = UINT64_MAX;
+    if (nanoseconds != UINT64_MAX && __builtin_add_overflow(getTimeNanoseconds(), nanoseconds, &deadline))
+    {
+        deadline = UINT64_MAX;
+    }
+    for (;;)
+    {
+        int r;
+        if (deadline == UINT64_MAX)
+        {
+            r = ::sem_wait(&threadSemaphore);
+        }
+        else
+        {
+            uint64_t now = getTimeNanoseconds();
+            if (now >= deadline)
+            {
+                return ETIMEDOUT;
+            }
+            timespec timeout;
+            ::clock_gettime(CLOCK_REALTIME, &timeout);
+            uint64_t timeoutNanoseconds = timeout.tv_nsec + (deadline - now);
+            timeout.tv_sec += timeoutNanoseconds / 1'000'000'000;
+            timeout.tv_nsec = timeoutNanoseconds % 1'000'000'000;
+            r = ::sem_timedwait(&threadSemaphore, &timeout);
+        }
+        if (r < 0)
+        {
+            r = errno;
+            SILK_ASSERT(r == EINTR || (r == ETIMEDOUT && deadline != UINT64_MAX));
+            continue;
+        }
+        return 0;
     }
 }
 
@@ -744,13 +783,6 @@ FiberScheduler::SchedulerState::~SchedulerState() noexcept
     // processors must go before fiberPool frees the fiber memory.
     processorState.reset();
 
-    // Proxies of exited threads. A thread still alive deletes its own proxy at
-    // exit, since scheduler is null by then.
-    while (Fiber * fiber = proxyFiberPool.pop())
-    {
-        delete fiber;
-    }
-
     int r = ::sem_destroy(&threadSemaphore);
     SILK_ASSERT(!r);
 }
@@ -809,7 +841,6 @@ void FiberScheduler::initialize(const Options * userOptions) noexcept
     SILK_ASSERT(options.readyDispatchBatch >= 1);
     SILK_ASSERT(options.ioUringQueueSize >= 2 && (options.ioUringQueueSize & (options.ioUringQueueSize - 1)) == 0);
     SILK_ASSERT(options.ioUringFlushThreshold >= 1 && options.ioUringFlushThreshold <= options.ioUringQueueSize);
-    SILK_ASSERT(options.waiterTableSize >= 2 && (options.waiterTableSize & (options.waiterTableSize - 1)) == 0);
 
     options.ioUringFlushTimeoutCycles = Tsc::nanosecondsToCycles(options.ioUringFlushTimeout);
     options.backlogAgeCycles = Tsc::nanosecondsToCycles(options.maxWaitNs);
@@ -817,9 +848,6 @@ void FiberScheduler::initialize(const Options * userOptions) noexcept
 
     scheduler = new SchedulerState();
     scheduler->cpuController.initialize(options.backlogAgeCycles);
-
-    scheduler->waiterTable = std::make_unique<WaitStack[]>(options.waiterTableSize);
-    scheduler->waiterTableMask = options.waiterTableSize - 1;
 
     scheduler->processorCount = getProcessorCount();
     SILK_ASSERT(
@@ -1084,8 +1112,21 @@ void FiberScheduler::destroy() noexcept
         }
     }
 
-    // Null the pointer: a thread that outlives the scheduler deletes its own proxy at exit.
     delete std::exchange(scheduler, nullptr);
+}
+
+void FiberScheduler::releaseProxyFiber(void * proxy) noexcept
+{
+    Fiber * fiber = static_cast<Fiber *>(proxy);
+    proxyFiberSlot = nullptr;
+
+    int semaphoreValue;
+    int r = ::sem_getvalue(&fiber->threadSemaphore, &semaphoreValue);
+    SILK_ASSERT_DEBUG(!r);
+    SILK_ASSERT_DEBUG(!semaphoreValue, "a proxy fiber left its thread with a pending wakeup: value=%d", semaphoreValue);
+
+    fiber->changeState(FiberState::RUNNING, FiberState::STOPPED);
+    staticState.proxyFiberPool.push(fiber);
 }
 
 // noinline is load-bearing, not a hint. These accessors read the threadFiber/proxyFiberSlot
@@ -1111,15 +1152,12 @@ __attribute__((noinline)) Fiber * FiberScheduler::getCurrentFiber() noexcept
         return threadFiber;
     }
 
-    // Proxy fiber slot of the current non-fiber thread.
-    static thread_local ProxyFiberSlot proxyFiberSlot;
-
-    if (!proxyFiberSlot.fiber) [[unlikely]]
+    if (!proxyFiberSlot) [[unlikely]]
     {
         // Lazily acquire a proxy fiber - recycled from an exited thread or new - so a non-fiber
         // thread can still participate in fiber-aware APIs (e.g. FiberMutex::lock,
         // FiberScheduler::run-and-wait).
-        Fiber * fiber = scheduler ? scheduler->proxyFiberPool.pop() : nullptr;
+        Fiber * fiber = staticState.proxyFiberPool.pop();
 
         if (fiber)
         {
@@ -1135,31 +1173,29 @@ __attribute__((noinline)) Fiber * FiberScheduler::getCurrentFiber() noexcept
                 SILK_FAIL("could not allocate a proxy fiber");
             }
         }
-        proxyFiberSlot.fiber = fiber;
-    }
-    return proxyFiberSlot.fiber;
-}
+        proxyFiberSlot = fiber;
 
-FiberScheduler::ProxyFiberSlot::~ProxyFiberSlot() noexcept
-{
-    if (fiber)
-    {
-        int semaphoreValue;
-        int r = ::sem_getvalue(&fiber->threadSemaphore, &semaphoreValue);
-        SILK_ASSERT_DEBUG(!r);
-        SILK_ASSERT_DEBUG(!semaphoreValue, "a proxy fiber left its thread with a pending wakeup: value=%d", semaphoreValue);
-
-        if (scheduler)
-        {
-            fiber->changeState(FiberState::RUNNING, FiberState::STOPPED);
-            scheduler->proxyFiberPool.push(std::exchange(fiber, nullptr));
-        }
-        else
-        {
-            // No scheduler, so no fiber can hold a stale pointer to this proxy.
-            delete std::exchange(fiber, nullptr);
-        }
+        // For thread_local variables with non-trivial destructors, the C++ runtime uses std::mutex
+        // internally when initializing the variable (to register the destructor).
+        // Now, suppose std::mutex uses silk::FiberMutex internally, then:
+        // 1. getCurrentFiber() is called in FiberMutex::lock.
+        // 2. In getCurrentFiber(), we access the proxy fiber slot thread_local with non-trivial destructor for the first time.
+        // 3. That involves calling std::mutex::lock internally which calls FiberMutex::lock which calls getCurrentFiber(). Cycle.
+        // Therefore, to release proxy fibers from the pool, we use pthread keys instead of thread_local variables.
+        static constinit pthread_once_t keyOnce = PTHREAD_ONCE_INIT;
+        static constinit pthread_key_t key = 0;
+        int r = ::pthread_once(
+            &keyOnce,
+            []
+            {
+                int r = ::pthread_key_create(&key, releaseProxyFiber);
+                SILK_ASSERT(!r);
+            });
+        SILK_ASSERT(!r);
+        r = ::pthread_setspecific(key, fiber);
+        SILK_ASSERT(!r);
     }
+    return proxyFiberSlot;
 }
 
 bool FiberScheduler::isFiberRunning(Fiber * fiber) noexcept
@@ -1211,6 +1247,12 @@ bool FiberScheduler::schedule(Fiber * fiber) noexcept
 {
     if (fiber->tryChangeStateToReady())
     {
+        if (fiber->isProxyFiber)
+        {
+            fiber->wakeThread();
+            return true;
+        }
+
         ProcessorState * processor = currentProcessor();
         ProcessorState * target = enqueueReady(processor, fiber);
         if (target && !processor->postWakeup(target))
@@ -1414,26 +1456,16 @@ void FiberScheduler::suspend(SuspendCallback * callback, void * context, uint64_
     uint64_t suspendStart = waitCycles ? Tsc::getCycles() : 0;
 
     Fiber * fiber = getCurrentFiber();
-    fiber->changeState(FiberState::RUNNING, FiberState::SUSPEND_REQUESTED);
-
     if (!fiber->isProxyFiber)
     {
+        fiber->changeState(FiberState::RUNNING, FiberState::SUSPEND_REQUESTED);
         fiber->suspendCallback = callback;
         fiber->suspendContext = context;
         fiber->switchToThreadContext(false);
     }
     else
     {
-        if (callback)
-        {
-            callback(fiber, context);
-        }
-
-        if (fiber->tryChangeStateToSuspended())
-        {
-            fiber->parkThread();
-        }
-        fiber->changeState(FiberState::READY, FiberState::RUNNING);
+        suspendThreadWithTimeout(callback, context, UINT64_MAX, nullptr);
     }
 
     FiberState fiberState = fiber->state.load(std::memory_order_acquire);
@@ -1445,10 +1477,40 @@ void FiberScheduler::suspend(SuspendCallback * callback, void * context, uint64_
     }
 }
 
+int FiberScheduler::suspendThreadWithTimeout(
+    SuspendCallback * suspendCallback, void * context, uint64_t nanoseconds, TimeoutCallback * timeoutCallback) noexcept
+{
+    int r = 0;
+
+    Fiber * fiber = getCurrentFiber();
+    SILK_ASSERT_DEBUG(fiber->isProxyFiber);
+    fiber->changeState(FiberState::RUNNING, FiberState::SUSPEND_REQUESTED);
+
+    if (suspendCallback)
+    {
+        suspendCallback(fiber, context);
+    }
+
+    if (fiber->tryChangeStateToSuspended() && fiber->parkThreadWithTimeout(nanoseconds))
+    {
+        if (timeoutCallback(fiber, context))
+        {
+            fiber->changeState(FiberState::SUSPENDED, FiberState::READY);
+            r = ETIMEDOUT;
+        }
+        else
+        {
+            fiber->parkThread();
+        }
+    }
+    fiber->changeState(FiberState::READY, FiberState::RUNNING);
+    return r;
+}
+
 void FiberScheduler::enqueueWaiter(uint64_t key, Fiber * fiber) noexcept
 {
-    uint64_t index = intHash(key) & scheduler->waiterTableMask;
-    scheduler->waiterTable[index].push(fiber);
+    uint64_t index = intHash(key) & (WAITER_TABLE_SIZE - 1);
+    staticState.waiterTable[index].push(fiber);
 
     // seq_cst fence pairs with the one in releaseWaiters to prevent the
     // store-buffering race on weak memory models (e.g. arm64): the caller's
@@ -1462,8 +1524,8 @@ void FiberScheduler::releaseWaiters(uint64_t key) noexcept
     // seq_cst fence pairs with the one in enqueueWaiter.
     std::atomic_thread_fence(std::memory_order_seq_cst);
 
-    uint64_t index = intHash(key) & scheduler->waiterTableMask;
-    Fiber * fiber = scheduler->waiterTable[index].popAll();
+    uint64_t index = intHash(key) & (WAITER_TABLE_SIZE - 1);
+    Fiber * fiber = staticState.waiterTable[index].popAll();
     while (fiber)
     {
         Fiber * next = WaitStack::next(fiber);

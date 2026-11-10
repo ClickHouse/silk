@@ -37,6 +37,8 @@ static constexpr uint64_t CQE_TAG_CANCEL = 0;
 static constexpr uint64_t CQE_TAG_DOORBELL = 1;
 static constexpr uint64_t CQE_TAG_WAKEUP = 2;
 
+static constexpr uint64_t WAITER_TABLE_SIZE = 4096;
+
 // clang-format off
 #define FIBER_SIMPLE_COUNTERS(x) \
     x(FIBER_STARTED,           "FiberStarted") \
@@ -57,8 +59,6 @@ static constexpr uint64_t CQE_TAG_WAKEUP = 2;
     x(SLEEP_CANCELLED,         "SleepCancelled") \
     x(SCHEDULER_THREAD_PARKED, "SchedulerThreadParked") \
     x(SCHEDULER_THREAD_WAKED,  "SchedulerThreadWaked") \
-    x(PROXY_FIBER_PARKED,      "ProxyFiberParked") \
-    x(PROXY_FIBER_WAKED,       "ProxyFiberWaked") \
     x(THREAD_WORKER_PARKED,    "ThreadWorkerParked") \
     x(THREAD_WORKER_WAKED,     "ThreadWorkerWaked") \
     x(SCHEDULER_USER_TIME,     "SchedulerUserTime") \
@@ -128,6 +128,11 @@ public:
 
     void wakeThread() noexcept;
     void parkThread() noexcept;
+    /**
+     * Block on the proxy fiber's semaphore until a wakeThread or timeout after `nanoseconds` (uses sem_timedwait).
+     * Returns 0 if woken by a wakeThread, ETIMEDOUT on timeout.
+     */
+    int parkThreadWithTimeout(uint64_t nanoseconds) noexcept;
 
     // Fiber entry point.  Called once when the fiber is first activated.
     [[noreturn]] static void fiberContextMain(transfer_t transfer) noexcept;
@@ -245,22 +250,6 @@ static_assert(offsetof(Fiber, parameters) == FIBER_PARAMETERS_OFFSET);
 
 using WaitStack = LockFreeStack<Fiber, &Fiber::stackEntry>;
 using SuspendedList = List<Fiber, &Fiber::suspendedEntry>;
-
-/**
- * Slot for the current non-fiber thread's proxy fiber. Sync primitives keep raw Fiber pointers in
- * their state and may read a stale owner after its thread has exited, so while the scheduler is
- * initialized a proxy is never deleted: at thread exit the slot returns it to proxyFiberPool, the
- * next new thread reuses it, and destroy frees the pool. With no scheduler no fiber can hold a stale
- * pointer, so the slot deletes the proxy itself.
- */
-struct FiberScheduler::ProxyFiberSlot
-{
-    /** Release the proxy; the thread exits outside any suspension, so the proxy is RUNNING. */
-    ~ProxyFiberSlot() noexcept;
-
-    /** Proxy fiber of this thread; null until the first getCurrentFiber call. */
-    Fiber * fiber = nullptr;
-};
 
 /**
  * Partitions scheduler thread CPU time into named buckets without gaps or
@@ -451,8 +440,21 @@ struct FiberScheduler::ProcessorState
 };
 
 /**
+ * Static constant-initialized scheduler state.
+ * It can be used independently of the scheduler's lifetime.
+ */
+struct FiberScheduler::StaticState
+{
+    // Futex-style waiter lookup table.
+    alignas(kCacheLineSize) WaitStack waiterTable[WAITER_TABLE_SIZE];
+
+    // Pool to recycle proxy fiber objects.
+    alignas(kCacheLineSize) LockFreeStack<Fiber, &Fiber::stackEntry> proxyFiberPool;
+};
+
+/**
  * Global scheduler state: processor array, scheduler/worker threads, fiber pool,
- * fallback ready queue for overflow fibers, and waiter table for sync primitives.
+ * and fallback ready queue for overflow fibers.
  */
 struct FiberScheduler::SchedulerState
 {
@@ -485,10 +487,6 @@ struct FiberScheduler::SchedulerState
         // ascending CPU number within each half. The polling regime covers the prefix
         // prefixOrder[0, prefixCount); growth activates the next entry.
         std::unique_ptr<uint16_t[]> prefixOrder;
-
-        // Futex-style waiter lookup table and its power-of-two size mask.
-        std::unique_ptr<WaitStack[]> waiterTable;
-        uint64_t waiterTableMask = 0;
     };
 
     // Prefix state on its own cache line: prefixCount is written only on grow
@@ -525,12 +523,10 @@ struct FiberScheduler::SchedulerState
     };
 
     // Fiber pool region: allocation and release traffic from every CPU, kept off
-    // the lines above. proxyFiberPool holds the proxy fibers of exited threads and
-    // sees only thread creation and exit.
+    // the lines above.
     struct alignas(kCacheLineSize)
     {
         MemoryPool<Fiber, &Fiber::stackEntry> fiberPool;
-        LockFreeStack<Fiber, &Fiber::stackEntry> proxyFiberPool;
     };
 
     // Cold configuration: read-only after initialize, touched only at startup,

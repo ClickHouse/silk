@@ -170,6 +170,7 @@ private:
     Fiber * extractWaitingFiber() noexcept;
     int suspend(uint64_t * waitCycles) noexcept;
     static void suspendCallback(Fiber * fiber, FiberFuture * future) noexcept;
+    static bool timeoutCallback(Fiber * fiber, FiberFuture * future) noexcept;
     bool attachWaiter(MultipleWaitState * waitState) noexcept;
     bool detachWaiter(MultipleWaitState * waitState) noexcept;
 

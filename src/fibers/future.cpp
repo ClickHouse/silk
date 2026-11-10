@@ -4,6 +4,7 @@
 #include <silk/util/assert.h>
 #include <silk/util/sanitizers.h>
 #include <silk/util/spinlock.h>
+#include <silk/util/tsc.h>
 
 #include <atomic>
 #include <cerrno>
@@ -118,6 +119,13 @@ void FiberFuture::suspendCallback(Fiber * fiber, FiberFuture * future) noexcept
             return;
         }
     }
+}
+
+bool FiberFuture::timeoutCallback(Fiber * fiber, FiberFuture * future) noexcept
+{
+    State currentState;
+    currentState.waiter = reinterpret_cast<uint64_t>(fiber);
+    return future->state.compare_exchange_strong(currentState.raw, 0, std::memory_order_acq_rel, std::memory_order_relaxed);
 }
 
 uint64_t FiberFuture::waitForMultiple(FiberFuture ** futureArray, uint64_t futureArraySize, uint64_t * waitCycles) noexcept
@@ -257,6 +265,24 @@ bool FiberFuture::detachWaiter(MultipleWaitState * waitState) noexcept
 
 int FiberFuture::waitWithTimeout(FiberFuture * future, uint64_t nanoseconds, uint64_t * waitCycles) noexcept
 {
+    if (!FiberScheduler::getCurrentFiberId().raw)
+    {
+        // FiberFuture::waitWithTimeout is used in synchronization primitives implementation,
+        // so for proxy fibers, we should not depend on the scheduler to be initialized and started.
+        // Therefore, we cannot use sleep - instead, we use sem_timedwait (inside suspendThreadWithTimeout).
+        uint64_t suspendStart = waitCycles ? Tsc::getCycles() : 0;
+        int r = FiberScheduler::suspendThreadWithTimeout(
+            reinterpret_cast<FiberScheduler::SuspendCallback *>(suspendCallback),
+            future,
+            nanoseconds,
+            reinterpret_cast<FiberScheduler::TimeoutCallback *>(timeoutCallback));
+        if (waitCycles)
+        {
+            *waitCycles += Tsc::getCycles() - suspendStart;
+        }
+        return r ? r : future->wait();
+    }
+
     FiberScheduler::SleepFuture sleepFuture;
     FiberScheduler::sleep(nanoseconds, &sleepFuture);
 

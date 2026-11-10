@@ -109,7 +109,7 @@ def _dump_fibers():
 # directly: a lost sleep wakeup shows as a sleepTree entry with positive overdueCycles still un-set; a
 # park wedge shows as a parked proc (sleeping=1) with cqReady>0. fiber-dump-scheduler prints the
 # scheduler-wide state and fiber-dump-counters prints the Perf counters, whose imbalanced pairs
-# (FiberStarted/FiberStopped, ProxyFiberParked/ProxyFiberWaked) name the failed hand-off. Needs a silk
+# (FiberStarted/FiberStopped) name the failed hand-off. Needs a silk
 # frame selected (same reason as fiber-list) since _dump_fibers restored back into libc.
 def _dump_state():
     if not _select_silk_frame():

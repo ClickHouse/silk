@@ -44,7 +44,7 @@ The dump has four parts, in this order:
 1. **OS threads**, grouped by identical stack, one backtrace per group with a count. Idle per-CPU scheduler threads all sit in `ProcessorState::parkThread` / `io_uring_enter2`. The main thread inside `FiberFuture::wait` / `sem_wait` is the proxy fiber's park.
 2. **silk fibers** from `fiber-list`, grouped by state, fiber main and suspension site, one backtrace per group taken through `fiber-switchcontext`.
 3. **Scheduler state** from `fiber-dump-scheduler`, `fiber-dump-sleep` and `fiber-dump-uring`. A sleepTree entry with positive `overdueCycles` whose future is still unset is a lost sleep wakeup. A parked processor (`sleeping=1`) with `cqReady > 0` or the OVERFLOW flag set is a park wedge: `io_uring_enter2` blocked instead of honouring its timeout, and the decoded CQE names the stuck completion.
-4. **Counters** from `fiber-dump-counters`. An imbalanced pair names the failed hand-off: `FiberStarted > FiberStopped` means an injected fiber never finished; `ProxyFiberParked > ProxyFiberWaked` means an external waiter never got its wake.
+4. **Counters** from `fiber-dump-counters`. An imbalanced pair names the failed hand-off: `FiberStarted > FiberStopped` means an injected fiber never finished.
 
 A dump where every queue is empty, every ring shows `cqReady=0, sqInflt=0, sqePend=0` and the awaited fiber is in no list means the fiber was lost between inject and dispatch, or between completion and wake; the counters decide which.
 

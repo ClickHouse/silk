@@ -936,8 +936,7 @@ def _dump_uring_table(proc_states, count, cpu):
 #
 # Readers for the scheduler-wide state and the Perf simple counter registry.
 # Imbalanced counter pairs name the failed hand-off: FiberStarted > FiberStopped
-# means an injected fiber never finished, ProxyFiberParked > ProxyFiberWaked means
-# an external waiter never got its wake.
+# means an injected fiber never finished.
 
 
 def _dump_scheduler_state(sched):
@@ -1311,8 +1310,7 @@ class FiberDumpCounters(gdb.Command):
     Dump every registered Perf simple counter.
 
     Imbalanced counter pairs name the failed hand-off: FiberStarted >
-    FiberStopped means an injected fiber never finished; ProxyFiberParked >
-    ProxyFiberWaked means an external waiter never got its wake.
+    FiberStopped means an injected fiber never finished.
 
     With no argument, counter values are accumulated across all CPUs.  Pass a
     0-based processor index to show that CPU's own slot values instead.

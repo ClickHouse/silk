@@ -62,7 +62,7 @@ int err = FiberFuture::waitWithTimeout(&future, nanoseconds);
 // returns ETIMEDOUT if the deadline expires first
 ```
 
-Implemented as `waitForMultiple` over `{future, sleepFuture}`. Whichever fires first wins; the other is cancelled before `waitWithTimeout` returns.
+On a fiber, implemented as `waitForMultiple` over `{future, sleepFuture}`; on a non-fiber thread, as `suspendThreadWithTimeout()`, the proxy half of `suspend()` with an optional timeout (see "Proxy Fibers" in `docs/scheduler.md`). Whichever fires first wins; the other is cancelled before `waitWithTimeout` returns.
 
 ---
 
