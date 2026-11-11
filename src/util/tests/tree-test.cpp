@@ -24,6 +24,56 @@ struct Node
 using UniqueTree = Tree<Node, &Node::treeEntry, Node::Compare, false>;
 using MultiTree = Tree<Node, &Node::treeEntry, Node::Compare, true>;
 
+/** Orders a uint64_t key against a node, both ways. */
+struct KeyCompare
+{
+    bool operator()(uint64_t left, const Node & right) const noexcept { return left < right.key; }
+    bool operator()(const Node & left, uint64_t right) const noexcept { return left.key < right; }
+};
+
+TEST(Tree, FindByKey)
+{
+    Node first{1}, second{2}, third{3};
+    UniqueTree tree;
+    tree.insert(&first);
+    tree.insert(&second);
+    tree.insert(&third);
+
+    Node * found = tree.find(uint64_t{2}, KeyCompare{});
+    ASSERT_EQ(found, &second);
+
+    found = tree.find(uint64_t{4}, KeyCompare{});
+    ASSERT_EQ(found, nullptr);
+
+    tree.remove(&first);
+    tree.remove(&second);
+    tree.remove(&third);
+}
+
+TEST(Tree, FindForInsertThenInsertAt)
+{
+    Node first{1}, third{3}, second{2};
+    UniqueTree tree;
+    tree.insert(&first);
+    tree.insert(&third);
+
+    // A found key returns its node; a missing one returns null and the position its insert takes.
+    UniqueTree::InsertPosition position;
+    Node * found = tree.findForInsert(uint64_t{3}, KeyCompare{}, &position);
+    ASSERT_EQ(found, &third);
+
+    found = tree.findForInsert(uint64_t{2}, KeyCompare{}, &position);
+    ASSERT_EQ(found, nullptr);
+
+    tree.insertAt(&second, position);
+    ASSERT_EQ(tree.next(&first), &second);
+    ASSERT_EQ(tree.next(&second), &third);
+
+    tree.remove(&first);
+    tree.remove(&second);
+    tree.remove(&third);
+}
+
 TEST(Tree, EmptyTree)
 {
     UniqueTree tree;

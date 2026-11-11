@@ -35,6 +35,9 @@ public:
     /** Insert @p object at the front of the list. */
     void push_front(T * object) noexcept { impl.push_front(*object); }
 
+    /** Insert @p object just before @p position, which must be in the list. O(1). */
+    void insert_before(T * position, T * object) noexcept { impl.insert(impl.iterator_to(*position), *object); }
+
     /** Remove and return the first object, or nullptr if the list is empty. */
     T * pop_front() noexcept
     {

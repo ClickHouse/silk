@@ -113,6 +113,22 @@ TEST(List, nextAndPrev)
     EXPECT_EQ(list.prev(&c), &b);
 }
 
+TEST(List, insertBeforeKeepsOrder)
+{
+    Node first{1}, middle{2}, last{3}, head{0};
+    TestList list;
+    list.push_back(&first);
+    list.push_back(&last);
+    list.insert_before(&last, &middle);
+    ASSERT_EQ(list.front(), &first);
+    ASSERT_EQ(list.next(&first), &middle);
+    ASSERT_EQ(list.next(&middle), &last);
+
+    list.insert_before(&first, &head);
+    ASSERT_EQ(list.front(), &head);
+    ASSERT_EQ(list.next(&head), &first);
+}
+
 TEST(List, singleElement)
 {
     Node a{42};

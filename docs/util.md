@@ -173,6 +173,14 @@ tree.remove(earliest);
 
 `insert()` returns `nullptr` on success; for unique trees it returns the existing element if the key is already present. `remove()` returns the in-order successor, or `nullptr` if none. Used for sleep deadline ordering in the fiber scheduler and for the ordered waiter tree in `FiberSequencer`.
 
+**Keyed search**: `find(key, compare)` searches by a key that is not an element, with a comparator that orders a key and an element both ways. On a unique tree, `findForInsert(key, compare, &position)` returns the match or fills an `InsertPosition`, and `insertAt(object, position)` links the new element there with no second descent; the tree must not change in between.
+
+---
+
+## List (`list.h`)
+
+Intrusive doubly linked list wrapping `boost::intrusive::list`. Objects embed a `ListEntry` member; every operation is O(1). `push_back`, `push_front`, `pop_front`, `pop_back` and `remove` change it, `next` and `prev` walk it, and `insert_before(position, object)` links an object just ahead of an element already in the list.
+
 ---
 
 ## MemoryPool (`memory-pool.h`)
