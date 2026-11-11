@@ -23,7 +23,14 @@ using TreeEntry = boost::intrusive::set_member_hook<>;
 template <typename T, TreeEntry T::* nodePtr, typename Compare, bool AllowDuplicates = false>
 class Tree
 {
+    using Hook = boost::intrusive::member_hook<T, TreeEntry, nodePtr>;
+    using Cmp = boost::intrusive::compare<Compare>;
+    using Impl = std::conditional_t<AllowDuplicates, boost::intrusive::multiset<T, Hook, Cmp>, boost::intrusive::set<T, Hook, Cmp>>;
+
 public:
+    /** The place findForInsert found for a key it did not find; valid until the tree changes. */
+    using InsertPosition = typename boost::intrusive::set<T, Hook, Cmp>::insert_commit_data;
+
     /**
      * Insert @p object into the tree.
      * Returns nullptr on success. For unique trees, if an equal key already
@@ -87,6 +94,36 @@ public:
     }
 
     /**
+     * Return an object matching @p key under @p compare, or nullptr if none exists. @p compare orders a key and an object
+     * both ways, consistent with the tree's Compare, so no object needs building to search.
+     */
+    template <typename Key, typename KeyCompare>
+    T * find(const Key & key, KeyCompare compare) noexcept
+    {
+        auto it = impl.find(key, compare);
+        return it != impl.end() ? &*it : nullptr;
+    }
+
+    /**
+     * Return the object matching @p key under @p compare, or nullptr with *@p position set where an insertAt of an
+     * object with that key goes. One descent serves the search and the insert; a unique tree only.
+     */
+    template <typename Key, typename KeyCompare>
+    T * findForInsert(const Key & key, KeyCompare compare, InsertPosition * position) noexcept
+    {
+        static_assert(!AllowDuplicates, "findForInsert needs a tree of unique keys");
+        auto [it, missing] = impl.insert_check(key, compare, *position);
+        return missing ? nullptr : &*it;
+    }
+
+    /** Insert @p object, whose key findForInsert did not find, at @p position; the tree must not change in between. */
+    void insertAt(T * object, const InsertPosition & position) noexcept
+    {
+        static_assert(!AllowDuplicates, "insertAt needs a tree of unique keys");
+        impl.insert_commit(*object, position);
+    }
+
+    /**
      * Return the object with the smallest key not less than @p key's, or nullptr if none.
      */
     T * lowerBound(const T * key) noexcept
@@ -128,10 +165,6 @@ public:
     bool empty() const noexcept { return impl.empty(); }
 
 private:
-    using Hook = boost::intrusive::member_hook<T, TreeEntry, nodePtr>;
-    using Cmp = boost::intrusive::compare<Compare>;
-    using Impl = std::conditional_t<AllowDuplicates, boost::intrusive::multiset<T, Hook, Cmp>, boost::intrusive::set<T, Hook, Cmp>>;
-
     Impl impl;
 };
 
