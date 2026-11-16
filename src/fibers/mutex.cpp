@@ -55,7 +55,7 @@ void FiberMutex::lockSlow(State currentState, uint64_t * waitCycles) noexcept
     while (!lockHelper(&currentState))
     {
         SuspendCtx ctx{this, true};
-        FiberScheduler::suspend(reinterpret_cast<FiberScheduler::SuspendCallback *>(suspendCallback), &ctx, waitCycles);
+        FiberScheduler::suspend(suspendCallback, &ctx, waitCycles);
         currentState.raw = state.load(std::memory_order_relaxed);
     }
 }
@@ -90,7 +90,7 @@ void FiberMutex::lockSharedSlow(State currentState, uint64_t * waitCycles) noexc
     while (!lockSharedHelper(&currentState))
     {
         SuspendCtx ctx{this, false};
-        FiberScheduler::suspend(reinterpret_cast<FiberScheduler::SuspendCallback *>(suspendCallback), &ctx, waitCycles);
+        FiberScheduler::suspend(suspendCallback, &ctx, waitCycles);
         currentState.raw = state.load(std::memory_order_relaxed);
     }
 }
@@ -166,8 +166,9 @@ bool FiberMutex::lockSharedHelper(State * currentState) noexcept
     }
 }
 
-void FiberMutex::suspendCallback(Fiber * fiber, SuspendCtx * ctx) noexcept
+void FiberMutex::suspendCallback(Fiber * fiber, void * context) noexcept
 {
+    SuspendCtx * ctx = static_cast<SuspendCtx *>(context);
     FiberMutex * mutex = ctx->mutex;
     bool exclusive = ctx->exclusive;
 

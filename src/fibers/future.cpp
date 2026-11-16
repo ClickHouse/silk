@@ -82,7 +82,7 @@ Fiber * FiberFuture::extractWaitingFiber() noexcept
 
 int FiberFuture::suspend(uint64_t * waitCycles) noexcept
 {
-    FiberScheduler::suspend(reinterpret_cast<FiberScheduler::SuspendCallback *>(suspendCallback), this, waitCycles);
+    FiberScheduler::suspend(suspendCallback, this, waitCycles);
 
     State currentState;
     currentState.raw = state.load(std::memory_order_acquire);
@@ -97,8 +97,9 @@ int FiberFuture::suspend(uint64_t * waitCycles) noexcept
 // CPU, causing a double-resume. The double-check below handles the race where
 // the future was set between wait() reading isSet=false and this callback
 // running: if already set, reschedule the fiber immediately instead of parking.
-void FiberFuture::suspendCallback(Fiber * fiber, FiberFuture * future) noexcept
+void FiberFuture::suspendCallback(Fiber * fiber, void * context) noexcept
 {
+    FiberFuture * future = static_cast<FiberFuture *>(context);
     State currentState;
     currentState.raw = future->state.load(std::memory_order_relaxed);
     for (;;)

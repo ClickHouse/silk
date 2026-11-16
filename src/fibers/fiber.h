@@ -116,7 +116,12 @@ public:
     Fiber(bool isProxyFiber = false) noexcept;
     ~Fiber() noexcept;
 
-    bool initialize(FiberId fiberId, FiberMain * fiberMain, FiberParametersDtor * parametersDtor, FiberFuture * waitingFuture) noexcept;
+    bool initialize(
+        FiberId fiberId,
+        FiberMain * fiberMain,
+        FiberMainInvoker * fiberMainInvoker,
+        FiberParametersDtor * parametersDtor,
+        FiberFuture * waitingFuture) noexcept;
     void deinitialize() noexcept;
 
     void switchToFiberContext() noexcept;
@@ -218,6 +223,9 @@ public:
 
     // Return value of fiberMain; valid after the fiber reaches STOPPED state.
     int result = 0;
+
+    // Calls fiberMain with its parameter type; set by run. Placed after parameters so it does not shift them.
+    FiberMainInvoker * fiberMainInvoker = nullptr;
 
     // This fiber's saved C++ exception-propagation state, swapped with the thread's on each context
     // switch so an exception crossing the switch is not corrupted by another fiber sharing the thread.
