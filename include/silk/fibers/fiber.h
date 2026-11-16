@@ -179,6 +179,7 @@ public:
         // immediately after control leaves it (on suspend and on termination).
         // Calls always balance, so they suit save/restore of per-fiber state
         // across the OS thread the fiber borrows. Not invoked for proxy fibers.
+        // The fiber's parameters stay valid in both hooks, including the last fiberSuspend.
         FiberSwitchCallback * fiberSuspend = nullptr;
         FiberSwitchCallback * fiberResume = nullptr;
 
@@ -222,7 +223,7 @@ public:
      * Start a fiber whose result will be delivered to a FiberFuture.
      *
      * @param fiberMain      Entry point; receives a pointer to a copy of parameters.
-     * @param parameters     Moved into the fiber's parameter buffer.
+     * @param parameters     Moved into the fiber's parameter buffer; destroyed before future is set.
      * @param future         Receives the fiber's integer result on completion.
      * @return               0 on success, or ENOMEM if fiber allocation failed.
      */
@@ -263,7 +264,7 @@ public:
      * blocks the calling thread otherwise.
      *
      * @param fiberMain  Entry point; receives a pointer to a copy of parameters.
-     * @param parameters Moved into the fiber's parameter buffer.
+     * @param parameters Moved into the fiber's parameter buffer; destroyed before run returns.
      * @return           The fiber's integer result code.
      */
     template <typename T>

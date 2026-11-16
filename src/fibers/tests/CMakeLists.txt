@@ -3,10 +3,12 @@ file(GLOB_RECURSE TEST_SOURCES CONFIGURE_DEPENDS *.cpp)
 # fiber-cpuset-test and fiber-steal-test are their own executables: each needs a main
 # that restricts the scheduler to a CPU subset before running, so they cannot share
 # fibers-test's global init. fiber-destroy-test initializes and destroys the scheduler
-# once per child process it spawns, so it has no global init at all.
+# once per child process it spawns, so it has no global init at all. fiber-switch-hook-test
+# needs a main that installs the fiber switch hooks.
 list(REMOVE_ITEM TEST_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/fiber-cpuset-test.cpp)
 list(REMOVE_ITEM TEST_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/fiber-steal-test.cpp)
 list(REMOVE_ITEM TEST_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/fiber-destroy-test.cpp)
+list(REMOVE_ITEM TEST_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/fiber-switch-hook-test.cpp)
 
 add_executable(fibers-test ${TEST_SOURCES})
 target_link_libraries(fibers-test PRIVATE silk-fibers GTest::gtest)
@@ -22,6 +24,11 @@ gtest_discover_tests(fibers-test
 add_executable(fibers-cpuset-test fiber-cpuset-test.cpp)
 target_link_libraries(fibers-cpuset-test PRIVATE silk-fibers GTest::gtest)
 gtest_discover_tests(fibers-cpuset-test
+    PROPERTIES RESOURCE_LOCK iouring TIMEOUT_SIGNAL_NAME SIGQUIT TIMEOUT_SIGNAL_GRACE_PERIOD 60)
+
+add_executable(fibers-switch-hook-test fiber-switch-hook-test.cpp)
+target_link_libraries(fibers-switch-hook-test PRIVATE silk-fibers GTest::gtest)
+gtest_discover_tests(fibers-switch-hook-test
     PROPERTIES RESOURCE_LOCK iouring TIMEOUT_SIGNAL_NAME SIGQUIT TIMEOUT_SIGNAL_GRACE_PERIOD 60)
 
 # fiber-steal-test asserts on SMT-stretch timing, so it runs alone: concurrent

@@ -11,6 +11,7 @@
 #include <memory>
 #include <set>
 #include <thread>
+#include <utility>
 
 #include <sched.h>
 
@@ -68,6 +69,45 @@ TEST(Fiber, yield)
 
     int r = FiberScheduler::run(Params::fiberMain, {});
     ASSERT_EQ(r, 0);
+}
+
+// The fiber's copy of the parameters is destroyed before run returns. destroyCount is a plain int,
+// so TSan reports a race if the destructor runs after the fiber's result is delivered.
+TEST(Fiber, destroyParametersBeforeReturn)
+{
+    struct Params
+    {
+        int * destroyCount;
+
+        Params(int * destroyCount) noexcept
+            : destroyCount(destroyCount)
+        {
+        }
+
+        Params(Params && other) noexcept
+            : destroyCount(std::exchange(other.destroyCount, nullptr))
+        {
+        }
+
+        ~Params() noexcept
+        {
+            if (destroyCount)
+            {
+                ++*destroyCount;
+            }
+        }
+
+        static int fiberMain(Params * params) noexcept
+        {
+            SILK_UNUSED(params);
+            return 0;
+        }
+    };
+
+    int destroyCount = 0;
+    int r = FiberScheduler::run(Params::fiberMain, Params(&destroyCount));
+    ASSERT_EQ(r, 0);
+    ASSERT_EQ(destroyCount, 1);
 }
 
 // Stresses the completion path: wait() may race with the fiber stopping and
