@@ -184,8 +184,8 @@ public:
         fcontext_t threadContext = nullptr;
 
         // Entry point and optional parameters destructor. parametersDtor is set
-        // by run for non-trivially-destructible T and called by
-        // fiberContextMain immediately after fiberMain returns.
+        // by run for non-trivially-destructible T and called by runFiber after
+        // the last fiberSuspend and before waitingFuture is set.
         FiberMain * fiberMain = nullptr;
         FiberParametersDtor * parametersDtor = nullptr;
 

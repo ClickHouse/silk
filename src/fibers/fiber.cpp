@@ -177,11 +177,6 @@ void Fiber::deinitialize() noexcept
 {
     SILK_ASSERT(!suspendedEntry.is_linked());
 
-    if (parametersDtor)
-    {
-        parametersDtor(parameters);
-    }
-
 #if defined(__SANITIZE_THREAD__)
     TSAN_FIBER_DESTROY(tsanFiber);
     tsanFiber = nullptr;
@@ -2593,6 +2588,13 @@ void FiberScheduler::runFiber(Fiber * fiber, CpuTimer * timer) noexcept
     }
 
     SILK_ASSERT(fiberState == FiberState::STOPPED);
+
+    // The fiberSuspend that follows the final switch may read the parameters, and the waiter may
+    // free what they reference once waitingFuture is set, so destroy them between the two.
+    if (fiber->parametersDtor)
+    {
+        fiber->parametersDtor(fiber->parameters);
+    }
 
     if (fiber->waitingFuture)
     {
