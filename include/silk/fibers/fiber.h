@@ -29,9 +29,14 @@ static constexpr uint64_t FIBER_PARAMETERS_SIZE = 64;
 static constexpr uint64_t FIBER_PARAMETERS_OFFSET = 224;
 
 /**
- * Fiber entry point signature. Returns an integer result code.
+ * Fiber entry point, stored with its parameter type erased. Returns an integer result code.
  */
 using FiberMain = int(void * parameters) noexcept;
+
+/**
+ * Calls a FiberMain with its own parameter type, so that the indirect call matches the function type.
+ */
+using FiberMainInvoker = int(FiberMain * fiberMain, void * parameters) noexcept;
 
 /**
  * Destructor for the fiber's parameter buffer. Called after the entry point returns.
@@ -239,6 +244,7 @@ public:
         static_assert(sizeof(T) <= FIBER_PARAMETERS_SIZE);
         Fiber * fiber = allocateFiber(
             reinterpret_cast<FiberMain *>(fiberMain),
+            invokeFiberMain<T>,
             std::is_trivially_destructible_v<T> ? nullptr : destroyParameters<T>,
             category,
             future);
@@ -737,10 +743,21 @@ private:
         std::destroy_at(static_cast<T *>(p));
     }
 
+    /** Calls fiberMain with the parameter type it was declared with. */
+    template <typename T>
+    static int invokeFiberMain(FiberMain * fiberMain, void * parameters) noexcept
+    {
+        return reinterpret_cast<int (*)(T *) noexcept>(fiberMain)(static_cast<T *>(parameters));
+    }
+
     static ProcessorState * currentProcessor() noexcept;
     static void buildStealCandidates() noexcept;
-    static Fiber *
-    allocateFiber(FiberMain * fiberMain, FiberParametersDtor * parametersDtor, uint8_t category, FiberFuture * future) noexcept;
+    static Fiber * allocateFiber(
+        FiberMain * fiberMain,
+        FiberMainInvoker * fiberMainInvoker,
+        FiberParametersDtor * parametersDtor,
+        uint8_t category,
+        FiberFuture * future) noexcept;
     static void freeFiber(Fiber * fiber) noexcept;
     static ProcessorState * enqueueReady(ProcessorState * processor, Fiber * fiber) noexcept;
     static void yieldSuspendCallback(Fiber * fiber, void * context) noexcept;

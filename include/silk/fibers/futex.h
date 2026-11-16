@@ -91,7 +91,7 @@ private:
     //
 
     bool waitHelper(uint64_t token) noexcept;
-    static void suspendCallback(Fiber * fiber, SuspendCtx * ctx) noexcept;
+    static void suspendCallback(Fiber * fiber, void * context) noexcept;
 
     //
     // State.

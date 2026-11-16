@@ -196,7 +196,7 @@ private:
     void lockSharedSlow(State currentState, uint64_t * waitCycles) noexcept;
     bool lockHelper(State * currentState) noexcept;
     bool lockSharedHelper(State * currentState) noexcept;
-    static void suspendCallback(Fiber * fiber, SuspendCtx * ctx) noexcept;
+    static void suspendCallback(Fiber * fiber, void * context) noexcept;
 
     //
     // State.

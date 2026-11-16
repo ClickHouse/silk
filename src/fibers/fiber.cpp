@@ -118,7 +118,11 @@ Fiber::~Fiber() noexcept
 }
 
 bool Fiber::initialize(
-    FiberId fiberId_, FiberMain * fiberMain_, FiberParametersDtor * parametersDtor_, FiberFuture * waitingFuture_) noexcept
+    FiberId fiberId_,
+    FiberMain * fiberMain_,
+    FiberMainInvoker * fiberMainInvoker_,
+    FiberParametersDtor * parametersDtor_,
+    FiberFuture * waitingFuture_) noexcept
 {
     state.store(FiberState::SUSPENDED, std::memory_order_relaxed);
 
@@ -167,6 +171,7 @@ bool Fiber::initialize(
 #endif
 
     fiberMain = fiberMain_;
+    fiberMainInvoker = fiberMainInvoker_;
     parametersDtor = parametersDtor_;
     fiberContext = make_fcontext(static_cast<uint8_t *>(stack) + getPageSize() + fiberStackSize, fiberStackSize, fiberContextMain);
 
@@ -262,7 +267,7 @@ void Fiber::fiberContextMain(transfer_t transfer) noexcept
     __sanitizer_finish_switch_fiber(nullptr, &fiber->asanSchedulerStackBottom, &fiber->asanSchedulerStackSize);
 #endif
 
-    fiber->result = fiber->fiberMain(fiber->parameters);
+    fiber->result = fiber->fiberMainInvoker(fiber->fiberMain, fiber->parameters);
     fiber->changeState(FiberState::RUNNING, FiberState::STOPPED);
     fiber->switchToThreadContext(true);
     SILK_FAIL("unreachable");
@@ -1178,8 +1183,12 @@ FiberScheduler::ProcessorState * FiberScheduler::currentProcessor() noexcept
     return scheduler->homeProcessor[getCurrentProcessor()];
 }
 
-Fiber *
-FiberScheduler::allocateFiber(FiberMain * fiberMain, FiberParametersDtor * parametersDtor, uint8_t category, FiberFuture * future) noexcept
+Fiber * FiberScheduler::allocateFiber(
+    FiberMain * fiberMain,
+    FiberMainInvoker * fiberMainInvoker,
+    FiberParametersDtor * parametersDtor,
+    uint8_t category,
+    FiberFuture * future) noexcept
 {
     Fiber * fiber = scheduler->fiberPool.allocate();
     if (fiber)
@@ -1187,7 +1196,7 @@ FiberScheduler::allocateFiber(FiberMain * fiberMain, FiberParametersDtor * param
         ProcessorState * processor = currentProcessor();
         FiberId fiberId = processor->allocateFiberId(category);
 
-        if (fiber->initialize(fiberId, fiberMain, parametersDtor, future))
+        if (fiber->initialize(fiberId, fiberMain, fiberMainInvoker, parametersDtor, future))
         {
             Perf::getSimpleCounter(simpleCounters[FIBER_STARTED], processor->number).increment();
             return fiber;

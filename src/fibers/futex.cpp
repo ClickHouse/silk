@@ -35,7 +35,7 @@ int FiberFutex::wait(uint64_t token, uint64_t * waitCycles) noexcept
     while (!waitHelper(token))
     {
         SuspendCtx ctx{this, token};
-        FiberScheduler::suspend(reinterpret_cast<FiberScheduler::SuspendCallback *>(suspendCallback), &ctx, waitCycles);
+        FiberScheduler::suspend(suspendCallback, &ctx, waitCycles);
     }
 
     // Re-read state for the cancellation decision. The token-satisfied case
@@ -130,8 +130,9 @@ bool FiberFutex::waitHelper(uint64_t token) noexcept
     }
 }
 
-void FiberFutex::suspendCallback(Fiber * fiber, SuspendCtx * ctx) noexcept
+void FiberFutex::suspendCallback(Fiber * fiber, void * context) noexcept
 {
+    SuspendCtx * ctx = static_cast<SuspendCtx *>(context);
     FiberFutex * event = ctx->event;
 
     State currentState;

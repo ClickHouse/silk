@@ -39,11 +39,11 @@ TEST(Fiber, suspend)
         static int fiberMain(Params * p) noexcept
         {
             SILK_UNUSED(p);
-            FiberScheduler::suspend(reinterpret_cast<FiberScheduler::SuspendCallback *>(suspendCallback), nullptr);
+            FiberScheduler::suspend(suspendCallback, nullptr);
             return 0;
         }
 
-        static void suspendCallback(Fiber * fiber, void * context)
+        static void suspendCallback(Fiber * fiber, void * context) noexcept
         {
             SILK_UNUSED(context);
             FiberScheduler::schedule(fiber);
