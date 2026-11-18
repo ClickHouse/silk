@@ -13,6 +13,12 @@ static constexpr const char * LEVEL_NAMES[] = {"DEBUG", "INFO ", "WARN ", "ERROR
 
 void Logger::log(LogLevel level, const char * file, int line, const char * message) noexcept
 {
+    if (Sink sink = currentSink.load(std::memory_order_relaxed))
+    {
+        sink(level, file, line, message);
+        return;
+    }
+
     timespec ts;
     ::clock_gettime(CLOCK_REALTIME, &ts);
 

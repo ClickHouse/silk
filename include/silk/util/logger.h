@@ -25,11 +25,15 @@ enum class LogLevel
 class Logger
 {
 public:
+    using Sink = void (*)(LogLevel level, const char * file, int line, const char * message) noexcept;
+
     /** Set the minimum level for messages to be emitted. */
     static void setLevel(LogLevel level) noexcept { currentLevel.store(level, std::memory_order_relaxed); }
 
     /** Return true if messages at the given level would be emitted. */
     static bool isEnabled(LogLevel level) noexcept { return level >= currentLevel.load(std::memory_order_relaxed); }
+
+    static void setSink(Sink sink) noexcept { currentSink.store(sink, std::memory_order_relaxed); }
 
     /** Emit a pre-formatted message verbatim (no printf parsing). */
     static void log(LogLevel level, const char * file, int line, const char * message) noexcept;
@@ -39,6 +43,7 @@ public:
 
 private:
     inline static std::atomic<LogLevel> currentLevel{LogLevel::INFO};
+    inline static std::atomic<Sink> currentSink{nullptr};
 };
 
 } // namespace silk
