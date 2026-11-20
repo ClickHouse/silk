@@ -2,6 +2,7 @@
 
 #include <silk/util/assert.h>
 #include <silk/util/platform.h>
+#include <silk/util/spinlock.h>
 
 #include <atomic>
 #include <cstdint>
@@ -209,7 +210,7 @@ public:
     /**
      * Total number of registered counter slots across all groups.
      */
-    static uint32_t getSimpleCounterCount() noexcept { return simpleCounterCount.load(std::memory_order_relaxed); }
+    static uint32_t getSimpleCounterCount() noexcept { return simpleCounterCount.load(std::memory_order_acquire); }
 
     /**
      * Metadata (name) for the counter at global slot @p index.
@@ -248,7 +249,7 @@ public:
     /**
      * Total number of registered memory counter slots across all groups.
      */
-    static uint32_t getMemCounterCount() noexcept { return memCounterCount.load(std::memory_order_relaxed); }
+    static uint32_t getMemCounterCount() noexcept { return memCounterCount.load(std::memory_order_acquire); }
 
     /**
      * Metadata (name) for the memory counter at global slot @p index.
@@ -284,9 +285,13 @@ private:
 
     static inline std::unique_ptr<ProcessorState[]> processorState;
 
+    /** Serializes registerSimpleCounters. */
+    static inline SpinLock simpleCounterRegisterLock;
     static inline std::atomic<uint32_t> simpleCounterCount;
     static inline std::unique_ptr<CounterInfo[]> simpleCounters;
 
+    /** Serializes registerMemCounters. */
+    static inline SpinLock memCounterRegisterLock;
     static inline std::atomic<uint32_t> memCounterCount;
     static inline std::unique_ptr<CounterInfo[]> memCounters;
 };
