@@ -1,11 +1,16 @@
 #include <silk/util/perf.h>
 
+#include <silk/util/assert.h>
 #include <silk/util/platform.h>
 
 #include <gtest/gtest.h>
 
+#include <atomic>
 #include <cerrno>
 #include <cstdint>
+#include <span>
+#include <string>
+#include <thread>
 
 // clang-format off
 #define TEST_COUNTERS(x) \
@@ -392,6 +397,113 @@ TEST_F(PerfTest, DestroyResetsMemCounterCount)
     Perf::initialize();
 
     EXPECT_EQ(Perf::getMemCounterCount(), 0u);
+}
+
+struct TestCounter
+{
+    Perf::CounterGroup group;
+    std::string name;
+};
+
+using RegisterCounters = int(Perf::CounterGroup *, const char **, uint32_t) noexcept;
+using GetCounterCount = uint32_t() noexcept;
+using GetCounterInfo = const Perf::CounterInfo &(uint32_t index) noexcept;
+
+struct CounterFunctions
+{
+    RegisterCounters * registerCounters;
+    GetCounterCount * getCounterCount;
+    GetCounterInfo * getCounterInfo;
+};
+
+static constexpr CounterFunctions simpleCounterFunctions{
+    Perf::registerSimpleCounters, Perf::getSimpleCounterCount, Perf::getSimpleCounterInfo};
+static constexpr CounterFunctions memCounterFunctions{Perf::registerMemCounters, Perf::getMemCounterCount, Perf::getMemCounterInfo};
+
+static void concurrentCounterRegisterAndGetInfoTest(const CounterFunctions & functions, std::span<TestCounter> counters)
+{
+    struct Params
+    {
+        const CounterFunctions * functions = nullptr;
+        std::span<TestCounter> counters;
+        std::atomic<bool> done = false;
+        std::atomic<uint32_t> ready = 0;
+
+        static void registerThreadMain(Params * params) noexcept
+        {
+            params->ready++;
+
+            while (params->ready.load() != 2)
+            {
+                cpuPause();
+            }
+
+            for (uint32_t i = 0; i < params->counters.size(); ++i)
+            {
+                const char * name = params->counters[i].name.c_str();
+                int r = params->functions->registerCounters(&params->counters[i].group, &name, 1);
+                SILK_ASSERT(!r, "could not register counter %u: r=%d", i, r);
+            }
+
+            params->done.store(true);
+        }
+
+        static void checkCounters(const Params * params) noexcept
+        {
+            const uint32_t counterCount = params->functions->getCounterCount();
+            for (uint32_t i = 0; i < counterCount; ++i)
+            {
+                const char * name = params->functions->getCounterInfo(i).name;
+                SILK_ASSERT(
+                    name == params->counters[i].name.c_str(),
+                    "slot %u; name: '%s'; expected: '%s'",
+                    i,
+                    name ? name : "nullptr",
+                    params->counters[i].name.c_str());
+            }
+        }
+
+        static void getThreadMain(Params * params) noexcept
+        {
+            params->ready++;
+
+            while (params->ready.load() != 2)
+            {
+                cpuPause();
+            }
+
+            while (!params->done.load())
+            {
+                checkCounters(params);
+            }
+
+            checkCounters(params);
+        }
+    };
+
+    for (uint32_t i = 0; i < counters.size(); ++i)
+    {
+        counters[i].name = std::to_string(i);
+    }
+
+    Params params{&functions, counters};
+    auto registerThread = std::thread(Params::registerThreadMain, &params);
+    auto getThread = std::thread(Params::getThreadMain, &params);
+
+    registerThread.join();
+    getThread.join();
+}
+
+TEST_F(PerfTest, ConcurrentSimpleCounterRegisterAndGetInfo)
+{
+    TestCounter counters[Perf::NUM_SIMPLE_COUNTERS];
+    concurrentCounterRegisterAndGetInfoTest(simpleCounterFunctions, counters);
+}
+
+TEST_F(PerfTest, ConcurrentMemCounterRegisterAndGetInfo)
+{
+    TestCounter counters[Perf::NUM_MEM_COUNTERS];
+    concurrentCounterRegisterAndGetInfoTest(memCounterFunctions, counters);
 }
 
 } // namespace silk

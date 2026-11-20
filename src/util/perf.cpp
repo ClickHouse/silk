@@ -6,6 +6,7 @@
 #include <cerrno>
 #include <cstdint>
 #include <memory>
+#include <mutex>
 
 namespace silk
 {
@@ -44,24 +45,20 @@ int Perf::registerSimpleCounters(CounterGroup * group, const char ** names, uint
 {
     SILK_ASSERT(group->count == 0);
 
+    std::lock_guard lock(simpleCounterRegisterLock);
     uint32_t base = simpleCounterCount.load(std::memory_order_relaxed);
-    for (;;)
+    if (count > NUM_SIMPLE_COUNTERS - base)
     {
-        if (count > NUM_SIMPLE_COUNTERS - base)
-        {
-            return ENOMEM;
-        }
-
-        if (simpleCounterCount.compare_exchange_weak(base, base + count, std::memory_order_acq_rel, std::memory_order_relaxed))
-        {
-            break;
-        }
+        return ENOMEM;
     }
 
     for (uint32_t i = 0; i < count; ++i)
     {
         simpleCounters[base + i].name = names[i];
     }
+
+    // Publish registered names for readers.
+    simpleCounterCount.store(base + count, std::memory_order_release);
 
     group->startIndex = base;
     group->count = count;
@@ -98,24 +95,20 @@ int Perf::registerMemCounters(CounterGroup * group, const char ** names, uint32_
 {
     SILK_ASSERT(group->count == 0);
 
+    std::lock_guard lock(memCounterRegisterLock);
     uint32_t base = memCounterCount.load(std::memory_order_relaxed);
-    for (;;)
+    if (count > NUM_MEM_COUNTERS - base)
     {
-        if (count > NUM_MEM_COUNTERS - base)
-        {
-            return ENOMEM;
-        }
-
-        if (memCounterCount.compare_exchange_weak(base, base + count, std::memory_order_acq_rel, std::memory_order_relaxed))
-        {
-            break;
-        }
+        return ENOMEM;
     }
 
     for (uint32_t i = 0; i < count; ++i)
     {
         memCounters[base + i].name = names[i];
     }
+
+    // Publish registered names for readers.
+    memCounterCount.store(base + count, std::memory_order_release);
 
     group->startIndex = base;
     group->count = count;
