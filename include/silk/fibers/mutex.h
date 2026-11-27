@@ -26,24 +26,42 @@ namespace silk
 class FiberMutex
 {
 public:
+#if defined(__SANITIZE_THREAD__)
+    ~FiberMutex() noexcept;
+#endif
+
     /** Attempt to acquire the exclusive lock without suspending; returns true on success. */
     [[nodiscard]] bool try_lock() noexcept
     {
+        // In FiberScheduler::getCurrentFiber, a plain thread's first call pops a proxy fiber.
+        // TSan is only aware of that happens-before edge if the call is outside TSAN_MUTEX_PRE_TRY_LOCK-TSAN_MUTEX_POST_TRY_LOCK annotations.
+#if defined(__SANITIZE_THREAD__)
+        FiberScheduler::getCurrentFiber();
+#endif
+        TSAN_MUTEX_PRE_TRY_LOCK(this);
         State currentState;
         currentState.raw = state.load(std::memory_order_relaxed);
+        bool acquired = false;
         if (!currentState.raw)
         {
             State newState;
             newState.exclusive = 1;
             newState.value = reinterpret_cast<uint64_t>(FiberScheduler::getCurrentFiber());
-            return state.compare_exchange_weak(currentState.raw, newState.raw, std::memory_order_acq_rel, std::memory_order_relaxed);
+            acquired = state.compare_exchange_weak(currentState.raw, newState.raw, std::memory_order_acq_rel, std::memory_order_relaxed);
         }
-        return false;
+        TSAN_MUTEX_POST_TRY_LOCK(this, acquired);
+        return acquired;
     }
 
     /** Acquire the exclusive lock, suspending the calling fiber until it becomes available. */
     void lock(uint64_t * waitCycles = nullptr) noexcept
     {
+        // In FiberScheduler::getCurrentFiber, a plain thread's first call pops a proxy fiber.
+        // TSan is only aware of that happens-before edge if the call is outside TSAN_MUTEX_PRE_LOCK-TSAN_MUTEX_POST_LOCK annotations.
+#if defined(__SANITIZE_THREAD__)
+        FiberScheduler::getCurrentFiber();
+#endif
+        TSAN_MUTEX_PRE_LOCK(this);
         State currentState;
         currentState.raw = state.load(std::memory_order_acquire);
         if (!currentState.raw)
@@ -53,16 +71,19 @@ public:
             newState.value = reinterpret_cast<uint64_t>(FiberScheduler::getCurrentFiber());
             if (state.compare_exchange_weak(currentState.raw, newState.raw, std::memory_order_acq_rel, std::memory_order_acquire))
             {
+                TSAN_MUTEX_POST_LOCK(this);
                 return;
             }
         }
 
         lockSlow(currentState, waitCycles);
+        TSAN_MUTEX_POST_LOCK(this);
     }
 
     /** Release the exclusive lock and wake any waiting fibers. */
     void unlock() noexcept
     {
+        TSAN_MUTEX_PRE_UNLOCK(this);
         State currentState;
         currentState.raw = state.load(std::memory_order_relaxed);
 
@@ -78,8 +99,11 @@ public:
             {
                 if (currentState.hasExclusiveWaiters || currentState.hasSharedWaiters) [[unlikely]]
                 {
+                    TSAN_MUTEX_PRE_DIVERT(this);
                     FiberScheduler::releaseWaiters(reinterpret_cast<uint64_t>(this));
+                    TSAN_MUTEX_POST_DIVERT(this);
                 }
+                TSAN_MUTEX_POST_UNLOCK(this);
                 return;
             }
         }
@@ -92,6 +116,7 @@ public:
      */
     [[nodiscard]] bool try_lock_shared() noexcept
     {
+        TSAN_MUTEX_PRE_TRY_LOCK_SHARED(this);
         State currentState;
         currentState.raw = state.load(std::memory_order_relaxed);
         while (!currentState.exclusive && !currentState.hasExclusiveWaiters)
@@ -100,9 +125,11 @@ public:
             newState.value = currentState.value + 1;
             if (state.compare_exchange_weak(currentState.raw, newState.raw, std::memory_order_acquire, std::memory_order_relaxed))
             {
+                TSAN_MUTEX_POST_TRY_LOCK_SHARED(this, true);
                 return true;
             }
         }
+        TSAN_MUTEX_POST_TRY_LOCK_SHARED(this, false);
         return false;
     }
 
@@ -112,6 +139,7 @@ public:
      */
     void lock_shared(uint64_t * waitCycles = nullptr) noexcept
     {
+        TSAN_MUTEX_PRE_LOCK_SHARED(this);
         State currentState;
         currentState.raw = state.load(std::memory_order_acquire);
         if (!currentState.exclusive && !currentState.hasExclusiveWaiters)
@@ -120,16 +148,19 @@ public:
             newState.value = currentState.value + 1;
             if (state.compare_exchange_weak(currentState.raw, newState.raw, std::memory_order_acquire, std::memory_order_acquire))
             {
+                TSAN_MUTEX_POST_LOCK_SHARED(this);
                 return;
             }
         }
 
         lockSharedSlow(currentState, waitCycles);
+        TSAN_MUTEX_POST_LOCK_SHARED(this);
     }
 
     /** Release a shared lock and, if last shared holder, wake any waiting fibers. */
     void unlock_shared() noexcept
     {
+        TSAN_MUTEX_PRE_UNLOCK_SHARED(this);
         State currentState;
         currentState.raw = state.load(std::memory_order_relaxed);
 
@@ -153,8 +184,11 @@ public:
             {
                 if (newState.value == 0 && (currentState.hasExclusiveWaiters || currentState.hasSharedWaiters)) [[unlikely]]
                 {
+                    TSAN_MUTEX_PRE_DIVERT(this);
                     FiberScheduler::releaseWaiters(reinterpret_cast<uint64_t>(this));
+                    TSAN_MUTEX_POST_DIVERT(this);
                 }
+                TSAN_MUTEX_POST_UNLOCK_SHARED(this);
                 return;
             }
         }

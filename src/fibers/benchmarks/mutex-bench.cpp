@@ -93,68 +93,6 @@ BENCHMARK_DEFINE_F(FiberMutexBench, Contended)(benchmark::State & state)
 }
 BENCHMARK_REGISTER_F(FiberMutexBench, Contended)->UseRealTime();
 
-// Strict fiber-to-fiber round-trip using two mutexes as binary semaphores.
-// FiberMutex does not enforce ownership in unlock(), so unlock() acts as a
-// post and lock() acts as a wait. Each iteration = two unlocks + two locks,
-// directly comparable to FiberFutexBench/RoundTrip.
-BENCHMARK_DEFINE_F(FiberMutexBench, RoundTrip)(benchmark::State & state)
-{
-    struct Responder
-    {
-        FiberMutex * req;
-        FiberMutex * rep;
-        std::atomic<bool> * stop;
-
-        static int fiberMain(Responder * p) noexcept
-        {
-            while (!p->stop->load(std::memory_order_relaxed))
-            {
-                p->req->lock();
-                if (p->stop->load(std::memory_order_relaxed))
-                {
-                    break;
-                }
-                p->rep->unlock();
-            }
-            return 0;
-        }
-    };
-
-    struct Driver
-    {
-        benchmark::State * state;
-        FiberMutex * req;
-        FiberMutex * rep;
-
-        static int fiberMain(Driver * p) noexcept
-        {
-            for (auto _ : *p->state)
-            {
-                p->req->unlock();
-                p->rep->lock();
-            }
-            return 0;
-        }
-    };
-
-    FiberMutex req, rep;
-    req.lock();
-    rep.lock();
-
-    std::atomic<bool> stop{false};
-    FiberFuture responder, driver;
-    int r = FiberScheduler::run(Responder::fiberMain, {&req, &rep, &stop}, &responder);
-    SILK_ASSERT(!r);
-    r = FiberScheduler::run(Driver::fiberMain, {&state, &req, &rep}, &driver);
-    SILK_ASSERT(!r);
-
-    driver.wait();
-    stop.store(true, std::memory_order_relaxed);
-    req.unlock();
-    responder.wait();
-}
-BENCHMARK_REGISTER_F(FiberMutexBench, RoundTrip)->UseRealTime();
-
 // Uncontended shared fast path: lock_shared + unlock_shared with no other fiber.
 BENCHMARK_DEFINE_F(FiberMutexBench, UncontendedShared)(benchmark::State & state)
 {

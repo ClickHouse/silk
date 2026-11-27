@@ -10,6 +10,13 @@
 namespace silk
 {
 
+#if defined(__SANITIZE_THREAD__)
+FiberMutex::~FiberMutex() noexcept
+{
+    TSAN_MUTEX_DESTROY(this);
+}
+#endif
+
 void FiberMutex::lockSlow(State currentState, uint64_t * waitCycles) noexcept
 {
     // MSan does not follow manual fiber stack switching (google/sanitizers#1232): its per-thread
@@ -55,7 +62,9 @@ void FiberMutex::lockSlow(State currentState, uint64_t * waitCycles) noexcept
     while (!lockHelper(&currentState))
     {
         SuspendCtx ctx{this, true};
+        TSAN_MUTEX_PRE_DIVERT(this);
         FiberScheduler::suspend(suspendCallback, &ctx, waitCycles);
+        TSAN_MUTEX_POST_DIVERT(this);
         currentState.raw = state.load(std::memory_order_relaxed);
     }
 }
@@ -90,7 +99,9 @@ void FiberMutex::lockSharedSlow(State currentState, uint64_t * waitCycles) noexc
     while (!lockSharedHelper(&currentState))
     {
         SuspendCtx ctx{this, false};
+        TSAN_MUTEX_PRE_DIVERT(this);
         FiberScheduler::suspend(suspendCallback, &ctx, waitCycles);
+        TSAN_MUTEX_POST_DIVERT(this);
         currentState.raw = state.load(std::memory_order_relaxed);
     }
 }

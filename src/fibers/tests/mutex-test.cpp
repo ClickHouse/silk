@@ -24,6 +24,8 @@ TEST(FiberMutex, tryLock)
 
     b = mutex.try_lock();
     ASSERT_TRUE(b);
+
+    mutex.unlock();
 }
 
 TEST(FiberMutex, lockFromFiber)
