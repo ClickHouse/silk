@@ -2,6 +2,7 @@
 
 #include <silk/util/platform.h>
 
+#include <atomic>
 #include <cerrno>
 #include <cstdio>
 #include <cstring>
@@ -58,7 +59,7 @@ private:
     int dumpExitCode = 0;
     int requestWriteFd = -1;
     pid_t dumperPid = -1;
-    volatile sig_atomic_t dumpInProgress = 0;
+    std::atomic<pid_t> dumpingThread{0};
     char sourceCommand[SCRIPT_COMMAND_SIZE] = {};
 };
 
@@ -123,8 +124,7 @@ void CrashDumper::install(int dumpSignal, int exitCode) noexcept
     int p = prctl(PR_SET_PTRACER, PR_SET_PTRACER_ANY, 0, 0, 0);
     SILK_UNUSED(p);
 
-    // Run the handler on an alternate stack so a stack-overflow SIGSEGV can still enter it; SA_RESETHAND
-    // restores the default disposition before any re-entry on the same signal.
+    // Run the handler on an alternate stack so a stack-overflow SIGSEGV can still enter it.
     static char alternateStack[64 * 1024];
     stack_t signalStack;
     signalStack.ss_sp = alternateStack;
@@ -135,7 +135,7 @@ void CrashDumper::install(int dumpSignal, int exitCode) noexcept
     struct sigaction action = {};
     sigemptyset(&action.sa_mask);
     action.sa_handler = crashSignalTrampoline;
-    action.sa_flags = SA_ONSTACK | SA_RESETHAND;
+    action.sa_flags = SA_ONSTACK;
 
     static const int crashSignals[] = {SIGSEGV, SIGABRT, SIGBUS, SIGFPE, SIGILL};
     for (int signalNumber : crashSignals)
@@ -150,15 +150,28 @@ void CrashDumper::install(int dumpSignal, int exitCode) noexcept
 
 void CrashDumper::handleSignal(int signalNumber) noexcept
 {
-    // A second fatal signal while a dump is running: give up dumping and let the default action take the
-    // process down.
-    if (dumpInProgress)
+    // A fatal signal on another thread while a dump runs waits for the dumping thread to end the process; a
+    // second one on the dumping thread gives the dump up and lets the default action take the process down.
+    pid_t threadId = gettid();
+    pid_t owner = 0;
+    while (!dumpingThread.compare_exchange_weak(owner, threadId) && !owner)
     {
+    }
+
+    if (owner)
+    {
+        if (owner != threadId)
+        {
+            for (;;)
+            {
+                pause();
+            }
+        }
+
         signal(signalNumber, SIG_DFL);
         raise(signalNumber);
         return;
     }
-    dumpInProgress = 1;
 
     // Async-signal-safe only: poke the pre-forked dumper and wait for it to finish (it attaches gdb, dumps,
     // detaches, and exits). No fork / exec / stdio here.

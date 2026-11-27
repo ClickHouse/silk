@@ -14,6 +14,8 @@ Find the failing job first (the check-ci skill), then reproduce it here from a b
 - The captured test output: `build/<preset>/Testing/Temporary/LastTest.log`. The next run overwrites it, so read it first.
 - An assertion (`SILK_ASSERT`, `SILK_FAIL`) prints the condition, file, line, message and a libbacktrace-symbolized stack trace into that output.
 - A hang produces a crash dump. Every test directory sets ctest's `TIMEOUT_SIGNAL_NAME SIGQUIT` with a 60 s grace period, and every test main and perf tool calls `silk::installCrashDumper`. On SIGQUIT or a crash signal a pre-forked dumper attaches gdb (`src/gdb/crash-dumper.py` with `fiber.py`, installed next to the binary) and writes the dump to the process's stderr; the process then cores (crash) or exits 124 (hang).
+- A core without kernel setup: start the run with `SILK_CRASH_CORE_DIR=<directory>` in the environment (`mkdir -p build/tmp/cores`, then `SILK_CRASH_CORE_DIR=$PWD/build/tmp/cores ./bb test -R <regex>`). gdb then writes `core.<pid>` into that directory before the dump. It needs no root, no `ulimit -c` and no `core_pattern` change. Read the core with `gdb <binary> <core>`. Not for an ASan, MSan or TSan build: gdb writes the terabytes of shadow memory and does not finish.
+- Crashes on two threads at the same time give one complete dump: the first thread owns the dump and the other thread waits in `CrashDumper::handleSignal` / `pause`, which shows in the OS-thread part.
 
 To self-dump a wedged run outside ctest: `timeout --signal=SIGQUIT <seconds> ./bb ...`.
 

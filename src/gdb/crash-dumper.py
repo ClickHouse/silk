@@ -130,6 +130,21 @@ def _dump_state():
             print("crash-dumper: %s failed: %s" % (command, error))
 
 
+# SILK_CRASH_CORE_DIR set: write a core of the process there before the dumps, with no kernel core setup.
+def _write_core():
+    core_dir = os.environ.get("SILK_CRASH_CORE_DIR")
+    if not core_dir:
+        return
+
+    path = os.path.join(core_dir, "core.%d" % gdb.selected_inferior().pid)
+    print("crash-dumper: writing core to %s" % path)
+    try:
+        gdb.execute("generate-core-file " + path)
+    except gdb.error as error:
+        print("crash-dumper: could not write core: %s" % error)
+
+
+_write_core()
 _dump_threads()
 _dump_fibers()
 _dump_state()
