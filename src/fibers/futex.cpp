@@ -151,7 +151,7 @@ void FiberFutex::suspendCallback(Fiber * fiber, void * context) noexcept
     // satisfies the token, or the futex is stopped, the fibers we wake will
     // return immediately from waitHelper.
     currentState.raw = event->state.load(std::memory_order_acquire);
-    if (!currentState.hasWaiters)
+    if (!currentState.hasWaiters || currentState.counter >= ctx->token)
     {
         FiberScheduler::releaseWaiters(reinterpret_cast<uint64_t>(event));
     }

@@ -5,6 +5,8 @@
 
 #include <gtest/gtest.h>
 
+#include <atomic>
+
 namespace silk
 {
 
@@ -317,6 +319,77 @@ TEST(FiberFutex, concurrentPostStress)
     {
         producers[i].wait();
     }
+}
+
+// A producer fiber and a consumer thread hand values through one slot, each
+// waiting with the get / check / wait(token + 1) pattern; a lost wakeup hangs.
+TEST(FiberFutex, handsValuesThroughOneSlot)
+{
+    static constexpr uint64_t VALUE_COUNT = 100'000;
+
+    struct ProducerParams
+    {
+        FiberFutex * changed;
+        std::atomic<uint32_t> * full;
+        uint64_t * slot;
+
+        static int fiberMain(ProducerParams * params) noexcept
+        {
+            for (uint64_t value = 1; value <= VALUE_COUNT; ++value)
+            {
+                for (;;)
+                {
+                    uint64_t token = params->changed->get();
+
+                    if (!params->full->load(std::memory_order_acquire))
+                    {
+                        break;
+                    }
+
+                    int r = params->changed->wait(token + 1);
+                    if (r)
+                    {
+                        return r;
+                    }
+                }
+
+                *params->slot = value;
+                params->full->store(1, std::memory_order_release);
+                params->changed->post();
+            }
+            return 0;
+        }
+    };
+
+    FiberFutex changed;
+    std::atomic<uint32_t> full{0};
+    uint64_t slot = 0;
+    FiberFuture producer;
+    int r = FiberScheduler::run(ProducerParams::fiberMain, {&changed, &full, &slot}, &producer);
+    ASSERT_FALSE(r);
+
+    for (uint64_t expected = 1; expected <= VALUE_COUNT; ++expected)
+    {
+        for (;;)
+        {
+            uint64_t token = changed.get();
+
+            if (full.load(std::memory_order_acquire))
+            {
+                break;
+            }
+
+            r = changed.wait(token + 1);
+            ASSERT_EQ(r, 0);
+        }
+
+        ASSERT_EQ(slot, expected);
+        full.store(0, std::memory_order_release);
+        changed.post();
+    }
+
+    r = producer.wait();
+    ASSERT_EQ(r, 0);
 }
 
 } // namespace silk
