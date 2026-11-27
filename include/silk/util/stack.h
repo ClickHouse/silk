@@ -18,6 +18,21 @@ struct StackEntry
 };
 
 /**
+ * 128-bit tagged pointer; the tag prevents the ABA problem.
+ */
+template <typename T>
+struct alignas(16) TaggedPtr
+{
+    T * ptr;
+    uint64_t tag;
+
+    bool operator==(const TaggedPtr & other) const noexcept = default;
+};
+
+static_assert(sizeof(TaggedPtr<void>) == 16);
+static_assert(std::atomic<TaggedPtr<void>>::is_always_lock_free);
+
+/**
  * Lock-free LIFO stack using 128-bit tagged pointers to prevent the ABA problem.
  * Requires 128-bit lock-free atomics: CMPXCHG16B on x86-64, CASP (LSE) on aarch64.
  *
@@ -38,12 +53,12 @@ public:
      */
     void pushAll(StackEntry * head, StackEntry * tail) noexcept
     {
-        TaggedPtr currentHead = this->head.load(std::memory_order_relaxed);
+        TaggedPtr<StackEntry> currentHead = this->head.load(std::memory_order_relaxed);
         for (;;)
         {
             tail->next.store(currentHead.ptr, std::memory_order_relaxed);
 
-            TaggedPtr newHead{head, currentHead.tag + 1};
+            TaggedPtr<StackEntry> newHead{head, currentHead.tag + 1};
 
             // Success: release - ensures all prior writes to the pushed entries
             // (including tail->next and any caller writes to entry content) are
@@ -62,7 +77,7 @@ public:
     /** Pop and return the top entry, or nullptr if the stack is empty. */
     StackEntry * pop() noexcept
     {
-        TaggedPtr currentHead = head.load(std::memory_order_acquire);
+        TaggedPtr<StackEntry> currentHead = head.load(std::memory_order_acquire);
         for (;;)
         {
             if (!currentHead.ptr)
@@ -70,7 +85,7 @@ public:
                 return nullptr;
             }
 
-            TaggedPtr newHead{currentHead.ptr->next.load(std::memory_order_relaxed), currentHead.tag + 1};
+            TaggedPtr<StackEntry> newHead{currentHead.ptr->next.load(std::memory_order_relaxed), currentHead.tag + 1};
 
             // Success: acq_rel - acquire synchronizes with the push that published
             // this entry, making its content visible to the caller. Release is not
@@ -89,7 +104,7 @@ public:
     /** Atomically detach and return all entries as a linked list, or nullptr if empty. */
     StackEntry * popAll() noexcept
     {
-        TaggedPtr currentHead = head.load(std::memory_order_acquire);
+        TaggedPtr<StackEntry> currentHead = head.load(std::memory_order_acquire);
         for (;;)
         {
             if (!currentHead.ptr)
@@ -97,7 +112,7 @@ public:
                 return nullptr;
             }
 
-            TaggedPtr newHead{nullptr, currentHead.tag + 1};
+            TaggedPtr<StackEntry> newHead{nullptr, currentHead.tag + 1};
 
             // Success: acq_rel - acquire synchronizes with the push that published
             // the chain, making all entries visible to the caller for traversal.
@@ -118,23 +133,11 @@ public:
     bool empty() const noexcept { return head.load(std::memory_order_relaxed).ptr == nullptr; }
 
 private:
-    /**
-     * 128-bit tagged pointer; the tag prevents the ABA problem.
-     */
-    struct alignas(16) TaggedPtr
-    {
-        StackEntry * ptr;
-        uint64_t tag;
-    };
-
-    static_assert(sizeof(TaggedPtr) == 16);
-    static_assert(std::atomic<TaggedPtr>::is_always_lock_free);
-
     //
     // State.
     //
 
-    std::atomic<TaggedPtr> head{TaggedPtr{}};
+    std::atomic<TaggedPtr<StackEntry>> head{TaggedPtr<StackEntry>{}};
 };
 
 /**

@@ -62,6 +62,8 @@ On aarch64, frequency comes from `cntfrq_el0`.
 
 Lock-free intrusive LIFO stack. ABA-safe via 128-bit tagged pointer (`CMPXCHG16B` on x86-64, `CASP LSE` on aarch64).
 
+`TaggedPtr<T>` (`stack.h`) is that pointer-and-tag pair; `LockFreeStack` and `Queue` share it.
+
 Objects must embed a `StackEntry` member. The typed wrapper takes a member pointer at compile time and handles object/entry conversion.
 
 ```cpp
@@ -129,6 +131,8 @@ MyObject * obj = queue.dequeue(); // nullptr if empty
 ```
 
 `empty()` is a relaxed check and may transiently return `true` during a concurrent enqueue. Use it as a hint only.
+
+**Node reuse.** `head`, `tail` and each node's `next` are `TaggedPtr`s, as in the paper's counted pointers. Every link increments the tag of `next`, and the reset of a reused node keeps it, so an enqueue that read `next` before the node was reused fails its CAS.
 
 ---
 

@@ -322,24 +322,24 @@ def _walk_queue(val):
 
     QueueNode layout:
       offset  0: StackEntry stackEntry           (atomic<StackEntry*> next -- LFS node, unused)
-      offset  8: atomic<QueueNode*> next         (M&S next pointer)
-      offset 16: atomic<void*> value             (the enqueued Fiber*)
+      offset 16: atomic<TaggedPtr> next          (M&S next pointer; next.ptr at offset 16)
+      offset 32: atomic<void*> value             (the enqueued Fiber*)
 
-    head.ptr is the sentinel node; real items start at sentinel->next.
+    head.ptr is the sentinel node; real items start at sentinel->next.ptr.
     """
     base_addr = int(val.address)
     sentinel = _ptr(base_addr)  # head.ptr = sentinel QueueNode*
     if not sentinel:
         return
 
-    node = _ptr(sentinel + 8)  # sentinel->next (QueueNode::next at offset 8)
+    node = _ptr(sentinel + 16)  # sentinel->next.ptr (QueueNode::next at offset 16)
     seen = set()
     while node and node not in seen:
         seen.add(node)
-        value = _ptr(node + 16)  # QueueNode::value at offset 16
+        value = _ptr(node + 32)  # QueueNode::value at offset 32
         if value:
             yield value
-        node = _ptr(node + 8)  # next QueueNode
+        node = _ptr(node + 16)  # next QueueNode
 
 
 def _walk_bounded_queue(val):
