@@ -25,35 +25,49 @@ void QueueBase::destroy() noexcept
 
 QueueBase::QueueBase(QueueNode * dummy) noexcept
 {
-    SILK_ASSERT(dummy);
+    head.store(TaggedPtr<QueueNode>{dummy, 0}, std::memory_order_relaxed);
+    tail.store(TaggedPtr<QueueNode>{dummy, 0}, std::memory_order_relaxed);
+}
+
+QueueBase::QueueNode * QueueBase::allocateDummy() noexcept
+{
+    QueueNode * dummy = pool->allocate();
+    SILK_ASSERT(dummy, "could not allocate a queue node");
 
     dummy->value.store(nullptr, std::memory_order_relaxed);
-    dummy->next.store(nullptr, std::memory_order_relaxed);
 
-    head.store(TaggedPtr{dummy, 0}, std::memory_order_relaxed);
-    tail.store(TaggedPtr{dummy, 0}, std::memory_order_relaxed);
+    // Keep the tag, so that a CAS from a read of next before this reuse of dummy fails.
+    TaggedPtr<QueueNode> dummyNext = dummy->next.load(std::memory_order_relaxed);
+    TaggedPtr<QueueNode> lastNext{nullptr, dummyNext.tag};
+    dummy->next.store(lastNext, std::memory_order_relaxed);
+    return dummy;
 }
 
 void QueueBase::enqueue(void * value, QueueNode * node) noexcept
 {
     node->value.store(value, std::memory_order_relaxed);
-    node->next.store(nullptr, std::memory_order_relaxed);
+
+    // Keep the tag, so that a CAS from a read of next before this reuse of node fails.
+    TaggedPtr<QueueNode> nodeNext = node->next.load(std::memory_order_relaxed);
+    TaggedPtr<QueueNode> lastNext{nullptr, nodeNext.tag};
+    node->next.store(lastNext, std::memory_order_relaxed);
 
     for (;;)
     {
-        TaggedPtr tailSnapshot = tail.load(std::memory_order_acquire);
-        QueueNode * next = tailSnapshot.ptr->next.load(std::memory_order_acquire);
+        TaggedPtr<QueueNode> tailSnapshot = tail.load(std::memory_order_acquire);
+        TaggedPtr<QueueNode> next = tailSnapshot.ptr->next.load(std::memory_order_acquire);
 
         // Check if tail and tail->next are consistent.
         if (tailSnapshot == tail.load(std::memory_order_acquire))
         {
             // Try to link node at the end of the linked list.
-            if (!next)
+            if (!next.ptr)
             {
-                if (tailSnapshot.ptr->next.compare_exchange_weak(next, node, std::memory_order_acq_rel, std::memory_order_relaxed))
+                TaggedPtr<QueueNode> newNext{node, next.tag + 1};
+                if (tailSnapshot.ptr->next.compare_exchange_weak(next, newNext, std::memory_order_acq_rel, std::memory_order_relaxed))
                 {
                     // Try to swing tail to the inserted node.
-                    TaggedPtr newTail{node, tailSnapshot.tag + 1};
+                    TaggedPtr<QueueNode> newTail{node, tailSnapshot.tag + 1};
                     tail.compare_exchange_weak(tailSnapshot, newTail, std::memory_order_acq_rel, std::memory_order_relaxed);
                     return;
                 }
@@ -61,7 +75,7 @@ void QueueBase::enqueue(void * value, QueueNode * node) noexcept
             else
             {
                 // Try to swing tail to the next node.
-                TaggedPtr newTail{next, tailSnapshot.tag + 1};
+                TaggedPtr<QueueNode> newTail{next.ptr, tailSnapshot.tag + 1};
                 tail.compare_exchange_weak(tailSnapshot, newTail, std::memory_order_acq_rel, std::memory_order_relaxed);
             }
         }
@@ -72,9 +86,9 @@ void * QueueBase::dequeue(QueueNode ** recycled) noexcept
 {
     for (;;)
     {
-        TaggedPtr headSnapshot = head.load(std::memory_order_acquire);
-        TaggedPtr tailSnapshot = tail.load(std::memory_order_acquire);
-        QueueNode * next = headSnapshot.ptr->next.load(std::memory_order_acquire);
+        TaggedPtr<QueueNode> headSnapshot = head.load(std::memory_order_acquire);
+        TaggedPtr<QueueNode> tailSnapshot = tail.load(std::memory_order_acquire);
+        QueueNode * next = headSnapshot.ptr->next.load(std::memory_order_acquire).ptr;
 
         // Check if head, tail and head->next are consistent.
         if (headSnapshot == head.load(std::memory_order_acquire))
@@ -89,7 +103,7 @@ void * QueueBase::dequeue(QueueNode ** recycled) noexcept
                 }
 
                 // Tail is falling behind, try to advance it.
-                TaggedPtr newTail{next, tailSnapshot.tag + 1};
+                TaggedPtr<QueueNode> newTail{next, tailSnapshot.tag + 1};
                 tail.compare_exchange_weak(tailSnapshot, newTail, std::memory_order_acq_rel, std::memory_order_relaxed);
             }
             else
@@ -98,7 +112,7 @@ void * QueueBase::dequeue(QueueNode ** recycled) noexcept
                 void * value = next->value.load(std::memory_order_relaxed);
 
                 // Try to swing head to the next node.
-                TaggedPtr newHead{next, headSnapshot.tag + 1};
+                TaggedPtr<QueueNode> newHead{next, headSnapshot.tag + 1};
                 if (head.compare_exchange_weak(headSnapshot, newHead, std::memory_order_acq_rel, std::memory_order_relaxed))
                 {
                     *recycled = headSnapshot.ptr;

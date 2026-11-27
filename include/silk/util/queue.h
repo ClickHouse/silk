@@ -1,9 +1,9 @@
 #pragma once
 
 #include <silk/util/memory-pool.h>
+#include <silk/util/stack.h>
 
 #include <atomic>
-#include <cstdint>
 
 namespace silk
 {
@@ -23,7 +23,7 @@ public:
     struct alignas(kCacheLineSize) QueueNode
     {
         StackEntry stackEntry;
-        std::atomic<QueueNode *> next;
+        std::atomic<TaggedPtr<QueueNode>> next;
         std::atomic<void *> value;
         // TODO(vskipin): we can store small data in-place
     };
@@ -31,13 +31,13 @@ public:
     static_assert(sizeof(QueueNode) == kCacheLineSize);
 
     // Match offsets used by src/gdb/fiber.py::_walk_queue
-    static_assert(offsetof(QueueNode, next) == 8);
-    static_assert(offsetof(QueueNode, value) == 16);
+    static_assert(offsetof(QueueNode, next) == 16);
+    static_assert(offsetof(QueueNode, value) == 32);
 
     static void initialize() noexcept;
     static void destroy() noexcept;
 
-    /** Initialize the queue with an externally supplied sentinel node. */
+    /** Initialize the queue with an externally supplied sentinel node whose next.ptr and value are null; does not access the node. */
     explicit QueueBase(QueueNode * dummyNode) noexcept;
 
     /** Append a value to the tail of the queue using a pre-allocated node. Cannot fail. */
@@ -57,32 +57,21 @@ public:
     bool empty() const noexcept
     {
         QueueNode * sentinel = head.load(std::memory_order_relaxed).ptr;
-        return sentinel->next.load(std::memory_order_relaxed) == nullptr;
+        return !sentinel->next.load(std::memory_order_relaxed).ptr;
     }
 
 protected:
-    /**
-     * 128-bit tagged pointer; the tag prevents the ABA problem.
-     */
-    struct alignas(16) TaggedPtr
-    {
-        QueueNode * ptr;
-        uint64_t tag;
-
-        bool operator==(const TaggedPtr & other) const noexcept { return ptr == other.ptr && tag == other.tag; }
-    };
-
-    static_assert(sizeof(TaggedPtr) == 16);
-    static_assert(std::atomic<TaggedPtr>::is_always_lock_free);
-
     using MemoryPool = MemoryPool<QueueNode, &QueueNode::stackEntry>;
+
+    /** Allocate a sentinel node from the pool with null next.ptr and value, keeping the tag of next. */
+    static QueueNode * allocateDummy() noexcept;
 
     //
     // State.
     //
 
-    std::atomic<TaggedPtr> head;
-    std::atomic<TaggedPtr> tail;
+    std::atomic<TaggedPtr<QueueNode>> head;
+    std::atomic<TaggedPtr<QueueNode>> tail;
 
     static inline MemoryPool * pool;
 };
@@ -95,7 +84,7 @@ class Queue : private QueueBase
 {
 public:
     Queue() noexcept
-        : QueueBase(pool->allocate())
+        : QueueBase(allocateDummy())
     {
     }
     ~Queue() noexcept { pool->deallocate(head.load(std::memory_order_relaxed).ptr); }
@@ -167,7 +156,7 @@ public:
     using QueueBase::empty;
 
 private:
-    QueueBase::QueueNode dummy;
+    QueueBase::QueueNode dummy{};
 };
 
 } // namespace silk
