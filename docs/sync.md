@@ -110,6 +110,8 @@ mutex.lock_shared();   /* shared */       mutex.unlock_shared();
 
 **suspendCallback race** -- after enqueuing, the waiter re-reads its matching bit (`hasExclusiveWaiters` for an exclusive waiter, `hasSharedWaiters` for a shared one). If false, the previous releasing fiber already called `releaseWaiters` but missed us (we were not yet in the waiter table); we self-release. The woken fibers retry their helper and either acquire or re-arm the matching bit, and the next release delivers them properly.
 
+**TSan** -- `lock`, `try_lock`, `unlock` and their shared counterparts carry `__tsan_mutex_pre_lock` / `__tsan_mutex_post_lock` / `__tsan_mutex_pre_unlock` / `__tsan_mutex_post_unlock` annotations, so ThreadSanitizer reports lock-order inversions and misuse for `FiberMutex` as it does for `pthread_mutex_t`. Under TSan the destructor issues `__tsan_mutex_destroy`, as `pthread_mutex_destroy` does, so a mutex re-created at the same address starts with fresh TSan state; otherwise the destructor is trivial.
+
 ---
 
 ## FiberCondVar
