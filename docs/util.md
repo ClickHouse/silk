@@ -248,6 +248,16 @@ ASSERT(index < size, "index {} out of range [0, {})", index, size);
 
 ---
 
+## Crash Dumper (`crash-dumper.h`)
+
+**`installCrashDumper(dumpSignal, exitCode)`** installs hang and crash diagnosis. It forks a dumper process while the process is single-threaded, so call it first in `main`, before `silk::initialize`. On a crash signal (`SIGSEGV`, `SIGABRT`, `SIGBUS`, `SIGFPE`, `SIGILL`) or on `dumpSignal`, the handler wakes the dumper and waits. The dumper attaches gdb, which sources `crash-dumper.py` and writes the backtrace of every OS thread, the fiber list and the scheduler state to the output of the process. Then the process dies of the original signal (crash) or exits with `exitCode` (hang).
+
+**Concurrent crashes**: the first thread that enters the handler owns the dump. A crash signal or `dumpSignal` on a different thread waits in the handler until the owner ends the process, so the dump is always complete. A second crash signal on the owner abandons the dump and takes the default action.
+
+**Core file**: when the environment variable `SILK_CRASH_CORE_DIR` is set, gdb writes `core.<pid>` into that directory with `generate-core-file` before the dumps. This needs no root, no `ulimit -c` and no `core_pattern` change. The dumper process inherits the environment at `installCrashDumper`, so set the variable before the process starts. Do not set it for an ASan, MSan or TSan build: gdb writes the terabytes of sanitizer shadow memory into the core, and the write does not end before the test timeout.
+
+---
+
 ## Logger (`logger.h`)
 
 Thread-safe structured logger with a global level filter. Use the macros:
