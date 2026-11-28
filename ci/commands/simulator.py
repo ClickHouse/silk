@@ -71,7 +71,7 @@ def cmd_simulator(preset: str, config: str, params: SimulatorParams) -> None:
     print()
 
     if params.flamegraph:
-        run_under_profiler(preset, "fibers-simulator", args)
+        run_under_profiler(preset, "fibers-simulator", args, params.timeout or None)
         return
 
     result = run_capture(*args, timeout=params.timeout or None)

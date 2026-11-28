@@ -1,6 +1,7 @@
 import argparse
 import logging
 import resource
+import shlex
 import signal
 import subprocess
 import sys
@@ -278,6 +279,9 @@ def _build_parser() -> argparse.ArgumentParser:
         "-R", "--tests-regex", help="run only tests whose name matches the regex"
     )
     test_parser.add_argument(
+        "-E", "--exclude-regex", help="skip tests whose name matches the regex"
+    )
+    test_parser.add_argument(
         "-N",
         "--show-only",
         action="store_true",
@@ -289,6 +293,11 @@ def _build_parser() -> argparse.ArgumentParser:
         type=int,
         metavar="SECONDS",
         help="per-test timeout in seconds (default: 180, 0=none)",
+    )
+    test_parser.add_argument(
+        "--repeat",
+        metavar="MODE:COUNT",
+        help="ctest's repeat, e.g. until-fail:100 to rerun each test until it fails",
     )
     test_parser.add_argument(
         "--coverage",
@@ -312,6 +321,11 @@ def _build_parser() -> argparse.ArgumentParser:
         type=int,
         metavar="SECONDS",
         help="per-binary timeout in seconds (default: 180, 0=none)",
+    )
+    bench_parser.add_argument(
+        "--flamegraph",
+        action="store_true",
+        help="run each matched benchmark binary under silk's BPF profiler and render an on-CPU + off-CPU flamegraph",
     )
 
     perf_parser = sub.add_parser(
@@ -422,14 +436,23 @@ def _run_command(args: argparse.Namespace, extra: list[str], preset: str) -> Non
         cmd_test(
             test_preset,
             args.tests_regex,
+            args.exclude_regex,
             args.show_only,
             args.timeout,
+            args.repeat,
             args.coverage,
             extra,
         )
     elif args.command == "bench":
         cmd_build(preset)
-        cmd_bench(preset, args.tests_regex, args.show_only, args.timeout, extra)
+        cmd_bench(
+            preset,
+            args.tests_regex,
+            args.show_only,
+            args.timeout,
+            args.flamegraph,
+            extra,
+        )
     elif args.command == "perf":
         _check_no_extra(extra)
         cmd_perf(
@@ -491,7 +514,9 @@ def main() -> None:
     try:
         _run_command(args, extra, preset)
     except subprocess.CalledProcessError as failure:
-        log.error("command failed: r=%d %s", failure.returncode, failure.cmd)
+        log.error(
+            "command failed: r=%d %s", failure.returncode, shlex.join(failure.cmd)
+        )
         sys.exit(1)
     except KeyboardInterrupt:
         log.error("interrupted")

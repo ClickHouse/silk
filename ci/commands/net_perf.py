@@ -133,6 +133,7 @@ def cmd_net_perf(preset: str, engine: NetPerfEngine, params: NetPerfParams) -> N
                 preset,
                 binary,
                 _client_args(net_perf, client_cpus, params, params.connections[0]),
+                params.timeout or None,
                 server.pid if server else None,
             )
         else:

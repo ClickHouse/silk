@@ -170,6 +170,7 @@ def cmd_http_perf(preset: str, params: HttpPerfParams) -> None:
                 preset,
                 "http-perf-" + mode,
                 _client_args(http_perf, client_cpus, params, params.connections[0]),
+                params.timeout or None,
             )
         else:
             print(perf_row(_HEADERS, _WIDTHS))

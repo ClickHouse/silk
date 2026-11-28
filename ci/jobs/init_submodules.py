@@ -50,15 +50,24 @@ def checkout_submodules(paths, force=False):
     )
 
 
+def checkout_cached_submodules(paths):
+    """Check out paths from the restored submodule cache, or fetch their pinned commits when no cache was restored."""
+    try:
+        checkout_submodules(paths)
+    except subprocess.CalledProcessError:
+        # A workflow with enable_cache=False, such as the nightly, restores no submodule cache.
+        checkout_submodules(paths, force=True)
+
+
 if __name__ == "__main__":
     job_name = Info().job_name
 
     run("git", "submodule", "sync")
-    checkout_submodules(COMMON_SUBMODULES)
+    checkout_cached_submodules(COMMON_SUBMODULES)
 
     for build, paths in EXTRA_SUBMODULES_BY_BUILD.items():
         if f"({build})" in job_name:
-            checkout_submodules(paths)
+            checkout_cached_submodules(paths)
 
     for build, paths in UNCACHED_SUBMODULES_BY_BUILD.items():
         if f"({build})" in job_name:

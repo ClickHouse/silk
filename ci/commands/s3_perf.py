@@ -201,6 +201,7 @@ def cmd_s3_perf(preset: str, params: S3PerfParams) -> None:
                 f"s3-perf-{mode}-{executor}",
                 ["taskset", "-c", client_cpus]
                 + _client_args(s3_perf, params, jobs, depth, mode),
+                params.timeout or None,
             )
         else:
             print(perf_row(_HEADERS, _WIDTHS))

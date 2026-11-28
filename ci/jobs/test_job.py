@@ -1,11 +1,10 @@
-import platform
 import sys
 
 from praktika.result import Result
 
 # Build variant to the bb flags that select preset and sanitizer.
 _BUILD_FLAGS = {
-    "coverage": "-b debug",
+    "debug": "-b debug",
     "release": "-b release",
     "tsan": "-b release -s thread",
     "asan": "-b release -s address",
@@ -16,7 +15,7 @@ _BUILD_FLAGS = {
 # The optional components each variant configures; the sanitizer builds skip
 # jemalloc, and the MSan build skips Poco too.
 _COMPONENTS = {
-    "coverage": [],
+    "debug": [],
     "release": ["poco", "jemalloc", "lto"],
     "tsan": ["poco"],
     "asan": ["poco"],
@@ -25,48 +24,35 @@ _COMPONENTS = {
 }
 
 
-def _arch():
-    machine = platform.machine()
-    return "arm64" if machine in ("aarch64", "arm64") else "amd64"
-
-
-def _commands(build, arch):
-    """The (step name, shell command) pairs the variant runs on the arch, in order."""
+def _commands(build):
+    """The (step name, shell command, needed) triples the variant runs, in order; a failed needed step leaves nothing
+    for the steps after it to run.
+    """
     bb = f"./bb {_BUILD_FLAGS[build]}"
     components = _COMPONENTS[build]
     commands = []
 
     if components:
         flags = " ".join(f"--build-{component}" for component in components)
-        commands.append(("Configure", f"{bb} configure {flags}"))
+        commands.append(("Configure", f"{bb} configure {flags}", True))
 
-    if build == "coverage":
-        commands.append(("Build and test", f"{bb} test --coverage"))
-        # Only the amd64 job publishes the report.
-        if arch == "amd64":
-            commands.append(
-                (
-                    "Package coverage HTML",
-                    "mkdir -p ci/tmp && "
-                    "tar -C build/debug-coverage/html -czf ci/tmp/coverage-html.tar.gz .",
-                )
-            )
-        return commands
-
-    commands.append(("Build and test", f"{bb} test"))
-    commands.append(("Bench", f"{bb} bench"))
+    commands.append(("Build", f"{bb} build", True))
+    commands.append(("Test", f"{bb} test", False))
+    commands.append(("Bench", f"{bb} bench", False))
     # http-perf is built only with Poco.
     perf_targets = "file net http" if "poco" in components else "file net"
-    commands.append(("Perf", f"{bb} perf {perf_targets}"))
+    commands.append(("Perf", f"{bb} perf {perf_targets}", False))
     return commands
 
 
 def main():
     build = sys.argv[1]
-    results = [
-        Result.from_commands_run(name=name, command=[command])
-        for name, command in _commands(build, _arch())
-    ]
+    results = []
+    for name, command, needed in _commands(build):
+        result = Result.from_commands_run(name=name, command=[command])
+        results.append(result)
+        if needed and not result.is_ok():
+            break
     Result.create_from(results=results).complete_job()
 
 

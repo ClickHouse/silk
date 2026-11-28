@@ -44,6 +44,9 @@ TEST_DIGEST = Job.CacheDigestConfig(
         "ci/commands",
         "ci/jobs/init_submodules.py",
         "ci/jobs/test_job.py",
+        "ci/jobs/coverage_job.py",
+        # The cache key is the job name and these files, not the job's command, so a changed command re-runs it.
+        "ci/workflows/jobs.py",
     ],
     with_git_submodules=True,
 )
@@ -70,17 +73,20 @@ TEST_AMD = Job.Config(
     digest_config=TEST_DIGEST,
 )
 
-BUILD_VARIANTS = [
-    Job.ParamSet(parameter="coverage"),
-    Job.ParamSet(parameter="release"),
-    Job.ParamSet(parameter="tsan"),
-    Job.ParamSet(parameter="asan"),
-    Job.ParamSet(parameter="ubsan"),
-    Job.ParamSet(parameter="msan"),
-]
+# The coverage report: the unit suite over the instrumented debug tree, on amd64 only. The plain debug variant runs
+# the suite, the benchmarks and the perf targets on both architectures.
+COVERAGE_JOB = Job.Config(
+    name="Coverage",
+    runs_on=[RunnerLabels.MEDIUM_AMD],
+    command="python3 ./ci/jobs/coverage_job.py",
+    needs_submodules=True,
+    pre_hooks=[CHECKOUT_TEST_SUBMODULES],
+    timeout=2 * 3600,
+    digest_config=TEST_DIGEST,
+)
 
-BUILD_VARIANTS_WITH_COVERAGE_ARTIFACT = [
-    Job.ParamSet(parameter="coverage", provides=[COVERAGE_HTML_ARTIFACT.name]),
+BUILD_VARIANTS = [
+    Job.ParamSet(parameter="debug"),
     Job.ParamSet(parameter="release"),
     Job.ParamSet(parameter="tsan"),
     Job.ParamSet(parameter="asan"),

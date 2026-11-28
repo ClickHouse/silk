@@ -20,7 +20,8 @@ WORKFLOWS = [
             *TEST_ARM.parametrize(*BUILD_VARIANTS),
             *TEST_AMD.parametrize(*BUILD_VARIANTS),
         ],
-        enable_cache=True,
+        # A nightly run re-runs every job, even on a commit an earlier workflow already tested.
+        enable_cache=False,
         enable_report=True,
         enable_exit_code_result=True,
     )

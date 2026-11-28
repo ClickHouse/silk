@@ -142,7 +142,8 @@ private:
  *         SILK_RETURN_ERROR(EINVAL, error, "null input: idx=%d", idx);
  *     }
  */
-#define SILK_RETURN_ERROR(code, error, msg, ...) return (error)->push##__VA_OPT__(f)((code), __FILE__, __LINE__, msg __VA_OPT__(, ) __VA_ARGS__)
+#define SILK_RETURN_ERROR(code, error, msg, ...) \
+    return (error)->push##__VA_OPT__(f)((code), __FILE__, __LINE__, msg __VA_OPT__(, ) __VA_ARGS__)
 
 /**
  * Failure propagation: if r is non-zero, push a new frame on top of *error and return r.
