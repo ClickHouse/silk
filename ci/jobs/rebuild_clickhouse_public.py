@@ -9,6 +9,9 @@ BRANCH = "clickhouse-public"
 REPOSITORY = "ClickHouse/silk"
 BOT_LOGINS = ("clickhouse-gh", "robot-clickhouse", "clickhouse-robot-gh")
 
+# How many times a rebuild may lose the race for the branch to an overlapping Main run.
+PUSH_ATTEMPTS = 3
+
 TOKENIZED_GITHUB_URL = re.compile(r"(https://x-access-token:)[^@\s]+(@github\.com/)")
 
 REMOVE_SUBMODULES = (
@@ -56,9 +59,10 @@ def _authenticated_fetch():
     return False
 
 
-def _authenticated_push(refs):
+def _authenticated_push(refs, lease):
     push = (
-        'token="$(gh auth token)" && git push -f '
+        'token="$(gh auth token)" && git push '
+        f"--force-with-lease=refs/heads/{BRANCH}:{lease} "
         f"https://x-access-token:${{token}}@github.com/{REPOSITORY}.git {refs}"
     )
     return_code, stdout, stderr = Shell.get_res_stdout_stderr(push, verbose=False)
@@ -111,28 +115,57 @@ def _report_conflict(sha):
     )
 
 
+def _holds_main():
+    """Whether the fetched clickhouse-public already holds the fetched main: another Main run published it, or a newer one."""
+    if not Shell.check(f"git merge-base --is-ancestor origin/main origin/{BRANCH}"):
+        return False
+    print(f"{BRANCH} already holds origin/main, nothing to publish")
+    return True
+
+
 def rebuild():
     sha = Info().sha
-    if not _authenticated_fetch():
-        return False
-
     if not Shell.check(
         'git config user.name "clickhouse-robot-gh"'
-        ' && git config user.email "clickhouse-robot-gh@users.noreply.github.com"'
-        f" && git checkout -B {BRANCH} origin/{BRANCH}~1",
+        ' && git config user.email "clickhouse-robot-gh@users.noreply.github.com"',
         verbose=True,
     ):
         return False
 
-    if not Shell.check("git rebase origin/main", verbose=True):
-        Shell.check("git rebase --abort")
-        _report_conflict(sha)
+    if not _authenticated_fetch():
         return False
 
-    if not Shell.check(REMOVE_SUBMODULES, verbose=True):
-        return False
+    for _ in range(PUSH_ATTEMPTS):
+        if _holds_main():
+            return True
 
-    return _authenticated_push(BRANCH)
+        published = Shell.get_output(f"git rev-parse origin/{BRANCH}").strip()
+        if not Shell.check(f"git checkout -B {BRANCH} origin/{BRANCH}~1", verbose=True):
+            return False
+
+        if not Shell.check("git rebase origin/main", verbose=True):
+            Shell.check("git rebase --abort")
+            _report_conflict(sha)
+            return False
+
+        if not Shell.check(REMOVE_SUBMODULES, verbose=True):
+            return False
+
+        if _authenticated_push(BRANCH, published):
+            return True
+
+        # Two Main runs can overlap: the lease rejects the push when the other run moved the branch since the
+        # fetch, and the rebuild starts again from its tip. A push that failed with the branch in place fails the job.
+        if not _authenticated_fetch():
+            return False
+        if Shell.get_output(f"git rev-parse origin/{BRANCH}").strip() == published:
+            return False
+
+    # The last fetch may show that the other run published this main.
+    if _holds_main():
+        return True
+    print(f"ERROR: {BRANCH} moved under each of {PUSH_ATTEMPTS} pushes")
+    return False
 
 
 if __name__ == "__main__":

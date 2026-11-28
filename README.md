@@ -86,7 +86,7 @@ Remove the entire `build/` directory.
 
 #### `build [targets]`
 
-Build the project. Configures automatically if the build directory does not exist. `build` is the default command when none is specified.
+Build the project. Configures automatically if the build directory has no CMake cache. `build` is the default command when none is specified.
 
 ```
 ./bb                          # debug build
@@ -96,13 +96,14 @@ Build the project. Configures automatically if the build directory does not exis
 ./bb build fibers-test        # build a specific target
 ```
 
-#### `test [-R pattern] [-N] [ctest flags...]`
+#### `test [-R pattern] [-E pattern] [-N] [ctest flags...]`
 
-Build and run tests. Runs in parallel using all available CPUs. Any extra flags are forwarded directly to `ctest`.
+Build and run tests. Runs in parallel using all available CPUs. A filter that matches no test fails the run. Any extra flags are forwarded directly to `ctest`.
 
 | Flag | Description |
 |---|---|
 | `-R <pattern>` | Run only tests matching the regex pattern |
+| `-E <pattern>` | Skip tests matching the regex pattern |
 | `-N` | List tests without running them |
 | `--timeout SECONDS` | Per-test timeout in seconds (default: 180, 0=none) |
 | `--coverage` | Instrument with coverage, run tests, and generate an HTML report, an lcov file, and a Cobertura XML report under `build/debug-coverage/` |
@@ -127,6 +128,7 @@ Build and run benchmarks.
 | `-R <pattern>` | Run only benchmarks matching the pattern |
 | `-N` | List benchmarks without running them |
 | `--timeout SECONDS` | Per-benchmark timeout in seconds (default: 180, 0=none) |
+| `--flamegraph` | Profile each matched benchmark binary and generate a flamegraph SVG per binary; the benchmark output is not shown |
 
 ```
 ./bb -b release bench

@@ -1,8 +1,8 @@
 from praktika import Workflow
 from ci.workflows.jobs import (
     BUILD_VARIANTS,
-    BUILD_VARIANTS_WITH_COVERAGE_ARTIFACT,
     COVERAGE_HTML_ARTIFACT,
+    COVERAGE_JOB,
     FMT_JOB,
     PUBLISH_COVERAGE_REPORT_JOB,
     REBUILD_CLICKHOUSE_PUBLIC_JOB,
@@ -12,8 +12,10 @@ from ci.workflows.jobs import (
 
 _TEST_JOBS = [
     FMT_JOB.copy(),
+    # The Main run publishes the coverage report, so its coverage job provides the HTML.
+    COVERAGE_JOB.set_provides(COVERAGE_HTML_ARTIFACT.name),
     *TEST_ARM.parametrize(*BUILD_VARIANTS),
-    *TEST_AMD.parametrize(*BUILD_VARIANTS_WITH_COVERAGE_ARTIFACT),
+    *TEST_AMD.parametrize(*BUILD_VARIANTS),
 ]
 
 

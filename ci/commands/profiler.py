@@ -4,7 +4,7 @@ import subprocess
 
 from ci.commands.cmake import cmd_build
 from ci.commands.flamegraph import render_flamegraph
-from ci.commands.process import ROOT, log, start_process, verbose_flags
+from ci.commands.process import ROOT, log, start_process, verbose_flags, wait_or_dump
 
 
 def _start_profiler(preset: str, pid: int, folded_stacks: str) -> subprocess.Popen[str]:
@@ -24,10 +24,15 @@ def _start_profiler(preset: str, pid: int, folded_stacks: str) -> subprocess.Pop
 
 
 def run_under_profiler(
-    preset: str, target: str, client_args: list[str], server_pid: int | None = None
+    preset: str,
+    target: str,
+    client_args: list[str],
+    timeout_seconds: int | None,
+    server_pid: int | None = None,
 ) -> None:
     """Run the client command line under silk's BPF profiler and render an on-CPU + off-CPU flamegraph as
-    <target>.flamegraph.svg; with server_pid, profile that server alongside into <target>-server.
+    <target>.flamegraph.svg; with server_pid, profile that server alongside into <target>-server. A client still
+    running at timeout_seconds dumps its stacks and fails the run.
     """
     cmd_build(preset, ["profiler"])
 
@@ -46,7 +51,7 @@ def run_under_profiler(
         profilers.append(_start_profiler(preset, client.pid, folded_stacks))
         if server_pid is not None:
             profilers.append(_start_profiler(preset, server_pid, server_folded))
-        client.wait()
+        wait_or_dump(client, target, timeout_seconds)
     finally:
         if client.poll() is None:
             client.kill()

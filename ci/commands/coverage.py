@@ -150,7 +150,16 @@ def gen_coverage_report(preset: str, profiles_dir: str) -> None:
         log.error("no .profraw files found in %s", profiles_dir)
         sys.exit(1)
 
-    run("llvm-profdata-21", "merge", "-sparse", *profraw_files, "-o", profdata_path)
+    # A profile a killed process cut short is skipped with a warning rather than failing the whole report.
+    run(
+        "llvm-profdata-21",
+        "merge",
+        "-sparse",
+        "--failure-mode=all",
+        *profraw_files,
+        "-o",
+        profdata_path,
+    )
 
     test_bins = sorted(glob.glob(os.path.join(bin_dir, "*-test")))
     if not test_bins:
@@ -162,7 +171,7 @@ def gen_coverage_report(preset: str, profiles_dir: str) -> None:
         common_cov_args += ["-object", binary]
     common_cov_args += [
         f"-instr-profile={profdata_path}",
-        "-ignore-filename-regex=/usr/|/_deps/|/libbacktrace-generated/|contrib/|-test\\.cpp",
+        "-ignore-filename-regex=/usr/|/_deps/|/libbacktrace-generated/|contrib/|/tests/|-test\\.cpp",
         "-Xdemangler=c++filt",
     ]
 

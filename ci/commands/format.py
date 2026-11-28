@@ -29,6 +29,7 @@ def _find_clang_format() -> str:
 def cmd_fmt(check: bool = False) -> None:
     sources = glob.glob(os.path.join(ROOT, "src/**/*.[ch]"), recursive=True)
     sources += glob.glob(os.path.join(ROOT, "src/**/*.cpp"), recursive=True)
+    sources += glob.glob(os.path.join(ROOT, "include/**/*.h"), recursive=True)
     args = [_find_clang_format()]
     args += ["--dry-run", "--Werror"] if check else ["-i"]
     run(*args, *sources)

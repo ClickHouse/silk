@@ -117,6 +117,7 @@ def cmd_file_perf(preset: str, params: FilePerfParams) -> None:
                 preset,
                 "file-perf",
                 _file_perf_args(file_perf, params, jobs, depth, mode),
+                params.timeout or None,
             )
         else:
             print(perf_row(_HEADERS, _WIDTHS))

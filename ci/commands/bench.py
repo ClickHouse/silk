@@ -4,6 +4,7 @@ import re
 import sys
 
 from ci.commands.process import ROOT, log, run, run_capture
+from ci.commands.profiler import run_under_profiler
 
 
 def cmd_bench(
@@ -11,6 +12,7 @@ def cmd_bench(
     tests_regex: str | None = None,
     show_only: bool = False,
     timeout: int = 0,
+    flamegraph: bool = False,
     extra: list[str] | None = None,
 ) -> None:
     bin_dir = os.path.join(ROOT, f"build/{preset}/bin")
@@ -44,4 +46,8 @@ def cmd_bench(
             args += [f"--benchmark_filter={tests_regex}"]
         if extra:
             args += extra
-        run(*args, timeout=timeout or None)
+
+        if not flamegraph or show_only:
+            run(*args, timeout=timeout or None)
+        else:
+            run_under_profiler(preset, os.path.basename(bench), args, timeout or None)

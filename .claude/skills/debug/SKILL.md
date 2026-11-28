@@ -7,7 +7,7 @@ Find the failing job first (the check-ci skill), then reproduce it here from a b
 
 ## Build the same thing CI ran
 
-`./bb -b <debug|release> -s <address|thread|undefined|memory> test -R <regex>`, with `-b` and `-s` as separate flags. Reproduce a timing-dependent failure on `release`: debug timing hides the race. `bb test` and `bb bench` forward unknown flags to ctest, so any ctest option works (`--repeat until-fail:100`, `--output-on-failure`); use the built-in option when `bb` has one (`--timeout`, `--coverage`). `--gtest_filter` never works, because test binaries are never run directly. `-N` lists the matching tests without running them.
+`./bb -b <debug|release> -s <address|thread|undefined|memory> test -R <regex>`, with `-b` and `-s` as separate flags. Reproduce a timing-dependent failure on `release`: debug timing hides the race. `bb test` forwards unknown flags to ctest, so any ctest option works (`--rerun-failed`, `--output-on-failure`), and `bb bench` forwards them to the benchmark binaries; use the built-in option when `bb` has one (`--timeout`, `--coverage`, `--repeat`, `-E`). `--gtest_filter` never works, because test binaries are never run directly. `-N` lists the matching tests without running them.
 
 ## Where the evidence is
 
