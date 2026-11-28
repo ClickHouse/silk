@@ -4,11 +4,13 @@ file(GLOB_RECURSE TEST_SOURCES CONFIGURE_DEPENDS *.cpp)
 # that restricts the scheduler to a CPU subset before running, so they cannot share
 # fibers-test's global init. fiber-destroy-test initializes and destroys the scheduler
 # once per child process it spawns, so it has no global init at all. fiber-switch-hook-test
-# needs a main that installs the fiber switch hooks.
+# needs a main that installs the fiber switch hooks. crash-dumper-test spawns itself as a child
+# that hangs or crashes on purpose, so the crash never takes a test binary down.
 list(REMOVE_ITEM TEST_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/fiber-cpuset-test.cpp)
 list(REMOVE_ITEM TEST_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/fiber-steal-test.cpp)
 list(REMOVE_ITEM TEST_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/fiber-destroy-test.cpp)
 list(REMOVE_ITEM TEST_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/fiber-switch-hook-test.cpp)
+list(REMOVE_ITEM TEST_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/crash-dumper-test.cpp)
 
 add_executable(fibers-test ${TEST_SOURCES})
 target_link_libraries(fibers-test PRIVATE silk-fibers GTest::gtest)
@@ -44,3 +46,8 @@ add_executable(fibers-destroy-test fiber-destroy-test.cpp)
 target_link_libraries(fibers-destroy-test PRIVATE silk-fibers GTest::gtest)
 gtest_discover_tests(fibers-destroy-test
     PROPERTIES RUN_SERIAL TRUE RESOURCE_LOCK iouring TIMEOUT_SIGNAL_NAME SIGQUIT TIMEOUT_SIGNAL_GRACE_PERIOD 60)
+
+add_executable(fibers-crash-dumper-test crash-dumper-test.cpp)
+target_link_libraries(fibers-crash-dumper-test PRIVATE silk-fibers GTest::gtest)
+gtest_discover_tests(fibers-crash-dumper-test
+    PROPERTIES RESOURCE_LOCK iouring TIMEOUT_SIGNAL_NAME SIGQUIT TIMEOUT_SIGNAL_GRACE_PERIOD 60)
